@@ -180,8 +180,10 @@ function App() {
         consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
       }
       view?.write(event.data);
+      // summary is sanitized in the PTY host; fall back to the previous value
+      // when a chunk carries only decoration (spinners, redraws).
       setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, lastActivityAt: event.at, lastOutputSummary: event.data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().slice(-90) }
+        ? { ...item, lastActivityAt: event.at, lastOutputSummary: event.summary ?? item.lastOutputSummary }
         : item));
     });
     const disposeState = window.termbeacon.onState((event) => {

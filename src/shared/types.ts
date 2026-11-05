@@ -35,6 +35,8 @@ export interface PtyOutputEvent {
   data: string;
   sequence: number;
   replay: boolean;
+  /** Sanitized single-line activity excerpt, safe to render in the UI. */
+  summary?: string;
   at: number;
 }
 

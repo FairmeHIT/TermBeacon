@@ -7,6 +7,8 @@ const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
 const { createOscParser } = require("./osc-parser.cjs");
 const { createAgentSniffer } = require("./agent-sniff.cjs");
+const { createHookServer } = require("./hook-server.cjs");
+const { summarize } = require("./summary-utils.cjs");
 const {
   AGENT_TYPES,
   normalizeCreateRequest,
@@ -26,6 +28,22 @@ const killRequests = new Set();
 const buffers = new Map();
 let dataPort = null;
 let tickTimer = null;
+
+// External CLI hooks/plugins post status events to this loopback server. The
+// port/token are injected into each PTY environment so a hook process can find
+// the bridge without any global config. See hook-server.cjs for the protocol.
+const hookServer = createHookServer({
+  onEvent: ({ terminalId, event, status }) => {
+    const detector = detectors.get(terminalId);
+    if (detector && typeof event === "string" && typeof status === "string") {
+      detector.hook(event, status);
+    }
+  },
+});
+const hookReady = hookServer.start().catch((error) => {
+  sendError("hook-server", error);
+  return 0;
+});
 
 // Per-terminal bounded output ring buffer for replay after renderer reconnect.
 const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
@@ -108,7 +126,13 @@ function sendError(operation, error, requestId, terminalId) {
 
 function makeDetector(terminalId, agentType) {
   agentTypes.set(terminalId, agentType);
-  const detector = createDetector(agentType, (update) => send({ type: "state:update", terminalId, ...update }));
+  const detector = createDetector(agentType, (update) => send({
+    type: "state:update",
+    terminalId,
+    ...update,
+    // Detector summaries are raw output excerpts; sanitize them the same way.
+    summary: update.summary === undefined ? undefined : summarize(update.summary),
+  }));
   detectors.set(terminalId, detector);
   return detector;
 }
@@ -147,7 +171,13 @@ function assertCwd(cwd) {
   }
 }
 
-function createSession(message) {
+function createSession(message, hookWaited = false) {
+  // The hook port is assigned asynchronously; a create that arrives before the
+  // listener is ready waits once, then proceeds with or without hook env.
+  if (!hookServer.port && !hookWaited) {
+    hookReady.then(() => createSession(message, true));
+    return;
+  }
   const requestId = typeof message.requestId === "string" ? message.requestId : undefined;
   let request;
   try {
@@ -163,6 +193,13 @@ function createSession(message) {
   }
 
   creating.add(request.terminalId);
+  const hookEnv = {
+    TERMBEACON_TERMINAL_ID: request.terminalId,
+    ...(hookServer.port ? {
+      TERMBEACON_HOOK_PORT: String(hookServer.port),
+      TERMBEACON_HOOK_TOKEN: hookServer.token,
+    } : {}),
+  };
   let session;
   try {
     session = pty.spawn(request.shell, request.args, {
@@ -170,7 +207,7 @@ function createSession(message) {
       cols: request.cols,
       rows: request.rows,
       cwd: request.cwd,
-      env: { ...process.env, ...request.env },
+      env: { ...process.env, ...request.env, ...hookEnv },
       ...(isWindows ? { useConpty: true } : {}),
     });
   } catch (error) {
@@ -194,7 +231,10 @@ function createSession(message) {
     const next = (sequence.get(request.terminalId) || 0) + 1;
     sequence.set(request.terminalId, next);
     bufferAppend(request.terminalId, data);
-    send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, at: Date.now() });
+    // The sidebar renders this under the terminal title; send a sanitized
+    // single line so control sequences never reach the DOM as mojibake.
+    const summary = summarize(data);
+    send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, summary, at: Date.now() });
     try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
     try { sniffer.feed(data); } catch { /* agent sniffing must never break output delivery */ }
     detector.output(data);
@@ -221,6 +261,7 @@ function handleMessage(message) {
       clearInterval(tickTimer);
       tickTimer = null;
     }
+    void hookServer.close();
     for (const [terminalId, session] of sessions) {
       killRequests.add(terminalId);
       try { session.kill(); } catch { /* process is shutting down */ }

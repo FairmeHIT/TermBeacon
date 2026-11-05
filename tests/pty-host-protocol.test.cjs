@@ -29,13 +29,28 @@ function createHarness({ spawn, detection } = {}) {
   };
   const fakePty = { spawn: spawn || defaultSpawn };
   const spawned = [];
-  const wrappedSpawn = (...args) => {
-    const session = fakePty.spawn(...args);
+  const spawnedOptions = [];
+  let hookHandler = null;
+  const wrappedSpawn = (shell, args, options) => {
+    const session = fakePty.spawn(shell, args, options);
     spawned.push(session);
+    spawnedOptions.push(options);
     return session;
   };
   const fakeFs = { statSync: () => ({ isDirectory: () => true }) };
   const fakeDetection = detection || { createDetector: () => ({ output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }) };
+  const fakeHookServer = {
+    start: () => Promise.resolve(12345),
+    close: () => Promise.resolve(),
+    port: 12345,
+    token: "test-token",
+  };
+  const fakeHookModule = {
+    createHookServer: ({ onEvent }) => {
+      hookHandler = onEvent;
+      return fakeHookServer;
+    },
+  };
   const fakeProcess = {
     parentPort,
     env: {},
@@ -47,10 +62,14 @@ function createHarness({ spawn, detection } = {}) {
     if (request === "node:fs") return fakeFs;
     if (request === "node-pty") return { spawn: wrappedSpawn };
     if (request === "./detection-engine.cjs") return fakeDetection;
-    if (request === "./agent-sniff.cjs") return require("../src/main/agent-sniff.cjs");
-    if (request === "./osc-parser.cjs") return require("../src/main/osc-parser.cjs");
+    if (request === "./hook-server.cjs") return fakeHookModule;
     if (request === "./pty-validation.cjs") return validation;
-    if (request === "./platform.cjs") return require("../src/main/platform.cjs");
+    // Any other local module is loaded for real. Keeping this generic means a
+    // newly added runtime module does not require touching the harness, which
+    // previously caused false failures (and hid a real packaging bug).
+    if (request.startsWith("./") && request.endsWith(".cjs")) {
+      return require(path.join(__dirname, "..", "src", "main", request.slice(2)));
+    }
     throw new Error(`unexpected require: ${request}`);
   };
   const fakeSetInterval = (callback) => {
@@ -74,7 +93,7 @@ function createHarness({ spawn, detection } = {}) {
     clearInterval: () => { tickCallback = null; },
   }, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
-  return { dataPort, messages, spawned, tick: () => tickCallback?.() };
+  return { dataPort, messages, spawned, spawnedOptions, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -191,4 +210,29 @@ test("PTY host treats agent launch writes as launch, not task input", () => {
   dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "claude\r", launch: true } });
   assert.equal(launches, 1);
   assert.equal(inputs, 0);
+});
+
+test("PTY host injects the hook bridge env into each session", () => {
+  const { dataPort, spawnedOptions } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  const env = spawnedOptions[0].env;
+  assert.equal(env.TERMBEACON_TERMINAL_ID, "t1");
+  assert.equal(env.TERMBEACON_HOOK_PORT, "12345");
+  assert.equal(env.TERMBEACON_HOOK_TOKEN, "test-token");
+});
+
+test("PTY host routes bridge events to the terminal detector", () => {
+  const hooks = [];
+  const { dataPort, emitHook } = createHarness({
+    detection: {
+      createDetector: () => ({
+        output() {}, tick() {}, input() {}, exit() {}, viewed() {},
+        hook(event, status) { hooks.push([event, status]); },
+      }),
+    },
+  });
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "session.status", status: "completed" });
+  emitHook({ terminalId: "missing", event: "session.status", status: "completed" });
+  assert.deepEqual(hooks, [["session.status", "completed"]]);
 });
