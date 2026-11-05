@@ -67,7 +67,7 @@ const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.use
 const DEFAULT_SHELL = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
 const DEFAULT_CWD = IS_WINDOWS ? "C:" + String.fromCharCode(92, 92) : "/";
 
-function isValidCwd(path: unknown): boolean {
+function isValidCwd(path: unknown): path is string {
   return typeof path === "string" && path.length > 0 && (IS_WINDOWS
     ? /^[a-zA-Z]:[\\/]/.test(path) || /^[\\/]{2}/.test(path)
     : path.startsWith("/"));
