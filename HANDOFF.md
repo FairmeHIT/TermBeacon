@@ -151,3 +151,20 @@ The smoke currently validates CLI discovery, ConPTY startup, output capture, and
 - The working tree also contains the platform shell abstraction used by `pty-host`, validation, CLI discovery, renderer defaults, and runtime copying (`src/main/platform.cjs`). It keeps Windows on `cmd.exe`/ConPTY while allowing the smoke and validation paths to run with the host shell on other platforms.
 
 The next useful recording is an authenticated or otherwise safe interactive task. Version and help output are now covered as repeatable launch/exit smoke, but they do not prove provider-specific task completion, permission, tool, or hook signals.
+
+## 6.5 macOS platform follow-up (2026-11-05)
+
+- macOS now defaults to `/bin/zsh` and the current user's home directory for new terminals and PTY requests. Linux keeps `/bin/bash`; Windows keeps `cmd.exe` and ConPTY.
+- Added a `platform:info` IPC path so the renderer receives the main process platform, shell, and default CWD. GUI terminal creation no longer hardcodes `/` or `/bin/bash`.
+- CLI discovery supplements the GUI PATH with common Homebrew, npm, Volta, asdf, pnpm, Bun, Cargo, and user-local directories. Version checks use the discovered absolute executable path.
+- On macOS and Linux, CLI smoke launches the discovered executable directly through node-pty. Windows continues to launch through `cmd.exe` with ConPTY. Both `npm run smoke:cli -- --version` and `npm run smoke:cli -- --help` passed.
+- Added platform and CLI discovery tests and updated PTY validation coverage.
+
+Validation:
+
+- `npm test`: 28 passed, 0 failed.
+- `npm run build`: passed; TypeScript, Vite, and runtime copy completed successfully.
+- `git diff --check`: passed.
+- Local CLI discovery on this Mac: opencode `1.18.35`, Codex CLI `0.157.1`, Claude Code `2.1.234`.
+
+The smoke covers discovery, direct executable startup, PTY output, and natural exit for version and help commands. It still does not cover authenticated interactive tasks, provider-specific hooks, permission prompts, or tool calls.

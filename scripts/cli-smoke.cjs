@@ -1,6 +1,6 @@
 const pty = require("node-pty");
 const { discoverAll } = require("../src/main/cli-discovery.cjs");
-const { isWindows, defaultShell } = require("../src/main/platform.cjs");
+const { isWindows } = require("../src/main/platform.cjs");
 
 const TIMEOUT_MS = 8000;
 
@@ -11,27 +11,33 @@ function stripTerminalControls(value) {
     .replace(/\r/g, "");
 }
 
-function runCommand(command, argument) {
+function runCommand(item, argument) {
   return new Promise((resolve) => {
+    const command = item.command;
     let child;
-    if (isWindows) {
-      const shell = process.env.ComSpec || "cmd.exe";
-      child = pty.spawn(shell, ["/d", "/s", "/c", command + " " + argument], {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 32,
-        cwd: process.cwd(),
-        env: process.env,
-        useConpty: true,
-      });
-    } else {
-      child = pty.spawn(defaultShell(), ["-c", command + " " + argument], {
-        name: "xterm-256color",
-        cols: 120,
-        rows: 32,
-        cwd: process.cwd(),
-        env: process.env,
-      });
+    try {
+      if (isWindows) {
+        const shell = process.env.ComSpec || "cmd.exe";
+        child = pty.spawn(shell, ["/d", "/s", "/c", command + " " + argument], {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 32,
+          cwd: process.cwd(),
+          env: process.env,
+          useConpty: true,
+        });
+      } else {
+        child = pty.spawn(item.executable || command, [argument], {
+          name: "xterm-256color",
+          cols: 120,
+          rows: 32,
+          cwd: process.cwd(),
+          env: process.env,
+        });
+      }
+    } catch (error) {
+      resolve({ command, executable: item.executable, argument, spawnError: error?.message || String(error) });
+      return;
     }
     let output = "";
     let settled = false;
@@ -39,7 +45,7 @@ function runCommand(command, argument) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ command, argument, pid: child.pid, output: stripTerminalControls(output).trim().slice(0, 400), ...result });
+      resolve({ command, executable: item.executable, argument, pid: child.pid, output: stripTerminalControls(output).trim().slice(0, 400), ...result });
     };
     const timer = setTimeout(() => {
       try { child.kill(); } catch { /* the host may already have exited */ }
@@ -59,11 +65,11 @@ async function main() {
   }
   const argument = process.argv[2] === "--help" ? "--help" : "--version";
   const results = [];
-  for (const item of installed) results.push(await runCommand(item.command, argument));
+  for (const item of installed) results.push(await runCommand(item, argument));
   let failed = false;
   for (const result of results) {
     console.log(JSON.stringify(result));
-    if (result.timeout || result.exitCode !== 0) failed = true;
+    if (result.spawnError || result.timeout || result.exitCode !== 0 || !result.output) failed = true;
   }
   process.exit(failed ? 1 : 0);
 }

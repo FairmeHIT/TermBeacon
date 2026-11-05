@@ -6,9 +6,13 @@ const {
   normalizeResizeRequest,
   normalizeTerminalRequest,
 } = require("../src/main/pty-validation.cjs");
-const { defaultShell } = require("../src/main/platform.cjs");
+const { defaultCwd, defaultShell } = require("../src/main/platform.cjs");
 
 const cwd = process.platform === "win32" ? "C:\\" : "/";
+
+test("uses the platform home directory when cwd is omitted", () => {
+  assert.equal(normalizeCreateRequest({ terminalId: "t1" }).cwd, defaultCwd());
+});
 
 test("normalizes a valid PTY create request", () => {
   assert.deepEqual(normalizeCreateRequest({ terminalId: "t1", cwd }), {

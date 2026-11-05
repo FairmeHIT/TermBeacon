@@ -96,6 +96,7 @@ ipcRenderer.on("pty:host-exit", (_event, payload) => {
 contextBridge.exposeInMainWorld("termbeacon", {
   loadState: () => ipcRenderer.invoke("state:load"),
   discoverCli: () => ipcRenderer.invoke("cli:discover"),
+  getPlatformInfo: () => ipcRenderer.invoke("platform:info"),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {
     const requestId = crypto.randomUUID();

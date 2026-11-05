@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, StateUpdateEvent, TerminalInstance } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, StateUpdateEvent, TerminalInstance } from "../shared/types";
 import "./styles.css";
 
 declare global {
@@ -19,6 +19,7 @@ declare global {
       loadState(): Promise<PersistedState>;
       saveState(state: PersistedState): Promise<boolean>;
       discoverCli(): Promise<Record<string, CliInfo>>;
+      getPlatformInfo(): Promise<PlatformInfo>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
       resize(request: unknown): void;
@@ -59,16 +60,24 @@ declare global {
   }
 }
 
-const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+function rendererPlatformFallback(): PlatformInfo {
+  const platform = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent;
+  const isWindows = /win/i.test(platform);
+  const isMac = /mac/i.test(platform);
+  return {
+    platform: isWindows ? "win32" : isMac ? "darwin" : "linux",
+    isWindows,
+    isMac,
+    shell: isWindows ? "cmd.exe" : isMac ? "/bin/zsh" : "/bin/bash",
+    cwd: isWindows ? "C:\\" : "/",
+  };
+}
 
-const DEFAULT_SHELL = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
-const DEFAULT_CWD = IS_WINDOWS ? "C:" + String.fromCharCode(92, 92) : "/";
-
-function newTerminal(index: number): TerminalInstance {
+function newTerminal(index: number, platform: PlatformInfo): TerminalInstance {
   return {
     id: crypto.randomUUID(),
     title: `终端 ${index}`,
-    cwd: DEFAULT_CWD,
+    cwd: platform.cwd,
     agentType: "generic",
     state: "ready",
     alive: false,
@@ -77,7 +86,9 @@ function newTerminal(index: number): TerminalInstance {
 }
 
 function App() {
-  const [terminals, setTerminals] = useState<TerminalInstance[]>(() => [newTerminal(1)]);
+  const fallbackPlatform = useMemo(rendererPlatformFallback, []);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(fallbackPlatform);
+  const [terminals, setTerminals] = useState<TerminalInstance[]>(() => [newTerminal(1, fallbackPlatform)]);
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [hydrated, setHydrated] = useState(false);
   const [cliStatus, setCliStatus] = useState<Record<string, CliInfo>>({});
@@ -89,11 +100,16 @@ function App() {
 
   useEffect(() => {
     void window.termbeacon.discoverCli().then(setCliStatus);
-    void window.termbeacon.loadState().then((state) => {
+    void Promise.all([window.termbeacon.getPlatformInfo(), window.termbeacon.loadState()]).then(([info, state]) => {
+      setPlatformInfo(info);
       if (state.terminals.length > 0) {
         setTerminals(state.terminals.map((terminal) => ({ ...terminal, alive: false, state: "stopped" as AgentState })));
         setActiveId(state.activeTerminalId ?? state.terminals[0].id);
+      } else {
+        setTerminals([newTerminal(1, info)]);
       }
+      setHydrated(true);
+    }).catch(() => {
       setHydrated(true);
     });
     const disposeOutput = window.termbeacon.onOutput((event) => {
@@ -146,7 +162,7 @@ function App() {
         terminalId: terminal.id,
         title: terminal.title,
         cwd: terminal.cwd,
-        shell: DEFAULT_SHELL,
+        shell: platformInfo.shell,
         args: [],
         cols: 120,
         rows: 32,
@@ -160,7 +176,7 @@ function App() {
           : item));
       });
     });
-  }, [terminals, hydrated]);
+  }, [terminals, hydrated, platformInfo.shell]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -202,7 +218,7 @@ function App() {
   }
 
   function addTerminal() {
-    const terminal = newTerminal(terminals.length + 1);
+    const terminal = newTerminal(terminals.length + 1, platformInfo);
     setTerminals((items) => [...items, terminal]);
     setActiveId(terminal.id);
   }
@@ -216,7 +232,11 @@ function App() {
     if (!active || active.agentType === "generic") return;
     const info = cliStatus[active.agentType];
     if (!info?.installed) return;
-    window.termbeacon.write({ terminalId: active.id, data: `${info.command}\r` });
+    const executable = info.executable || info.command;
+    const command = platformInfo.isWindows
+      ? `"${executable.replaceAll('"', '""')}"`
+      : `'${executable.replaceAll("'", "'\\''")}'`;
+    window.termbeacon.write({ terminalId: active.id, data: `${command}\r` });
   }
 
   return <main className="app-shell">
