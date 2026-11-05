@@ -5,9 +5,9 @@ function stripAnsi(value) {
 }
 
 function parseOscProgress(value) {
-  const match = value.match(/\u001b\]9;4;(\d+);(\d+)(?:\u0007|\u001b\\)/);
+  const match = value.match(/\u001b\]9;4;(\d+);?(\d+)?(?:\u0007|\u001b\\)/);
   if (!match) return undefined;
-  return { state: Number(match[1]), progress: Number(match[2]) };
+  return { state: Number(match[1]), progress: match[2] === undefined ? undefined : Number(match[2]) };
 }
 
 function createDetector(agentType = "generic", emit = () => {}) {
@@ -24,6 +24,10 @@ function createDetector(agentType = "generic", emit = () => {}) {
     oscCompletedAt: 0,
     pending: null,
   };
+  // Longer quiet window required when OSC 9;4 progress-100 is the only
+  // completion evidence, no prompt/completion text has been observed.
+  const oscOnlyConfirmMs = (config.quietWindow.confirmMs || 2500) * 3;
+  const oscOnlyConfidence = 0.6;
 
   function transition(current, confidence, source, summary) {
     if (runtime.state === current) return;
@@ -51,7 +55,10 @@ function createDetector(agentType = "generic", emit = () => {}) {
     const osc = parseOscProgress(data);
     if (osc) {
       runtime.oscProgress = osc;
+      // OSC 9;4 state 0 removes the progress line (task finished or reset);
+      // progress 100 with any active state also marks completion evidence.
       if (osc.progress >= 100 && osc.state !== 0) runtime.oscCompletedAt = now;
+      if (osc.state === 0) runtime.oscCompletedAt = now;
     }
     const signalText = (runtime.signalTail + clean).slice(-4096);
     runtime.signalTail = signalText.slice(-512);
@@ -89,14 +96,34 @@ function createDetector(agentType = "generic", emit = () => {}) {
   }
 
   function tick(now = Date.now()) {
-    if (!runtime.pending) return;
+    if (!runtime.pending) {
+      // OSC-only completion path: progress reached 100 (or state 0) but no
+      // prompt/completion text ever arrived. Require the longer quiet window
+      // and settle at lower confidence so text evidence always dominates.
+      if (!runtime.oscCompletedAt || !runtime.armed) return;
+      const quietFor = now - runtime.lastOutputAt;
+      const oscFor = now - runtime.oscCompletedAt;
+      if (runtime.toolInFlight && quietFor < config.quietWindow.maxToolGraceMs) return;
+      if (quietFor >= config.quietWindow.candidateMs && oscFor >= oscOnlyConfirmMs) {
+        transition("completed-unseen", oscOnlyConfidence, "osc", "progress complete (osc only)");
+        runtime.armed = false;
+        runtime.signalTail = "";
+        runtime.oscProgress = undefined;
+        runtime.oscCompletedAt = 0;
+      }
+      return;
+    }
     const quietFor = now - runtime.lastOutputAt;
     const candidateFor = now - runtime.candidateAt;
     const toolGraceElapsed = !runtime.toolInFlight
       || quietFor >= config.quietWindow.maxToolGraceMs;
     if (!toolGraceElapsed) return;
-    if (quietFor >= config.quietWindow.candidateMs && candidateFor >= config.quietWindow.confirmMs) {
-      transition("completed-unseen", 0.82, "output", runtime.pending.summary);
+    const confirmMs = runtime.oscCompletedAt
+      ? Math.max(config.quietWindow.candidateMs, config.quietWindow.confirmMs / 2)
+      : config.quietWindow.confirmMs;
+    if (quietFor >= config.quietWindow.candidateMs && candidateFor >= confirmMs) {
+      const confidence = runtime.oscCompletedAt ? 0.88 : 0.82;
+      transition("completed-unseen", confidence, "output", runtime.pending.summary);
       runtime.pending = null;
       runtime.armed = false;
       runtime.signalTail = "";

@@ -7,3 +7,10 @@ test("parses OSC 9;4 progress sequences", () => {
   assert.deepEqual(parseOscProgress("\u001b]9;4;2;100\u001b\\"), { state: 2, progress: 100 });
   assert.equal(parseOscProgress("plain output"), undefined);
 });
+
+test("parses OSC 9;4 sequences with an omitted progress value", () => {
+  assert.equal(parseOscProgress("\u001b]9;4;0;\u0007").state, 0);
+  assert.equal(parseOscProgress("\u001b]9;4;0;\u0007").progress, undefined);
+  assert.equal(parseOscProgress("\u001b]9;4;0\u0007").state, 0);
+  assert.equal(parseOscProgress("\u001b]9;4;1;\u0007").progress, undefined);
+});

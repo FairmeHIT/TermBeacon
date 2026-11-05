@@ -81,10 +81,58 @@ test("missing tool-end marker is bounded by the tool grace window", () => {
   assert.equal(updates.at(-1).current, "completed-unseen");
 });
 
-test("OSC completion progress alone does not complete a task", () => {
+test("OSC completion progress alone does not complete within short quiet windows", () => {
   const { detector, updates } = make();
   detector.input("run task\r");
   detector.output("\u001b]9;4;1;100\u0007", 1000);
-  detector.tick(10000);
+  // The old invariant was relaxed: OSC alone can now settle, but only after
+  // the extended (3x) quiet window; the normal window must not fire.
+  detector.tick(4000);
   assert.equal(updates.at(-1).current, "working");
+});
+
+test("OSC progress 100 settles at low confidence after the extended quiet window", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  // candidateMs is 1200, oscOnlyConfirmMs is confirmMs * 3 = 7500.
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).confidence, 0.6);
+  assert.equal(updates.at(-1).source, "osc");
+});
+
+test("OSC progress 100 does not settle within the normal confirm window", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  detector.tick(4000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("OSC state 0 counts as completion evidence for the osc-only path", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;0;\u0007", 1000);
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).source, "osc");
+});
+
+test("OSC completion accelerates a text-evidenced candidate", () => {
+  const { detector, updates } = make();
+  detector.input("build\r");
+  detector.output("\u001b]9;4;1;100\u0007Done\r\n$ ", 1000);
+  // confirmMs is 2500, halved to 1250 by OSC evidence; candidate age 1400ms
+  // at tick(2400) is beyond it while remaining below the plain 2500ms window.
+  detector.tick(2400);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).confidence, 0.88);
+});
+
+test("unarmed OSC progress without user activity never settles", () => {
+  const { detector, updates } = make();
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  detector.tick(20000);
+  assert.equal(updates.length, 0);
 });

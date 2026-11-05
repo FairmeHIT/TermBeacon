@@ -187,3 +187,23 @@ Validation:
 - `npm start`: production smoke launched.
 
 Known boundary (unchanged): a host crash clears the in-memory buffers, and PTY sessions do not survive host restart by design; replay covers renderer-side port disconnects and reconnects, not host-level restarts. Remaining next: OSC 9;4 scored signals, CWD picker with validation, workspaces/title persistence polish, and packaging.
+
+## 6.7 Windows branch: OSC 9;4 as a scored signal (2026-11-05)
+
+Branch: `win` (follows 6.6). Closes the medium-priority item "OSC 9;4 目前已解析和测试，但还没有作为候选评分信号完整接入状态决策".
+
+- `parseOscProgress` now accepts the spec-valid form with an omitted progress value (`OSC 9;4;0;` and `OSC 9;4;0`), returning `{ state, progress: undefined }`. Previously these removal sequences failed to parse entirely.
+- OSC state 0 (progress line removal) now records `oscCompletedAt` alongside the existing progress-100 rule.
+- Scoring rules in `tick()`:
+  - **Text evidence dominates**: a prompt/completion candidate with OSC evidence confirms in half the normal window (`confirmMs/2`, floor `candidateMs`) at confidence 0.88 (up from 0.82).
+  - **OSC-only path**: when armed but no prompt/completion text ever arrives, progress-100 or state-0 can settle `completed-unseen` at confidence 0.6 via source `osc`, but only after a 3x extended quiet window (`oscOnlyConfirmMs` = 7500ms for the default config) and still bounded by the tool grace window.
+  - Unarmed terminals (no user input, no hook) never settle on OSC alone.
+- The old invariant "OSC completion progress alone does not complete a task" was deliberately relaxed to "does not complete within the normal quiet window"; the distinction is recorded in the tests.
+
+Validation:
+
+- `npm test`: 32 passed, 0 failed (6 new detector tests + 1 new parser test).
+- `npm run build`: passed.
+- `npm start`: production smoke launched.
+
+Remaining next: CWD directory picker with validation, real interactive task fixture recording, workspaces/title persistence polish, and packaging via electron-builder/Forge.
