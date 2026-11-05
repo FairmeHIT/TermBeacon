@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json && vite build && node scripts/copy-runtime.mjs",
     "start": "electron .",
     "smoke:cli": "node scripts/cli-smoke.cjs",
+    "record:cli": "node scripts/cli-record.cjs",
     "dist": "npm run build && node scripts/dist-win.mjs",
     "dist:mac": "npm run build && electron-builder --mac --config electron-builder.config.cjs",
     "test": "node --test tests/*.test.cjs"

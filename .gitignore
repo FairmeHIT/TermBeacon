@@ -4,3 +4,4 @@ release/
 release-out/
 *.log
 .DS_Store
+captures/
