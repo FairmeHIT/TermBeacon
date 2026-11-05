@@ -1,0 +1,7 @@
+{"kind":"meta","agent":"opencode","name":"basic-completion","description":"工具执行后回到提示符"}
+{"kind":"input","data":"修复测试失败\r","at":0}
+{"kind":"output","data":"Thinking...\r\n","at":100}
+{"kind":"output","data":"Running tool: tests\r\n","at":400}
+{"kind":"output","data":"Tests passed\r\n$ ","at":1200}
+{"kind":"tick","at":4200}
+{"kind":"assert","state":"completed-unseen"}

@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"codex","name":"native-completion","description":"原生状态事件作为高置信度完成信号"}
+{"kind":"input","data":"检查变更\r","at":0}
+{"kind":"hook","event":"TaskCompleted","status":"completed","at":1000}
+{"kind":"assert","state":"completed-unseen"}

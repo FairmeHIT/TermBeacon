@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"claude","name":"permission-prompt","description":"权限确认进入等待用户输入"}
+{"kind":"input","data":"读取并修改文件\r","at":0}
+{"kind":"output","data":"Reading files...\r\n","at":100}
+{"kind":"output","data":"Allow this action? [Yes/No]","at":800}
+{"kind":"assert","state":"awaiting-input"}

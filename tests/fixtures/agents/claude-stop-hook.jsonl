@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"claude","name":"stop-hook","description":"Stop hook 后等待确认窗口完成"}
+{"kind":"hook","event":"Stop","status":"started","at":0}
+{"kind":"hook","event":"Stop","status":"completed","at":1000}
+{"kind":"assert","state":"completed-unseen"}

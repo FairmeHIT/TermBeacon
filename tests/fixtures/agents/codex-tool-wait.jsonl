@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"codex","name":"tool-wait","description":"工具执行中的短暂停顿不能判定完成"}
+{"kind":"input","data":"运行完整测试\r","at":0}
+{"kind":"output","data":"Running command: npm test\r\n","at":100}
+{"kind":"tick","at":5000}
+{"kind":"assert","state":"working"}

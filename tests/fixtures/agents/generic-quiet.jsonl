@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"generic","name":"quiet-without-evidence","description":"没有结构性证据的静默保持工作中"}
+{"kind":"input","data":"执行长任务\r","at":0}
+{"kind":"output","data":"processing...","at":100}
+{"kind":"tick","at":10000}
+{"kind":"assert","state":"working"}
