@@ -21,9 +21,30 @@ const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
 let dataPort = null;
+let tickTimer = null;
 
 // Per-terminal bounded output ring buffer for replay after renderer reconnect.
 const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+
+// Detection is time-driven: quiet windows only advance when tick() is called.
+// PTY output is bursty and can stop entirely at a prompt, so the host must
+// drive every detector on a timer instead of waiting for the next output chunk.
+const DETECTOR_TICK_MS = 250;
+
+function startTickLoop() {
+  if (tickTimer) return;
+  tickTimer = setInterval(() => {
+    const now = Date.now();
+    for (const detector of detectors.values()) {
+      try {
+        detector.tick(now);
+      } catch {
+        // One detector failing must not stop the others from advancing.
+      }
+    }
+  }, DETECTOR_TICK_MS);
+  if (typeof tickTimer.unref === "function") tickTimer.unref();
+}
 
 function bufferAppend(terminalId, data) {
   let entry = buffers.get(terminalId);
@@ -160,6 +181,10 @@ function createSession(message) {
 function handleMessage(message) {
   if (!message || typeof message !== "object") return;
   if (message.type === "shutdown") {
+    if (tickTimer) {
+      clearInterval(tickTimer);
+      tickTimer = null;
+    }
     for (const [terminalId, session] of sessions) {
       killRequests.add(terminalId);
       try { session.kill(); } catch { /* process is shutting down */ }
@@ -177,7 +202,8 @@ function handleMessage(message) {
       const detector = detectors.get(request.terminalId);
       if (!session || !detector) throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
       session.write(request.data);
-      detector.input(request.data);
+      if (message.launch === true) detector.launch?.();
+      else detector.input(request.data);
       detector.tick();
     } catch (error) {
       sendError("pty:write", error, message.requestId, message?.terminalId);
@@ -271,3 +297,7 @@ parentPort.on("message", (event) => {
   dataPort.start();
   send({ type: "pty:host-ready", at: Date.now() });
 });
+
+// Start the detector clock as soon as the host module loads. It is independent
+// of the data port so detection keeps advancing across renderer reconnects.
+startTickLoop();

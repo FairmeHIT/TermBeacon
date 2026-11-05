@@ -141,6 +141,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
     });
   },
   write: (request) => send({ type: "pty:write", ...request }),
+  launch: (request) => send({ type: "pty:write", ...request, launch: true }),
   resize: (request) => send({ type: "pty:resize", ...request }),
   replay: (request) => send({ type: "pty:replay-request", ...request }),
   kill: (request) => send({ type: "pty:kill", ...request }),

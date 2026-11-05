@@ -22,6 +22,7 @@ declare global {
       pickCwd(): Promise<string | null>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
+      launch(request: unknown): void;
       resize(request: unknown): void;
       replay(request: unknown): void;
       kill(request: unknown): void;
@@ -352,7 +353,7 @@ function App() {
     if (!active || active.agentType === "generic") return;
     const info = cliStatus[active.agentType];
     if (!info?.installed) return;
-    window.termbeacon.write({ terminalId: active.id, data: `${info.command}\r` });
+    window.termbeacon.launch({ terminalId: active.id, data: `${info.command}\r` });
   }
 
   async function pickCwd() {

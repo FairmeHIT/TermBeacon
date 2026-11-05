@@ -1,23 +1,21 @@
-/**
- * electron-builder configuration for TermBeacon.
- * Native module strategy: node-pty 1.1.0 ships N-API prebuilds under
- * node_modules/node-pty/prebuilds/<platform>-<arch>/ (conpty.node, pty.node,
- * winpty.dll and friends). N-API modules are ABI-stable across Electron
- * versions, so we disable the MSVC rebuild (the packaging machine has no
- * Visual Studio toolchain) and ship the prebuilt binaries in the asar-unpacked
- * node_modules tree.
- */
-const isWindowsHost = process.platform === "win32";
-
+/** electron-builder configuration for TermBeacon. */
 module.exports = {
   appId: "com.fairmhit.termbeacon",
   productName: "TermBeacon",
   copyright: "Copyright (c) 2026 FairmeHIT",
-  // Windows host only: keep the output outside the project tree — the
-  // in-project release/ directory hits persistent EBUSY from a local filter
-  // driver during Electron dist extraction (see HANDOFF 6.8). macOS/Linux
-  // hosts use the default in-tree release/ path.
-  directories: { output: isWindowsHost ? "D:/temp-termbeacon-release" : "release", buildResources: "build" },
+  // Development-stage convention: build into the in-repo release/ directory
+  // (git-ignored). NOTE: this Windows machine previously hit persistent EBUSY
+  // from a local filter driver when the builder extracted the Electron dist
+  // into an in-project path (HANDOFF 6.8). If that recurs, either retry or
+  // point output at a project-external path for the build run.
+  directories: { output: "release", buildResources: "build" },
+  // Point the builder at a pre-extracted Electron distribution so it never
+  // performs the extract-then-atomic-move step that trips the local filter
+  // driver's EBUSY (HANDOFF 6.8). Extract once via:
+  //   tar -xf %LOCALAPPDATA%\electron\Cache\<hash>\electron-v<ver>-win32-x64.zip -C <cache>\electron-dist-<ver>-win32-x64
+  electronDist: process.platform === "win32"
+    ? `${process.env.LOCALAPPDATA}/electron-builder/Cache/electron-dist-36.9.5-win32-x64`
+    : undefined,
   npmRebuild: false,
   buildDependenciesFromSource: false,
   files: [

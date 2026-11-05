@@ -8,10 +8,11 @@ const vm = require("node:vm");
 const hostSource = fs.readFileSync(path.join(__dirname, "..", "src", "main", "pty-host.cjs"), "utf8");
 const validation = require("../src/main/pty-validation.cjs");
 
-function createHarness({ spawn } = {}) {
+function createHarness({ spawn, detection } = {}) {
   const parentPort = new EventEmitter();
   const dataPort = new EventEmitter();
   const messages = [];
+  let tickCallback = null;
   dataPort.postMessage = (message) => messages.push(message);
   dataPort.start = () => {};
 
@@ -34,7 +35,7 @@ function createHarness({ spawn } = {}) {
     return session;
   };
   const fakeFs = { statSync: () => ({ isDirectory: () => true }) };
-  const fakeDetection = { createDetector: () => ({ output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }) };
+  const fakeDetection = detection || { createDetector: () => ({ output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }) };
   const fakeProcess = {
     parentPort,
     env: {},
@@ -50,9 +51,28 @@ function createHarness({ spawn } = {}) {
     if (request === "./platform.cjs") return require("../src/main/platform.cjs");
     throw new Error(`unexpected require: ${request}`);
   };
-  vm.runInNewContext(hostSource, { require: fakeRequire, process: fakeProcess, console, Date, Error, Map, Set, Number, Object, String, Array, Buffer }, { filename: "pty-host.cjs" });
+  const fakeSetInterval = (callback) => {
+    tickCallback = callback;
+    return { unref() {} };
+  };
+  vm.runInNewContext(hostSource, {
+    require: fakeRequire,
+    process: fakeProcess,
+    console,
+    Date,
+    Error,
+    Map,
+    Set,
+    Number,
+    Object,
+    String,
+    Array,
+    Buffer,
+    setInterval: fakeSetInterval,
+    clearInterval: () => { tickCallback = null; },
+  }, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
-  return { dataPort, messages, spawned };
+  return { dataPort, messages, spawned, tick: () => tickCallback?.() };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -142,4 +162,31 @@ test("PTY host rejects detector rebuilds for unknown terminals or agent types", 
   assert.equal(errors.length, 2);
   assert.ok(errors.some((error) => error.code === "NOT_FOUND"));
   assert.ok(errors.some((error) => error.code === "INVALID_AGENT"));
+});
+
+test("PTY host advances detectors on a timer without new output", () => {
+  let ticks = 0;
+  const { dataPort, tick } = createHarness({
+    detection: {
+      createDetector: () => ({ output() {}, tick() { ticks += 1; }, input() {}, exit() {}, viewed() {}, hook() {} }),
+    },
+  });
+  dataPort.emit("message", { data: createMessage("t1") });
+  tick();
+  tick();
+  assert.equal(ticks, 2);
+});
+
+test("PTY host treats agent launch writes as launch, not task input", () => {
+  let launches = 0;
+  let inputs = 0;
+  const { dataPort } = createHarness({
+    detection: {
+      createDetector: () => ({ output() {}, tick() {}, input() { inputs += 1; }, launch() { launches += 1; }, exit() {}, viewed() {}, hook() {} }),
+    },
+  });
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "claude\r", launch: true } });
+  assert.equal(launches, 1);
+  assert.equal(inputs, 0);
 });

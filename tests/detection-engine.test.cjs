@@ -136,3 +136,75 @@ test("unarmed OSC progress without user activity never settles", () => {
   detector.tick(20000);
   assert.equal(updates.length, 0);
 });
+
+test("arrow keys and mouse reports do not arm a task", () => {
+  const { detector, updates } = make();
+  detector.input("\u001b[A");
+  detector.input("\u001b[<0;10;20M");
+  detector.output("$ ", 1000);
+  detector.tick(5000);
+  assert.equal(updates.length, 0);
+});
+
+test("bracketed paste still arms a task", () => {
+  const { detector, updates } = make();
+  detector.input("\u001b[200~dir\u001b[201~");
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("cmd.exe prompt completes without any further output chunk", () => {
+  const { detector, updates } = make();
+  detector.input("dir\r");
+  detector.output(" Volume in drive C has no label.\r\nC:\\Users\\me>", 1000);
+  detector.tick(3600);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+});
+
+test("PowerShell prompt is recognized as completion evidence", () => {
+  const { detector, updates } = make();
+  detector.input("Get-ChildItem\r");
+  detector.output("PS C:\\Users\\me>", 1000);
+  detector.tick(3600);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+});
+
+test("an old Done outside the recent evidence window does not confirm", () => {
+  const { detector, updates } = make();
+  detector.input("build\r");
+  detector.output("Done\r\n", 1000);
+  detector.output("step one\r\nstep two\r\nstep three\r\nworking on next\r\n", 1100);
+  detector.tick(6000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("bare failed in ordinary log output does not become an error", () => {
+  const { detector, updates } = make();
+  detector.input("run\r");
+  detector.output("warning: failed to read cache\r\n", 1000);
+  detector.tick(5000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("Claude-style permission dialog enters awaiting-input", () => {
+  const { detector, updates } = make();
+  detector.input("read file\r");
+  detector.output("Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n", 1000);
+  assert.equal(updates.at(-1).current, "awaiting-input");
+});
+
+test("working-looking banner output alone does not arm a task", () => {
+  const { detector, updates } = make();
+  detector.output("Running commands are available\r\n$ ", 1000);
+  detector.tick(10000);
+  assert.equal(updates.length, 0);
+});
+
+test("launching an agent does not arm a task", () => {
+  const { detector, updates } = make();
+  detector.launch();
+  detector.output("Claude Code v2.1.316\r\n❯ ", 1000);
+  detector.tick(6000);
+  assert.equal(detector.runtime.state, "ready");
+  assert.equal(detector.runtime.armed, false);
+  assert.equal(updates.length, 0);
+});
