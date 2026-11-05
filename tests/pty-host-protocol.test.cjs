@@ -41,6 +41,7 @@ function createHarness({ spawn } = {}) {
     if (request === "node-pty") return fakePty;
     if (request === "./detection-engine.cjs") return fakeDetection;
     if (request === "./pty-validation.cjs") return validation;
+    if (request === "./platform.cjs") return require("../src/main/platform.cjs");
     throw new Error(`unexpected require: ${request}`);
   };
   vm.runInNewContext(hostSource, { require: fakeRequire, process: fakeProcess, console, Date, Error, Map, Set, Number, Object, String, Array }, { filename: "pty-host.cjs" });

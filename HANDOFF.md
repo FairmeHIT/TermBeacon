@@ -126,3 +126,20 @@ Validation:
 
 Next recommended batch: run a real CLI/ConPTY smoke matrix for one short command or prompt per installed CLI, capture sanitized output fixtures, and then adjust only Registry patterns where the recorded output demonstrates a mismatch. Known limitation remains that changing an existing terminal's Agent type does not rebuild its detector; restart or recreate that terminal before changing detector configuration.
 
+
+## 6.3 Real CLI/ConPTY smoke batch (2026-11-05)
+
+- Added `scripts/cli-smoke.cjs` and the `npm run smoke:cli` command. It launches each installed registered CLI through `cmd.exe` and node-pty/ConPTY, captures a bounded ANSI-stripped version line, verifies natural exit, and exits cleanly after all PTY handles are released.
+- Verified the current machine's installed CLIs:
+  - `opencode v2.2.1` (exit code 0)
+  - `codex-cli 0.166.0` (exit code 0)
+  - `2.1.316 (Claude Code)` (exit code 0)
+- Updated `src/main/cli-discovery.cjs` to invoke `cmd.exe /d /s /c` with `shell: false`, removing the Node 24 `shell:true` deprecation warning while preserving `.cmd` discovery.
+
+Validation:
+
+- `npm run smoke:cli`: passed for all three installed CLIs.
+- `npm test`: 21 passed, 0 failed.
+- `npm run build`: passed.
+
+The smoke currently validates CLI discovery, ConPTY startup, output capture, and natural exit. It does not yet exercise an authenticated interactive task, permission prompt, tool call, or provider-specific hook. Those require sanitized task recordings and should be added only after observing a real interactive run.

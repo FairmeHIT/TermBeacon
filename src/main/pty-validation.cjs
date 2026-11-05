@@ -1,4 +1,5 @@
 const path = require("node:path");
+const { defaultShell, isAbsoluteCwd } = require("./platform.cjs");
 
 const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude"]);
 const MAX_TERMINAL_ID_LENGTH = 128;
@@ -38,11 +39,11 @@ function normalizeCreateRequest(message) {
   if (!message || typeof message !== "object") throw protocolError("INVALID_REQUEST", "pty:create payload must be an object");
   const terminalId = requireString(message.terminalId, "terminalId", MAX_TERMINAL_ID_LENGTH);
   const title = requireString(message.title || terminalId, "title", MAX_TITLE_LENGTH);
-  const cwd = requireString(message.cwd || process.cwd(), "cwd", MAX_CWD_LENGTH);
-  if (!path.win32.isAbsolute(cwd) && !path.isAbsolute(cwd)) {
+  const cwd = requireString(message.cwd || path.sep, "cwd", MAX_CWD_LENGTH);
+  if (!isAbsoluteCwd(cwd)) {
     throw protocolError("INVALID_CWD", "cwd must be an absolute path", { field: "cwd" });
   }
-  const shell = requireString(message.shell || process.env.ComSpec || "cmd.exe", "shell", MAX_SHELL_LENGTH);
+  const shell = requireString(message.shell || defaultShell(), "shell", MAX_SHELL_LENGTH);
   const args = message.args === undefined ? [] : message.args;
   if (!Array.isArray(args) || args.length > MAX_ARGUMENTS || args.some((arg) => typeof arg !== "string" || arg.length > MAX_ARGUMENT_LENGTH)) {
     throw protocolError("INVALID_ARGUMENTS", `args must contain at most ${MAX_ARGUMENTS} string values`, { field: "args" });

@@ -3,6 +3,7 @@
 const parentPort = process.parentPort || require("electron").parentPort;
 const fs = require("node:fs");
 const pty = require("node-pty");
+const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
 const {
   normalizeCreateRequest,
@@ -81,7 +82,7 @@ function createSession(message) {
       rows: request.rows,
       cwd: request.cwd,
       env: { ...process.env, ...request.env },
-      useConpty: true,
+      ...(isWindows ? { useConpty: true } : {}),
     });
   } catch (error) {
     creating.delete(request.terminalId);

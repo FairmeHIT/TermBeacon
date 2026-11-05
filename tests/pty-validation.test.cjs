@@ -6,15 +6,16 @@ const {
   normalizeResizeRequest,
   normalizeTerminalRequest,
 } = require("../src/main/pty-validation.cjs");
+const { defaultShell } = require("../src/main/platform.cjs");
 
-const cwd = process.cwd();
+const cwd = process.platform === "win32" ? "C:\\" : "/";
 
 test("normalizes a valid PTY create request", () => {
   assert.deepEqual(normalizeCreateRequest({ terminalId: "t1", cwd }), {
     terminalId: "t1",
     title: "t1",
     cwd,
-    shell: process.env.ComSpec || "cmd.exe",
+    shell: defaultShell(),
     args: [],
     env: {},
     cols: 120,

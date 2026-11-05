@@ -53,11 +53,22 @@ const stateClass: Record<AgentState, string> = {
 
 const agents: AgentType[] = ["generic", "opencode", "codex", "claude"];
 
+declare global {
+  interface Navigator {
+    userAgentData?: { platform: string };
+  }
+}
+
+const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+
+const DEFAULT_SHELL = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
+const DEFAULT_CWD = IS_WINDOWS ? "C:" + String.fromCharCode(92, 92) : "/";
+
 function newTerminal(index: number): TerminalInstance {
   return {
     id: crypto.randomUUID(),
     title: `终端 ${index}`,
-    cwd: "C:\\\\",
+    cwd: DEFAULT_CWD,
     agentType: "generic",
     state: "ready",
     alive: false,
@@ -135,7 +146,7 @@ function App() {
         terminalId: terminal.id,
         title: terminal.title,
         cwd: terminal.cwd,
-        shell: "cmd.exe",
+        shell: DEFAULT_SHELL,
         args: [],
         cols: 120,
         rows: 32,
