@@ -61,9 +61,9 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 
 ### 批次 B：真实 CLI 校准与 Hook 接入
 
-目标是用真实输出替换猜测。需要在本机已登录的 opencode、Codex CLI、Claude Code 上各跑一个最小任务，覆盖启动、提交任务、工具执行、权限询问、完成、`Ctrl+C` 中断六类片段；用 `npm run record:cli -- --cli <agent>` 录制带时间戳的原始 PTY 输出，脱敏后按 CLI 版本存入 `tests/fixtures/agents/`，再只改 `agent-registry.cjs`。如果某个 CLI 的输出没有稳定提示符，就优先接它的原生事件：Claude Code 的 Stop/TaskCompleted Hook，Codex 的能力探测事件；Hook 必须带超时和输出检测回退，不能成为唯一真相。
+目标是用真实事件和真实输出替换猜测。首轮录制已经确认 Claude、Codex、opencode 的 TUI 提示符由 CSI 光标定位和增量重绘绘制，原始 PTY 流末尾通常不是提示符本身，所以不能再把 Registry 正则当作主路径。需要在本机已登录的三个 CLI 上各跑一个最小任务，覆盖启动、提交任务、工具执行、权限询问、完成、`Ctrl+C` 中断六类片段；用 `npm run record:cli -- --cli <agent> --task "<任务>"` 录制，脱敏后按 CLI 版本存入 `tests/fixtures/agents/`。检测路径改为：Claude Code 接 Stop/TaskCompleted Hook，Codex 探测原生状态事件，两者都保留超时和输出检测回退；opencode 先确认是否有 plugin、hook 或 OSC 9;4，没有就评估在 host 侧维护 headless 屏幕缓冲；文本规则只保留给 generic 和行式输出。
 
-验收是三个 CLI 各完成一次真实任务，状态序列可解释；权限询问进入 `awaiting-input`；Hook 关闭或超时后仍能靠输出完成；从启动按钮进入 CLI 后停在就绪，提交任务后才进入工作态。
+验收是三个 CLI 各完成一次真实任务，状态序列可解释；权限询问进入 `awaiting-input`；Hook 关闭或超时后仍能靠回退路径完成；TUI 空闲界面不会误报完成；从启动按钮进入 CLI 后停在就绪，提交任务后才进入工作态。
 
 ### 批次 C：稳定性与恢复
 

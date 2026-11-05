@@ -17,6 +17,15 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { isWindows, defaultShell } = require("../src/main/platform.cjs");
 const { discoverAll } = require("../src/main/cli-discovery.cjs");
+const { stripInputSequences } = require("../src/main/detection-engine.cjs");
+
+// Mouse reports, focus events and Kitty key-release events are useful to the
+// CLI but pure noise in a capture. Keep only text, Enter and Ctrl+C; forward
+// everything to the child regardless.
+function isMeaningfulInput(text) {
+  if (text.includes("\u0003") || text.includes("\r") || text.includes("\n")) return true;
+  return /[^\u0000-\u001f\u007f]/.test(stripInputSequences(text));
+}
 
 function parseArgs(argv) {
   const args = { cols: 120, rows: 32, maxMinutes: 15 };
@@ -31,8 +40,12 @@ function parseArgs(argv) {
       continue;
     }
     index += 1;
-    if (key === "cols" || key === "rows" || key === "max-minutes") args[key === "max-minutes" ? "maxMinutes" : key] = Number(value);
-    else args[key] = value;
+    if (key === "cols" || key === "rows" || key === "max-minutes" || key === "task-delay") {
+      const mapped = key === "max-minutes" ? "maxMinutes" : key === "task-delay" ? "taskDelay" : key;
+      args[mapped] = Number(value);
+    } else {
+      args[key] = value;
+    }
   }
   return args;
 }
@@ -52,6 +65,8 @@ function usage() {
   --out <path>                           Output JSONL path (default: captures/<cli>-<stamp>.jsonl)
   --cols <n> --rows <n>                  PTY size (default 120x32)
   --max-minutes <n>                      Safety timeout (default 15)
+  --task <string>                        Auto-submit this task after --task-delay
+  --task-delay <ms>                      Auto-task delay (default 12000)
 
 Exit the CLI normally to finish the capture.`);
 }
@@ -126,6 +141,18 @@ console.error(`[record] command: ${command}`);
 console.error(`[record] output: ${outPath}`);
 console.error("[record] interact normally; exit the CLI to save the capture.");
 
+const task = typeof args.task === "string" ? args.task : undefined;
+const taskDelay = Number.isFinite(args.taskDelay) ? Math.max(1000, args.taskDelay) : 12000;
+let taskTimer = null;
+if (task) {
+  console.error(`[record] auto task in ${taskDelay}ms: ${task}`);
+  taskTimer = setTimeout(() => {
+    const data = `${task}\r`;
+    record({ kind: "input", at: Date.now() - startedAt, data, source: "task" });
+    try { child.write(data); } catch { /* child may have exited */ }
+  }, taskDelay);
+}
+
 const maxTimer = setTimeout(() => {
   console.error(`[record] max duration (${args.maxMinutes} min) reached, stopping`);
   try { child.kill(); } catch { /* already gone */ }
@@ -142,7 +169,7 @@ try {
 process.stdin.resume();
 process.stdin.on("data", (data) => {
   const text = data.toString("utf8");
-  record({ kind: "input", at: Date.now() - startedAt, data: text });
+  if (isMeaningfulInput(text)) record({ kind: "input", at: Date.now() - startedAt, data: text });
   try { child.write(text); } catch { /* child may have exited */ }
 });
 
@@ -151,6 +178,7 @@ function finish(exitCode, signal) {
   record({ kind: "exit", at: Date.now() - startedAt, exitCode, signal });
   closed = true;
   clearTimeout(maxTimer);
+  if (taskTimer) clearTimeout(taskTimer);
   if (rawMode) {
     try { process.stdin.setRawMode(false); } catch { /* terminal already gone */ }
   }

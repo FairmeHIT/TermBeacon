@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, utilityProcess } from "electron";
+import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, utilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyFile, readFile, writeFile, rename } from "node:fs/promises";
@@ -86,9 +86,14 @@ function startPtyHost() {
   try {
     const host = utilityProcess.fork(hostPath, [], { serviceName: "TermBeacon PTY Host" });
     ptyHost = host;
+    // Surface host crashes in the dev console; without this a host exception
+    // is completely silent and only manifests as dead terminals in the UI.
+    host.stdout?.on("data", (chunk: Buffer) => console.log(`[pty-host:${host.pid}]`, chunk.toString().trimEnd()));
+    host.stderr?.on("data", (chunk: Buffer) => console.error(`[pty-host:${host.pid}]`, chunk.toString().trimEnd()));
     host.on("exit", (code: number) => {
       if (ptyHost !== host) return;
       ptyHost = null;
+      console.error(`[pty-host] exited with code ${code}`);
       if (isQuitting) return;
       notifyHostExit(code);
       schedulePtyHostRestart();
@@ -107,12 +112,55 @@ function connectDataPlane() {
   mainWindow.webContents.postMessage("pty:connect", null, [channel.port2]);
 }
 
+// Application menu. On Windows/Linux the bar is hidden (autoHideMenuBar) —
+// TermBeacon's UI is fully self-contained in the sidebar, and the default
+// Electron File/Edit/View template only added visual noise. Press Alt to
+// reveal it. macOS requires a menu with the standard app role, so a minimal
+// localized one is registered there.
+function registerMenu() {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: "TermBeacon",
+      submenu: [
+        { role: "about", label: "关于 TermBeacon" },
+        { type: "separator" },
+        { role: "hide", label: "隐藏 TermBeacon" },
+        { role: "hideOthers", label: "隐藏其他" },
+        { type: "separator" },
+        { role: "quit", label: "退出" },
+      ],
+    },
+    {
+      label: "编辑",
+      submenu: [
+        { role: "copy", label: "复制" },
+        { role: "paste", label: "粘贴" },
+        { role: "selectAll", label: "全选" },
+      ],
+    },
+    {
+      label: "视图",
+      submenu: [
+        { role: "reload", label: "重新加载" },
+        { role: "toggleDevTools", label: "开发者工具" },
+        { type: "separator" },
+        { role: "resetZoom", label: "实际大小" },
+        { role: "zoomIn", label: "放大" },
+        { role: "zoomOut", label: "缩小" },
+        { role: "togglefullscreen", label: "全屏" },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 900,
     minHeight: 560,
+    autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
   mainWindow.webContents.on("did-finish-load", () => {
@@ -124,6 +172,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerMenu();
   startPtyHost();
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

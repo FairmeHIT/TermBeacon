@@ -192,6 +192,13 @@ test("Claude-style permission dialog enters awaiting-input", () => {
   assert.equal(updates.at(-1).current, "awaiting-input");
 });
 
+test("cmd batch termination prompt is not a permission dialog", () => {
+  const { detector, updates } = make();
+  detector.input("claude\r");
+  detector.output("终止批处理操作吗(Y/N)? ", 1000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
 test("working-looking banner output alone does not arm a task", () => {
   const { detector, updates } = make();
   detector.output("Running commands are available\r\n$ ", 1000);

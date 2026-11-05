@@ -298,6 +298,22 @@ npm run record:cli -- --cli opencode --name opencode-basic
 
 验证：已在 Linux 沙箱用 stub PTY + fake CLI 验证输入转发、输出捕获、退出落盘和 JSONL 结构；真实 CLI 录制待 Windows 侧执行。
 
+## 6.13 首轮真实录制回放结论（2026-11-05）
+
+已收到三份 Windows 录制：`claude-claude-basic`、`codex-codex-basic`、`opencode-opencode-basic`。三份都只记录到 CLI 启动和空闲界面，没有真正提交任务；录制器当时还没有过滤鼠标事件，input 记录主要是鼠标/焦点序列。
+
+回放发现两件关键事实。第一，Claude 退出时 cmd 的“终止批处理操作吗(Y/N)?”被旧 `(Y/N)` 规则误判成 `awaiting-input`；已从 `waitingInput` 移除裸 y/n 规则并补回归测试。第二，用 `@xterm/headless` 渲染屏幕后确认：Claude、Codex、opencode 的提示符和状态行是用 CSI 光标定位和增量重绘绘制的，原始 PTY 流末尾通常只有 spinner、ASCII art 或状态栏碎片，不是提示符本身。当前“看最后一行”的文本规则无法可靠识别 TUI 提示符，单靠调 Registry 正则不能让三个 CLI 的灯可靠。
+
+录制器已补：鼠标/焦点/Kitty 键序列不再写入 input 日志（仍会转发给 CLI）；新增 `--task` 和 `--task-delay` 自动提交最小任务，默认 12 秒；纯文本输入和 Enter 才会记录。下一轮录制请带 `--task`，并等任务完成、提示符回来后再退出。
+
+```powershell
+npm run record:cli -- --cli claude --name claude-task --task "列出当前目录并说明结果"
+npm run record:cli -- --cli codex --name codex-task --task "列出当前目录并说明结果"
+npm run record:cli -- --cli opencode --name opencode-task --task "列出当前目录并说明结果"
+```
+
+结论：TUI 类 CLI 的主检测路径应优先用原生事件（Claude Stop/TaskCompleted Hook、Codex 能力探测事件），opencode 若没有可用事件，再评估 OSC 9;4 或 host 侧 headless 屏幕缓冲；文本规则只作为 generic 和行式输出的回退。
+
 ## 7. 新会话启动命令
 
 ```powershell

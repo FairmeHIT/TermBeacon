@@ -6,8 +6,6 @@ const common = {
     waitingInput: [
       /\b(?:allow|deny|confirm|approve)\b[^\n]{0,80}\?/i,
       /\bdo you want to (?:proceed|continue|allow|run)\b/i,
-      /\((?:y\/n|yes\/no)\)/i,
-      /\[\s*(?:y\/n|yes\/no)\s*\]/i,
       /^\s*[❯›>]?\s*\d+[.)]\s*(?:yes|no)\b/im,
       /\b(?:allow once|always allow|reject)\b/i,
       /是否(?:允许|继续|确认|执行)/,
