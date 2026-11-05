@@ -9,6 +9,12 @@ const require = createRequire(import.meta.url);
 const { discoverAll } = require("./cli-discovery.cjs") as {
   discoverAll: () => Record<string, unknown>;
 };
+const { normalizeCreateRequest, protocolError } = require("./pty-validation.cjs") as {
+  normalizeCreateRequest: (message: unknown) => {
+    terminalId: string; title: string; cwd: string; shell: string; cols: number; rows: number; agentType: string;
+  };
+  protocolError: (code: string, message: string, details?: Record<string, unknown>) => Error & { code: string };
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -125,8 +131,16 @@ ipcMain.handle("state:load", async () => readState());
 ipcMain.handle("cli:discover", () => discoverAll());
 ipcMain.handle("state:save", async (_event, state: PersistedState) => { await writeState(state); return true; });
 ipcMain.handle("pty:create", (_event, request) => {
+  let normalized;
+  try {
+    normalized = normalizeCreateRequest(request);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? (error as { code?: string }).code : "INVALID_REQUEST";
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`pty:create rejected: ${code}: ${message}`);
+  }
   const terminal: TerminalInstance = {
-    id: request.terminalId, title: request.title, cwd: request.cwd, agentType: request.agentType,
+    id: normalized.terminalId, title: normalized.title, cwd: normalized.cwd, agentType: normalized.agentType as TerminalInstance["agentType"],
     state: "ready", alive: true, lastActivityAt: Date.now(),
   };
   terminals.set(terminal.id, terminal);

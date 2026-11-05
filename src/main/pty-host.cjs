@@ -6,6 +6,7 @@ const pty = require("node-pty");
 const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
 const {
+  AGENT_TYPES,
   normalizeCreateRequest,
   normalizeWriteRequest,
   normalizeResizeRequest,
@@ -168,6 +169,23 @@ function handleMessage(message) {
       detectors.get(normalizeTerminalRequest(message, "state:viewed").terminalId)?.viewed();
     } catch (error) {
       sendError("state:viewed", error, message.requestId, message?.terminalId);
+    }
+    return;
+  }
+  if (message.type === "state:rebuild-detector") {
+    try {
+      const request = normalizeTerminalRequest(message, "state:rebuild-detector");
+      const agentType = typeof message.agentType === "string" ? message.agentType : "generic";
+      if (!AGENT_TYPES.has(agentType)) {
+        throw protocolError("INVALID_AGENT", `unsupported agent type: ${agentType}`, { field: "agentType" });
+      }
+      if (!detectors.has(request.terminalId)) {
+        throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
+      }
+      makeDetector(request.terminalId, agentType);
+      send({ type: "state:update", terminalId: request.terminalId, previous: "ready", current: "ready", confidence: 1, source: "user", summary: `detector rebuilt for ${agentType}`, at: Date.now() });
+    } catch (error) {
+      sendError("state:rebuild-detector", error, message.requestId, message?.terminalId);
     }
     return;
   }

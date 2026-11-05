@@ -80,3 +80,23 @@ test("PTY host returns spawn failures as structured errors", () => {
   assert.equal(error.requestId, "request-t1");
   assert.match(error.message, /shell launch failed/);
 });
+
+test("PTY host rebuilds a detector when the agent type changes", () => {
+  const { dataPort, messages } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "state:rebuild-detector", terminalId: "t1", agentType: "claude" } });
+  const update = messages.find((message) => message.type === "state:update" && /detector rebuilt/.test(message.summary || ""));
+  assert.equal(update.terminalId, "t1");
+  assert.equal(update.current, "ready");
+  assert.equal(messages.find((message) => message.type === "pty:error" && message.operation === "state:rebuild-detector"), undefined);
+});
+
+test("PTY host rejects detector rebuilds for unknown terminals or agent types", () => {
+  const { dataPort, messages } = createHarness();
+  dataPort.emit("message", { data: { type: "state:rebuild-detector", terminalId: "missing", agentType: "claude" } });
+  dataPort.emit("message", { data: { type: "state:rebuild-detector", terminalId: "missing", agentType: "not-an-agent" } });
+  const errors = messages.filter((message) => message.type === "pty:error" && message.operation === "state:rebuild-detector");
+  assert.equal(errors.length, 2);
+  assert.ok(errors.some((error) => error.code === "NOT_FOUND"));
+  assert.ok(errors.some((error) => error.code === "INVALID_AGENT"));
+});

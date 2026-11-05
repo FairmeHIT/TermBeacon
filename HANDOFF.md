@@ -151,3 +151,21 @@ The smoke currently validates CLI discovery, ConPTY startup, output capture, and
 - The working tree also contains the platform shell abstraction used by `pty-host`, validation, CLI discovery, renderer defaults, and runtime copying (`src/main/platform.cjs`). It keeps Windows on `cmd.exe`/ConPTY while allowing the smoke and validation paths to run with the host shell on other platforms.
 
 The next useful recording is an authenticated or otherwise safe interactive task. Version and help output are now covered as repeatable launch/exit smoke, but they do not prove provider-specific task completion, permission, tool, or hook signals.
+
+## 6.5 Windows branch: IPC validation and detector rebuild (2026-11-05)
+
+Branch: `win` (Windows-side development line, branched from `main` after the cross-platform batch).
+
+- `src/main/main.ts` now validates the `pty:create` IPC payload with `normalizeCreateRequest` before registering a terminal. Invalid terminal IDs, CWD, dimensions, or agent types are rejected with a structured message instead of silently registering malformed state. This closes the weak main-process message validation flagged in the high-priority list.
+- `src/main/pty-host.cjs` adds a `state:rebuild-detector` message: it validates the agent type against `AGENT_TYPES`, requires an existing session, replaces the detector, and emits a `state:update` confirmation. This resolves the known limitation that changing an existing terminal's agent type did not rebuild its detector.
+- `src/main/preload.cjs` exposes `rebuildDetector(terminalId, agentType)` over the data port.
+- `src/renderer/App.tsx` calls `rebuildDetector` whenever the agent dropdown changes on a live terminal, so the new detection patterns apply immediately without recreating the terminal.
+- Added host-protocol tests: detector rebuild success, unknown-terminal rejection (`NOT_FOUND`), and invalid agent rejection (`INVALID_AGENT`).
+
+Validation:
+
+- `npm test`: 23 passed, 0 failed.
+- `npm run build`: passed; runtime files copied to `dist/main`.
+- `npm start`: launched for production smoke verification.
+
+Remaining from the handoff list: in-memory output buffering with replay on reconnect (high), OSC 9;4 as a scored candidate signal rather than annotation only (medium), CWD directory picker with validation (medium), and packaging via electron-builder/Forge (release).

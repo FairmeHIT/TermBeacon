@@ -123,6 +123,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
   resize: (request) => send({ type: "pty:resize", ...request }),
   kill: (request) => send({ type: "pty:kill", ...request }),
   viewed: (terminalId) => send({ type: "state:viewed", terminalId }),
+  rebuildDetector: (request) => send({ type: "state:rebuild-detector", ...request }),
   onOutput: (listener) => { outputListeners.add(listener); return () => outputListeners.delete(listener); },
   onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
   onExit: (listener) => { exitListeners.add(listener); return () => exitListeners.delete(listener); },

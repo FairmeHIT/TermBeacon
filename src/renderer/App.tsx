@@ -24,6 +24,7 @@ declare global {
       resize(request: unknown): void;
       kill(request: unknown): void;
       viewed(terminalId: string): void;
+      rebuildDetector(request: unknown): void;
       onOutput(listener: (event: PtyOutputEvent) => void): () => void;
       onState(listener: (event: StateUpdateEvent) => void): () => void;
       onExit(listener: (event: PtyExitEvent) => void): () => void;
@@ -238,7 +239,7 @@ function App() {
       </div>
     </aside>
     <section className="workspace">
-      <header className="workspace-header"><div><strong>{active?.title}</strong><span>{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: event.target.value as AgentType } : item))}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
+      <header className="workspace-header"><div><strong>{active?.title}</strong><span>{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
       <div className="terminal-stage">{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;
