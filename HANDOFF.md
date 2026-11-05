@@ -200,7 +200,7 @@ Branch: `win` (follows 6.7). Two parallel tracks: CWD picker (subagent-assisted)
 
 - Added `electron-builder.config.cjs`: NSIS x64 one-click target, `npmRebuild: false` (the packaging machine has no Visual Studio), shipping node-pty's N-API prebuilds via `asarUnpack: node_modules/**`. N-API modules are ABI-stable so the prebuilt ConPTY binaries work under Electron 36.
 - `package.json`: `electron` and `electron-builder` moved to devDependencies (builder requirement), added `description`/`author`, new `npm run dist` script (build + electron-builder).
-- `release/` and `release-out/` added to `.gitignore`.
+- `release/` added to `.gitignore`. (An earlier experiment used `release-out/`; that directory is build debris left behind by the EBUSY-locked failed runs — delete after reboot.)
 - Validated on this machine: `npm run dist` produced `TermBeacon-0.1.0-setup.exe` (91 MB) with `conpty.node` unpacked at the expected path; the packaged app launched with a working window.
 
 ### Environment issue discovered (affects builds on this machine)
@@ -282,6 +282,21 @@ Remaining next: real interactive task fixture recording (needs an authenticated 
 - `npm start`：本会话无法在 Linux 沙箱启动 Windows Electron，待在 Windows PowerShell 侧人工验证；建议重点检查 generic 终端执行静默命令后 2–3 秒变绿、方向键/鼠标不进入工作态、点击已完成终端立即复位。
 
 已知限制：真实 CLI 的交互 fixture 仍未录制；opencode TUI 的提示符识别尚未验证；错误/等待输入模式刚收紧，需要真实样本校准；启动 Agent 的 launch 语义只覆盖“启动按钮”，用户手动输入 CLI 启动命令仍会被当作任务。
+
+## 6.12 CLI 录制工具（2026-11-05）
+
+新增 `scripts/cli-record.cjs` 和 `npm run record:cli`，用于在 Windows 本机录制真实 CLI 的交互输出。它通过 node-pty/ConPTY 启动 CLI，把键盘输入转发给 PTY，同时把每个输出块按相对时间写入 JSONL；正常退出 CLI 后落盘。默认输出到 `captures/`，该目录已加入 `.gitignore`，避免未脱敏内容被提交。
+
+```powershell
+cd D:\01-cmcc\codes-win\75_TermBeacon
+npm run record:cli -- --cli claude --name claude-basic
+npm run record:cli -- --cli codex --name codex-basic
+npm run record:cli -- --cli opencode --name opencode-basic
+```
+
+录制时正常操作 CLI，完成任务后退出即可。若要覆盖权限询问，请在一个任务里触发工具权限对话框，先让录制保留对话框，再选择允许或拒绝并完成。录制文件可能包含路径、提示词、账号信息或 token，转成 fixture 前必须人工脱敏；不要把原始 capture 直接提交。
+
+验证：已在 Linux 沙箱用 stub PTY + fake CLI 验证输入转发、输出捕获、退出落盘和 JSONL 结构；真实 CLI 录制待 Windows 侧执行。
 
 ## 7. 新会话启动命令
 

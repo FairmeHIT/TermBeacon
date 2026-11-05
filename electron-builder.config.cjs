@@ -29,7 +29,6 @@ module.exports = {
     "!scripts/**/*",
     "!src/**/*",
     "!release/**/*",
-    "!release-out/**/*",
   ],
   asarUnpack: [
     "node_modules/node-pty/**/*",

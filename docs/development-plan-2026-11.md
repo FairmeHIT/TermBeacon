@@ -61,7 +61,7 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 
 ### 批次 B：真实 CLI 校准与 Hook 接入
 
-目标是用真实输出替换猜测。需要在本机已登录的 opencode、Codex CLI、Claude Code 上各跑一个最小任务，覆盖启动、提交任务、工具执行、权限询问、完成、`Ctrl+C` 中断六类片段；脱敏后按 CLI 版本存入 `tests/fixtures/agents/`，再只改 `agent-registry.cjs`。如果某个 CLI 的输出没有稳定提示符，就优先接它的原生事件：Claude Code 的 Stop/TaskCompleted Hook，Codex 的能力探测事件；Hook 必须带超时和输出检测回退，不能成为唯一真相。
+目标是用真实输出替换猜测。需要在本机已登录的 opencode、Codex CLI、Claude Code 上各跑一个最小任务，覆盖启动、提交任务、工具执行、权限询问、完成、`Ctrl+C` 中断六类片段；用 `npm run record:cli -- --cli <agent>` 录制带时间戳的原始 PTY 输出，脱敏后按 CLI 版本存入 `tests/fixtures/agents/`，再只改 `agent-registry.cjs`。如果某个 CLI 的输出没有稳定提示符，就优先接它的原生事件：Claude Code 的 Stop/TaskCompleted Hook，Codex 的能力探测事件；Hook 必须带超时和输出检测回退，不能成为唯一真相。
 
 验收是三个 CLI 各完成一次真实任务，状态序列可解释；权限询问进入 `awaiting-input`；Hook 关闭或超时后仍能靠输出完成；从启动按钮进入 CLI 后停在就绪，提交任务后才进入工作态。
 

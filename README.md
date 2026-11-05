@@ -16,6 +16,14 @@ npm run build
 npm start
 ```
 
+## 录制真实 CLI 样本
+
+```powershell
+npm run record:cli -- --cli claude --name claude-basic
+```
+
+录制时正常操作 CLI，完成后退出即可；原始捕获写入 `captures/`（已 gitignore），脱敏后再转成 `tests/fixtures/agents/` 下的 fixture。
+
 MVP 当前包含：
 
 - Electron + React + TypeScript + Vite。
