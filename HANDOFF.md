@@ -143,3 +143,11 @@ Validation:
 - `npm run build`: passed.
 
 The smoke currently validates CLI discovery, ConPTY startup, output capture, and natural exit. It does not yet exercise an authenticated interactive task, permission prompt, tool call, or provider-specific hook. Those require sanitized task recordings and should be added only after observing a real interactive run.
+
+## 6.4 CLI help and platform smoke follow-up (2026-11-05)
+
+- Extended `npm run smoke:cli` to accept `--help` in addition to the default `--version` check.
+- `npm run smoke:cli -- --help` passed for opencode, Codex CLI, and Claude Code; each produced help text through ConPTY and exited with code 0.
+- The working tree also contains the platform shell abstraction used by `pty-host`, validation, CLI discovery, renderer defaults, and runtime copying (`src/main/platform.cjs`). It keeps Windows on `cmd.exe`/ConPTY while allowing the smoke and validation paths to run with the host shell on other platforms.
+
+The next useful recording is an authenticated or otherwise safe interactive task. Version and help output are now covered as repeatable launch/exit smoke, but they do not prove provider-specific task completion, permission, tool, or hook signals.
