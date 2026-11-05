@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 let dataPort = null;
 const queued = [];
 const pendingCreates = new Map();
+const replayNeeds = new Map();
+const consumedSequences = new Map();
 const outputListeners = new Set();
 const stateListeners = new Set();
 const exitListeners = new Set();
@@ -64,10 +66,25 @@ function handleDataMessage(payload) {
     errorListeners.forEach((listener) => listener(payload));
     return;
   }
-  if (payload.type === "pty:output") outputListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:output") {
+    if (typeof payload.terminalId === "string" && Number.isInteger(payload.sequence)) {
+      consumedSequences.set(payload.terminalId, Math.max(consumedSequences.get(payload.terminalId) || 0, payload.sequence));
+    }
+    outputListeners.forEach((listener) => listener(payload));
+  }
   if (payload.type === "state:update") stateListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:exit") exitListeners.forEach((listener) => listener(payload));
-  if (payload.type === "pty:host-ready") hostListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:host-ready") {
+    hostListeners.forEach((listener) => listener(payload));
+    // Renderer reconnected to a (possibly restarted) host: request replay of
+    // any buffered output beyond what this renderer already consumed.
+    if (replayNeeds.size > 0) {
+      for (const [terminalId, fromSequence] of replayNeeds) {
+        send({ type: "pty:replay-request", terminalId, fromSequence });
+      }
+      replayNeeds.clear();
+    }
+  }
 }
 
 ipcRenderer.on("pty:connect", (_event) => {
@@ -78,6 +95,9 @@ ipcRenderer.on("pty:connect", (_event) => {
   dataPort.onmessage = (messageEvent) => handleDataMessage(messageEvent.data);
   dataPort.onmessageerror = () => {
     dataPort = null;
+    if (consumedSequences.size > 0) {
+      for (const [terminalId, sequenceNumber] of consumedSequences) replayNeeds.set(terminalId, sequenceNumber);
+    }
     hostListeners.forEach((listener) => listener({ type: "pty:host-disconnected", at: Date.now() }));
   };
   dataPort.start();
@@ -121,6 +141,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
   },
   write: (request) => send({ type: "pty:write", ...request }),
   resize: (request) => send({ type: "pty:resize", ...request }),
+  replay: (request) => send({ type: "pty:replay-request", ...request }),
   kill: (request) => send({ type: "pty:kill", ...request }),
   viewed: (terminalId) => send({ type: "state:viewed", terminalId }),
   rebuildDetector: (request) => send({ type: "state:rebuild-detector", ...request }),

@@ -169,3 +169,21 @@ Validation:
 - `npm start`: launched for production smoke verification.
 
 Remaining from the handoff list: in-memory output buffering with replay on reconnect (high), OSC 9;4 as a scored candidate signal rather than annotation only (medium), CWD directory picker with validation (medium), and packaging via electron-builder/Forge (release).
+
+## 6.6 Windows branch: bounded output buffer and reconnect replay (2026-11-05)
+
+Branch: `win` (follows 6.5).
+
+- `src/main/pty-host.cjs` now maintains a per-terminal bounded ring buffer of PTY output (2 MB cap per terminal, oldest chunks trimmed first). Buffers are created on session create and released on explicit recreate; a natural exit keeps the buffer so a reconnecting renderer can still replay the final tail.
+- Added the `pty:replay-request` message: validated `fromSequence` (non-negative integer) plus terminal existence; the host resends every buffered chunk whose sequence exceeds `fromSequence`, each marked `replay: true`.
+- `src/main/preload.cjs` tracks the highest consumed output sequence per terminal. On data-port messageerror it records the pending replay needs; when the next `pty:host-ready` arrives it automatically sends `pty:replay-request` for each terminal, then clears the queue. Also exposes `replay()` on the bridge API.
+- `src/renderer/App.tsx` deduplicates output by sequence: live duplicates and already-consumed replay chunks are skipped so a reconnect never double-writes into the xterm instance.
+- Test harness now captures spawned fake sessions and injects `Buffer` into the vm sandbox; added three protocol tests: partial replay beyond a sequence, full replay from zero, and rejection of unknown terminals / invalid sequences.
+
+Validation:
+
+- `npm test`: 26 passed, 0 failed.
+- `npm run build` and `tsc --noEmit`: passed.
+- `npm start`: production smoke launched.
+
+Known boundary (unchanged): a host crash clears the in-memory buffers, and PTY sessions do not survive host restart by design; replay covers renderer-side port disconnects and reconnects, not host-level restarts. Remaining next: OSC 9;4 scored signals, CWD picker with validation, workspaces/title persistence polish, and packaging.

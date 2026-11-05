@@ -22,6 +22,7 @@ declare global {
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
       resize(request: unknown): void;
+      replay(request: unknown): void;
       kill(request: unknown): void;
       viewed(terminalId: string): void;
       rebuildDetector(request: unknown): void;
@@ -85,6 +86,7 @@ function App() {
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
+  const consumedLocal = useRef(new Map<string, number>());
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
 
@@ -98,7 +100,14 @@ function App() {
       setHydrated(true);
     });
     const disposeOutput = window.termbeacon.onOutput((event) => {
-      terminalViews.current.get(event.terminalId)?.write(event.data);
+      const view = terminalViews.current.get(event.terminalId);
+      if (view && event.replay && consumedLocal.current.has(event.terminalId) && (consumedLocal.current.get(event.terminalId) ?? 0) >= event.sequence) return;
+      if (view && Number.isInteger(event.sequence)) {
+        const seen = consumedLocal.current.get(event.terminalId) ?? 0;
+        if (event.sequence <= seen && !event.replay) return;
+        consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
+      }
+      view?.write(event.data);
       setTerminals((items) => items.map((item) => item.id === event.terminalId
         ? { ...item, lastActivityAt: event.at, lastOutputSummary: event.data.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim().slice(-90) }
         : item));

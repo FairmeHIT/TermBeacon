@@ -27,6 +27,12 @@ function createHarness({ spawn } = {}) {
     return session;
   };
   const fakePty = { spawn: spawn || defaultSpawn };
+  const spawned = [];
+  const wrappedSpawn = (...args) => {
+    const session = fakePty.spawn(...args);
+    spawned.push(session);
+    return session;
+  };
   const fakeFs = { statSync: () => ({ isDirectory: () => true }) };
   const fakeDetection = { createDetector: () => ({ output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }) };
   const fakeProcess = {
@@ -38,15 +44,15 @@ function createHarness({ spawn } = {}) {
   const fakeRequire = (request) => {
     if (request === "electron") return { parentPort };
     if (request === "node:fs") return fakeFs;
-    if (request === "node-pty") return fakePty;
+    if (request === "node-pty") return { spawn: wrappedSpawn };
     if (request === "./detection-engine.cjs") return fakeDetection;
     if (request === "./pty-validation.cjs") return validation;
     if (request === "./platform.cjs") return require("../src/main/platform.cjs");
     throw new Error(`unexpected require: ${request}`);
   };
-  vm.runInNewContext(hostSource, { require: fakeRequire, process: fakeProcess, console, Date, Error, Map, Set, Number, Object, String, Array }, { filename: "pty-host.cjs" });
+  vm.runInNewContext(hostSource, { require: fakeRequire, process: fakeProcess, console, Date, Error, Map, Set, Number, Object, String, Array, Buffer }, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
-  return { dataPort, messages };
+  return { dataPort, messages, spawned };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -63,6 +69,43 @@ function createMessage(terminalId, shell = "cmd.exe") {
     agentType: "generic",
   };
 }
+
+test("PTY host buffers output and replays beyond a requested sequence", () => {
+  const { dataPort, messages, spawned } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  const session = spawned[0];
+  session.dataCallback("chunk1");
+  session.dataCallback("chunk2");
+  session.dataCallback("chunk3");
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "t1", fromSequence: 1 } });
+  const replayed = messages.filter((message) => message.type === "pty:output" && message.replay);
+  assert.equal(replayed.length, 2);
+  assert.equal(replayed[0].data, "chunk2");
+  assert.equal(replayed[0].sequence, 2);
+  assert.equal(replayed[1].data, "chunk3");
+  assert.equal(replayed[1].sequence, 3);
+});
+
+test("PTY host replay from zero resends the full buffer", () => {
+  const { dataPort, messages, spawned } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  const session = spawned[0];
+  session.dataCallback("one");
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "t1", fromSequence: 0 } });
+  const replayed = messages.filter((message) => message.type === "pty:output" && message.replay);
+  assert.equal(replayed.length, 1);
+  assert.equal(replayed[0].data, "one");
+});
+
+test("PTY host rejects replay requests with invalid sequence or unknown terminal", () => {
+  const { dataPort, messages } = createHarness();
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "ghost", fromSequence: 0 } });
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "ghost", fromSequence: -1 } });
+  const errors = messages.filter((message) => message.type === "pty:error" && message.operation === "pty:replay-request");
+  assert.equal(errors.length, 2);
+  assert.ok(errors.some((error) => error.code === "NOT_FOUND"));
+  assert.ok(errors.some((error) => error.code === "INVALID_REQUEST"));
+});
 
 test("PTY host rejects duplicate terminal creation", () => {
   const { dataPort, messages } = createHarness();

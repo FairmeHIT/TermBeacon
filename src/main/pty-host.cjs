@@ -19,7 +19,46 @@ const sequence = new Map();
 const detectors = new Map();
 const creating = new Set();
 const killRequests = new Set();
+const buffers = new Map();
 let dataPort = null;
+
+// Per-terminal bounded output ring buffer for replay after renderer reconnect.
+const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function bufferAppend(terminalId, data) {
+  let entry = buffers.get(terminalId);
+  if (!entry) {
+    entry = { parts: [], bytes: 0 };
+    buffers.set(terminalId, entry);
+  }
+  entry.parts.push(data);
+  entry.bytes += Buffer.byteLength(data);
+  while (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length > 1) {
+    entry.bytes -= Buffer.byteLength(entry.parts[0]);
+    entry.parts.shift();
+  }
+  if (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length === 1) {
+    // Single oversized chunk: keep only the most recent limit bytes.
+    const kept = entry.parts[0].slice(-OUTPUT_BUFFER_LIMIT_BYTES);
+    entry.parts[0] = kept;
+    entry.bytes = Buffer.byteLength(kept);
+  }
+}
+
+function bufferRelease(terminalId) {
+  buffers.delete(terminalId);
+}
+
+function replay(terminalId, fromSequence) {
+  const entry = buffers.get(terminalId);
+  if (!entry) return;
+  const base = (sequence.get(terminalId) || 0) - entry.parts.length;
+  entry.parts.forEach((data, index) => {
+    const seq = base + index + 1;
+    if (seq <= fromSequence) return;
+    send({ type: "pty:output", terminalId, data, sequence: seq, replay: true, at: Date.now() });
+  });
+}
 
 function send(message) {
   try {
@@ -94,12 +133,14 @@ function createSession(message) {
   creating.delete(request.terminalId);
   sessions.set(request.terminalId, session);
   sequence.set(request.terminalId, 0);
+  bufferRelease(request.terminalId);
   const detector = makeDetector(request.terminalId, request.agentType);
   send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: session.pid, ok: true, at: Date.now() });
 
   session.onData((data) => {
     const next = (sequence.get(request.terminalId) || 0) + 1;
     sequence.set(request.terminalId, next);
+    bufferAppend(request.terminalId, data);
     send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, at: Date.now() });
     detector.output(data);
     detector.tick();
@@ -111,6 +152,8 @@ function createSession(message) {
     sessions.delete(request.terminalId);
     sequence.delete(request.terminalId);
     detectors.delete(request.terminalId);
+    // Keep the buffer after exit so a reconnecting renderer can still replay
+    // the tail of the final output; it is released on explicit recreate.
   });
 }
 
@@ -161,6 +204,22 @@ function handleMessage(message) {
       session.kill();
     } catch (error) {
       sendError("pty:kill", error, message.requestId, message?.terminalId);
+    }
+    return;
+  }
+  if (message.type === "pty:replay-request") {
+    try {
+      const request = normalizeTerminalRequest(message, "pty:replay-request");
+      const fromSequence = Number(message.fromSequence);
+      if (!Number.isInteger(fromSequence) || fromSequence < 0) {
+        throw protocolError("INVALID_REQUEST", "fromSequence must be a non-negative integer", { field: "fromSequence" });
+      }
+      if (!buffers.has(request.terminalId) && !sessions.has(request.terminalId)) {
+        throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
+      }
+      replay(request.terminalId, fromSequence);
+    } catch (error) {
+      sendError("pty:replay-request", error, message.requestId, message?.terminalId);
     }
     return;
   }
