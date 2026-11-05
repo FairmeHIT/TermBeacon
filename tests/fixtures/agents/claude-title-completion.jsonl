@@ -1,0 +1,6 @@
+{"kind": "meta", "agent": "claude", "name": "title-completion", "description": "真实标题流：◐ 工作，✳ 空闲后完成"}
+{"kind": "input", "data": "列出当前目录下的文件，然后用一句话总结\r", "at": 0}
+{"kind": "output", "data": "\u001b]0;◐ Claude Code\u0007", "at": 1000}
+{"kind": "output", "data": "\u001b]0;✳ Claude Code\u0007", "at": 5000}
+{"kind": "tick", "at": 7500}
+{"kind": "assert", "state": "completed-unseen"}

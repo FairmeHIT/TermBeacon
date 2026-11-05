@@ -47,6 +47,7 @@ function createHarness({ spawn, detection } = {}) {
     if (request === "node:fs") return fakeFs;
     if (request === "node-pty") return { spawn: wrappedSpawn };
     if (request === "./detection-engine.cjs") return fakeDetection;
+    if (request === "./agent-sniff.cjs") return require("../src/main/agent-sniff.cjs");
     if (request === "./osc-parser.cjs") return require("../src/main/osc-parser.cjs");
     if (request === "./pty-validation.cjs") return validation;
     if (request === "./platform.cjs") return require("../src/main/platform.cjs");

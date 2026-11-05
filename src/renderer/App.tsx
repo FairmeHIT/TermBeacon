@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
 import "./styles.css";
 
 declare global {
@@ -35,6 +35,7 @@ declare global {
       onHost(listener: (event: PtyHostExitEvent) => void): () => void;
       onTitle(listener: (event: PtyTitleEvent) => void): () => void;
       onCwd(listener: (event: PtyCwdEvent) => void): () => void;
+      onAgent(listener: (event: PtyAgentEvent) => void): () => void;
     };
   }
 }
@@ -55,6 +56,13 @@ const stateClass: Record<AgentState, string> = {
   "awaiting-input": "awaiting",
   error: "error",
   stopped: "stopped",
+};
+
+const agentLabel: Record<AgentType, string> = {
+  generic: "",
+  opencode: "opencode",
+  codex: "Codex",
+  claude: "Claude Code",
 };
 
 const agents: AgentType[] = ["generic", "opencode", "codex", "claude"];
@@ -205,7 +213,14 @@ function App() {
         ? { ...item, cwd: event.cwd }
         : item));
     });
-    return () => { disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); };
+    // Agent type is identified by the PTY host from the CLI's own banner; the
+    // UI only stores it so the sidebar can show which agent is running.
+    const disposeAgent = window.termbeacon.onAgent((event) => {
+      setTerminals((items) => items.map((item) => item.id === event.terminalId
+        ? { ...item, agentType: event.agentType }
+        : item));
+    });
+    return () => { disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); };
   }, []);
 
   useEffect(() => {
@@ -312,11 +327,6 @@ function App() {
     setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: remaining } : workspace));
   }
 
-  function killTerminal(id: string) {
-    window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
-    setTerminals((items) => items.map((item) => item.id === id ? { ...item, state: "stopped", alive: false } : item));
-  }
-
   function selectWorkspace(id: string) {
     setActiveWorkspaceId(id);
     const nextTerminalId = workspaces.find((workspace) => workspace.id === id)?.terminalIds[0];
@@ -368,13 +378,6 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title } : item));
   }
 
-  function startAgent() {
-    if (!active || active.agentType === "generic") return;
-    const info = cliStatus[active.agentType];
-    if (!info?.installed) return;
-    window.termbeacon.launch({ terminalId: active.id, data: `${info.command}\r` });
-  }
-
   async function pickCwd() {
     if (!active) return;
     const picked = await window.termbeacon.pickCwd();
@@ -395,7 +398,7 @@ function App() {
       <div className="terminal-list">
         {workspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
           <span className={`status-dot ${stateClass[terminal.state]}`} />
-          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminal.agentType} · {stateLabel[terminal.state]}</small><em>{terminal.lastOutputSummary || terminal.cwd}</em></span>
+          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{agentLabel[terminal.agentType] ? `${agentLabel[terminal.agentType]} · ${stateLabel[terminal.state]}` : stateLabel[terminal.state]}</small><em>{terminal.lastOutputSummary || terminal.cwd}</em></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title="删除终端">×</span>
         </button>)}
@@ -409,7 +412,7 @@ function App() {
       </div>
     </aside>
     <section className="workspace">
-      <header className="workspace-header"><div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
+      <header className="workspace-header"><div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div></header>
       <div className="terminal-stage">{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;

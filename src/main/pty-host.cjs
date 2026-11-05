@@ -6,6 +6,7 @@ const pty = require("node-pty");
 const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
 const { createOscParser } = require("./osc-parser.cjs");
+const { createAgentSniffer } = require("./agent-sniff.cjs");
 const {
   AGENT_TYPES,
   normalizeCreateRequest,
@@ -19,6 +20,7 @@ const sessions = new Map();
 const sequence = new Map();
 const detectors = new Map();
 const oscParsers = new Map();
+const agentTypes = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
@@ -105,9 +107,21 @@ function sendError(operation, error, requestId, terminalId) {
 }
 
 function makeDetector(terminalId, agentType) {
+  agentTypes.set(terminalId, agentType);
   const detector = createDetector(agentType, (update) => send({ type: "state:update", terminalId, ...update }));
   detectors.set(terminalId, detector);
   return detector;
+}
+
+// The renderer no longer asks the user to pick an agent type; identifying the
+// CLI from its own banner keeps the dropdown (and a whole row of controls) out
+// of the UI while still giving the detector the right pattern set.
+function makeAgentSniffer(terminalId) {
+  return createAgentSniffer((agent) => {
+    if (agentTypes.get(terminalId) === agent) return;
+    makeDetector(terminalId, agent);
+    send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
+  });
 }
 
 function makeOscParser(terminalId) {
@@ -169,8 +183,11 @@ function createSession(message) {
   sessions.set(request.terminalId, session);
   sequence.set(request.terminalId, 0);
   bufferRelease(request.terminalId);
-  const detector = makeDetector(request.terminalId, request.agentType);
+  // Start detection with the generic pattern set: a fresh shell is not yet an
+  // agent. The sniffer upgrades the detector when a CLI banner appears.
+  const detector = makeDetector(request.terminalId, "generic");
   const oscParser = makeOscParser(request.terminalId);
+  const sniffer = makeAgentSniffer(request.terminalId);
   send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: session.pid, ok: true, at: Date.now() });
 
   session.onData((data) => {
@@ -179,6 +196,7 @@ function createSession(message) {
     bufferAppend(request.terminalId, data);
     send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, at: Date.now() });
     try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
+    try { sniffer.feed(data); } catch { /* agent sniffing must never break output delivery */ }
     detector.output(data);
     detector.tick();
   });
@@ -190,6 +208,7 @@ function createSession(message) {
     sequence.delete(request.terminalId);
     detectors.delete(request.terminalId);
     oscParsers.delete(request.terminalId);
+    agentTypes.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
     // the tail of the final output; it is released on explicit recreate.
   });

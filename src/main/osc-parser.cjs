@@ -36,10 +36,14 @@ function decodeFileUri(uri, platform = process.platform) {
   const match = uri.match(/^file:\/\/([^/]*)(\/.*)$/);
   if (!match) return undefined;
   let path = decodeURIComponent(match[2]);
+  // A drive-letter path is a Windows path regardless of the host platform.
+  // This keeps captured Windows fixtures runnable on Linux/macOS CI.
+  if (/^\/[a-zA-Z]:[\\/]/.test(path)) {
+    return path.slice(1).replace(/\//g, "\\");
+  }
   if (platform === "win32") {
-    // file:///C:/dir -> C:\dir. file://host/C:/dir keeps a UNC form; treat it
-    // as a local drive too since OSC 7 senders use an empty authority.
-    if (/^\/[a-zA-Z]:[\\/]/.test(path)) path = path.slice(1);
+    // file://host/C:/dir keeps a UNC form; treat it as a local drive too since
+    // OSC 7 senders use an empty authority.
     return path.replace(/\//g, "\\");
   }
   return path;

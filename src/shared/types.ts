@@ -24,7 +24,7 @@ export interface StateUpdateEvent {
   previous: AgentState;
   current: AgentState;
   confidence: number;
-  source: "output" | "hook" | "osc" | "user" | "process";
+  source: "output" | "hook" | "osc" | "title" | "user" | "process";
   summary?: string;
   at: number;
 }
@@ -49,6 +49,13 @@ export interface PtyCwdEvent {
   type: "pty:cwd";
   terminalId: string;
   cwd: string;
+  at: number;
+}
+
+export interface PtyAgentEvent {
+  type: "pty:agent";
+  terminalId: string;
+  agentType: AgentType;
   at: number;
 }
 

@@ -16,6 +16,8 @@ const common = {
       /\b(?:command not found|is not recognized as an internal or external command)\b/i,
       /\b(?:ENOENT|EACCES|ECONNREFUSED)\b/,
       /\b(?:API error|request failed|fatal error|stream error)\b/i,
+      /Stream disconnected before completion/i,
+      /servers are currently overloaded/i,
       /(?:失败|错误)[:：]/,
     ],
     // A prompt is only accepted on the last non-empty line. These cover bare
@@ -58,6 +60,13 @@ module.exports = {
     id: "codex",
     displayName: "Codex CLI",
     ...common,
+    // Codex writes a Braille spinner into the terminal title while working and
+    // a plain title when the turn ends. The capture shows brief plain-title
+    // gaps (~2s); the 2.5s confirm window filters them.
+    title: {
+      working: [/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/],
+      idle: [/^(?![⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s).+/],
+    },
     patterns: {
       ...common.patterns,
       working: [/Working|Reasoning|Running command|Applying patch/i],
@@ -68,6 +77,12 @@ module.exports = {
     id: "claude",
     displayName: "Claude Code",
     ...common,
+    // Claude Code uses half-circle spinner glyphs while working and a static
+    // star (✳) when idle.
+    title: {
+      working: [/^[◐◑◒◓◔◕◖◗]\s+Claude Code/],
+      idle: [/^✳\s+Claude Code/, /^Claude Code/],
+    },
     patterns: {
       ...common.patterns,
       working: [/Thinking|Running|Tool use|Reading|Writing/i],

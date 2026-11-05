@@ -24,7 +24,7 @@ CLI 探测：`src/main/cli-discovery.cjs` 使用 `where.exe` 查找 CLI 并运�
 
 持久化与发布：工作区、终端、标题、CWD、Agent 类型、激活终端保存到 Electron `userData/state.json`，加载时有结构校验和损坏文件备份；electron-builder 的 Windows NSIS 与 macOS DMG 配置已加入，Windows 安装包已在 `D:/temp-termbeacon-release` 产出并验证可启动。
 
-测试基线：本批次完成后 `npm test` 为 56 项全部通过；`npm run build` 通过。由于本会话运行在 Linux 沙箱，构建前临时安装了 Linux 版 Rollup/esbuild 二进制，Windows 侧的 `npm start` 仍需在 PowerShell 中人工验证。
+测试基线：当前 `npm test` 为 86 项全部通过；`npm run build` 通过。由于本会话运行在 Linux 沙箱，构建前临时安装了 Linux 版 Rollup/esbuild 二进制，Windows 侧的 `npm start` 仍需在 PowerShell 中人工验证。
 
 ## 3. 关键文件
 
@@ -313,6 +313,16 @@ npm run record:cli -- --cli opencode --name opencode-task --task "列出当前�
 ```
 
 结论：TUI 类 CLI 的主检测路径应优先用原生事件（Claude Stop/TaskCompleted Hook、Codex 能力探测事件），opencode 若没有可用事件，再评估 OSC 9;4 或 host 侧 headless 屏幕缓冲；文本规则只作为 generic 和行式输出的回退。
+
+## 6.14 真实任务回放与 OSC 标题检测（2026-11-05）
+
+收到 Claude 任务/权限、Codex 任务、opencode 任务四份真实录制，自动任务均成功提交。逐字节回放的结果是：旧文本检测在四份录制里都只从 `ready` 进入 `working`，之后再无状态变化；TUI 的提示符和完成文本不在原始 PTY 流末尾，靠 Registry 正则无法完成。
+
+真实信号如下。Claude Code v2.1.318 用 OSC 0 标题表示状态：`◐`/`◑` 是工作中，`✳ Claude Code` 是空闲；任务在 24.034s 回到 `✳`，检测器在 26.75s 点亮 `completed-unseen`，权限录制在 43.784s 回到 `✳`、46.5s 点亮。Codex 0.166.0 用 Braille spinner 前缀表示工作，纯标题表示空闲；中途有约 2.06s 的纯标题空档，2.5s 确认窗成功过滤；真实任务最终因 `Stream disconnected before completion` / `servers are currently overloaded` 进入 `error` 并保持。opencode v2.2.1 没有稳定的标题状态，文本检测仍停在 `working`；它的插件 API 提供 `session.status`（推荐）和已弃用但仍兼容的 `session.idle`，需要走插件桥接。
+
+本批次实现：`detection-engine.cjs` 新增 `parseOscTitle()` 和 `titleWorkingAt`/`titleIdleAt`；Registry 为 claude、codex 增加 title 规则；标题回到空闲后，满足静默窗口和 2.5s 确认窗即进入 `completed-unseen`，`source: "title"`、置信度 0.9；`error` 改为粘性，普通输出不会把它冲回 `working`，只有用户再次输入或 Hook start 才恢复；新增 3 个真实衍生 fixture 和 6 个单元测试；顺带修正 `osc-parser.cjs` 对 `file:///C:/...` 的跨平台解码，使 Windows 录制在 Linux 测试环境也能回放。
+
+验证：`npm test` 86 passed, 0 failed；`npm run build` 通过。剩余工作是 opencode 插件桥接、Claude/Codex Hook 兜底，以及一次真正出现权限对话框的录制；本次 Claude 的 auto mode 自动批准了工具，没有产生权限询问。
 
 ## 7. 新会话启动命令
 

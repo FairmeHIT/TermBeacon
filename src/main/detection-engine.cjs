@@ -22,6 +22,14 @@ function parseOscProgress(value) {
   return { state: Number(match[1]), progress: match[2] === undefined ? undefined : Number(match[2]) };
 }
 
+// Claude Code and Codex report activity through the terminal title: a spinner
+// glyph while working, a static title when idle. This survives TUI redraws that
+// never place a prompt at the end of a PTY chunk.
+function parseOscTitle(value) {
+  const match = value.match(/\u001b\][02];([^\u0007\u001b]*)(?:\u0007|\u001b\\)/);
+  return match ? match[1] : undefined;
+}
+
 // Evidence is deliberately short-lived: a prompt or "Done" from earlier output
 // must not keep matching on every later chunk.
 const EVIDENCE_TAIL = 1024;
@@ -49,6 +57,9 @@ function createDetector(agentType = "generic", emit = () => {}) {
     signalTail: "",
     oscProgress: undefined,
     oscCompletedAt: 0,
+    title: "",
+    titleWorkingAt: 0,
+    titleIdleAt: 0,
     pending: null,
   };
   // Longer quiet window required when OSC 9;4 progress-100 is the only
@@ -72,6 +83,8 @@ function createDetector(agentType = "generic", emit = () => {}) {
     runtime.signalTail = "";
     runtime.oscProgress = undefined;
     runtime.oscCompletedAt = 0;
+    runtime.titleWorkingAt = 0;
+    runtime.titleIdleAt = 0;
   }
 
   function input(data) {
@@ -101,6 +114,25 @@ function createDetector(agentType = "generic", emit = () => {}) {
       if (osc.progress >= 100 && osc.state !== 0) runtime.oscCompletedAt = now;
       if (osc.state === 0) runtime.oscCompletedAt = now;
     }
+    const title = parseOscTitle(data);
+    if (title !== undefined) {
+      runtime.title = title;
+      const titleConfig = config.title;
+      const titleWorking = titleConfig?.working?.some((pattern) => pattern.test(title)) ?? false;
+      const titleIdle = titleConfig?.idle?.some((pattern) => pattern.test(title)) ?? false;
+      if (titleWorking) {
+        runtime.titleWorkingAt = now;
+        runtime.titleIdleAt = 0;
+        if (runtime.armed && runtime.state !== "error") {
+          transition("working", 0.85, "title", title);
+        }
+      } else if (titleIdle) {
+        runtime.titleIdleAt = now;
+        if (!runtime.armed && runtime.state === "working") {
+          transition("ready", 0.8, "title", title);
+        }
+      }
+    }
     const recent = (runtime.signalTail + clean).slice(-EVIDENCE_TAIL);
     runtime.signalTail = recent.slice(-SIGNAL_TAIL);
     runtime.lastOutputAt = now;
@@ -128,7 +160,7 @@ function createDetector(agentType = "generic", emit = () => {}) {
       runtime.toolInFlight = false;
       runtime.toolStartedAt = 0;
     }
-    if (runtime.armed) {
+    if (runtime.armed && runtime.state !== "error") {
       transition("working", 0.6, "output", clean.trim().slice(-160));
     }
     const promptChunk = clean.trim();
@@ -151,6 +183,23 @@ function createDetector(agentType = "generic", emit = () => {}) {
   }
 
   function tick(now = Date.now()) {
+    if (runtime.armed && runtime.titleIdleAt && runtime.titleWorkingAt && runtime.state === "working") {
+      const quietFor = now - runtime.lastOutputAt;
+      const idleFor = now - runtime.titleIdleAt;
+      const toolGraceElapsed = !runtime.toolInFlight
+        || quietFor >= config.quietWindow.maxToolGraceMs;
+      if (toolGraceElapsed && quietFor >= config.quietWindow.candidateMs && idleFor >= config.quietWindow.confirmMs) {
+        transition("completed-unseen", 0.9, "title", runtime.title || "title idle");
+        runtime.pending = null;
+        runtime.armed = false;
+        runtime.titleIdleAt = 0;
+        runtime.titleWorkingAt = 0;
+        runtime.signalTail = "";
+        runtime.oscProgress = undefined;
+        runtime.oscCompletedAt = 0;
+        return;
+      }
+    }
     if (!runtime.pending) {
       // OSC-only completion path: progress reached 100 (or state 0) but no
       // prompt/completion text ever arrived. Require the longer quiet window
@@ -214,4 +263,4 @@ function createDetector(agentType = "generic", emit = () => {}) {
   return { runtime, input, launch, output, tick, viewed, exit, hook, config };
 }
 
-module.exports = { createDetector, stripAnsi, stripInputSequences, parseOscProgress };
+module.exports = { createDetector, stripAnsi, stripInputSequences, parseOscProgress, parseOscTitle };

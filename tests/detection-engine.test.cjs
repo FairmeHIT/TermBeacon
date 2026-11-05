@@ -1,10 +1,16 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createDetector } = require("../src/main/detection-engine.cjs");
+const { createDetector, parseOscTitle } = require("../src/main/detection-engine.cjs");
 
 function make() {
   const updates = [];
   const detector = createDetector("generic", (update) => updates.push(update));
+  return { detector, updates };
+}
+
+function makeAgent(agent) {
+  const updates = [];
+  const detector = createDetector(agent, (update) => updates.push(update));
   return { detector, updates };
 }
 
@@ -214,4 +220,61 @@ test("launching an agent does not arm a task", () => {
   assert.equal(detector.runtime.state, "ready");
   assert.equal(detector.runtime.armed, false);
   assert.equal(updates.length, 0);
+});
+
+test("Claude title spinner returning to idle completes a task", () => {
+  const { detector, updates } = makeAgent("claude");
+  detector.input("list files\r");
+  detector.output("\u001b]0;◐ Claude Code\u0007", 1000);
+  detector.output("\u001b]0;✳ Claude Code\u0007", 5000);
+  detector.tick(7500);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).source, "title");
+});
+
+test("Codex brief plain-title gap does not complete a task", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.input("list files\r");
+  detector.output("\u001b]0;⠋ 75_TermBeacon\u0007", 1000);
+  detector.output("\u001b]0;75_TermBeacon\u0007", 5000);
+  detector.output("\u001b]0;⠙ 75_TermBeacon\u0007", 6000);
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("idle title without a submitted task does not complete", () => {
+  const { detector, updates } = makeAgent("claude");
+  detector.output("\u001b]0;✳ Claude Code\u0007", 1000);
+  detector.tick(10000);
+  assert.equal(updates.length, 0);
+  assert.equal(detector.runtime.state, "ready");
+});
+
+test("Codex stream disconnect enters error and title idle does not override it", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.input("list files\r");
+  detector.output("\u001b]0;⠋ 75_TermBeacon\u0007", 1000);
+  detector.output("  └ Stream disconnected before completion: Our servers are currently overloaded.\r\n", 2000);
+  assert.equal(updates.at(-1).current, "error");
+  detector.output("\u001b]0;75_TermBeacon\u0007", 5000);
+  detector.tick(9000);
+  assert.equal(detector.runtime.state, "error");
+});
+
+test("error stays sticky until the user submits again", () => {
+  const { detector, updates } = make();
+  detector.input("run\r");
+  detector.output("Error: fatal\r\n", 1000);
+  assert.equal(updates.at(-1).current, "error");
+  detector.output("still printing diagnostics\r\n", 2000);
+  detector.tick(8000);
+  assert.equal(detector.runtime.state, "error");
+  detector.input("retry\r");
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("parseOscTitle accepts BEL and ST terminators", () => {
+  assert.equal(parseOscTitle("\u001b]0;✳ Claude Code\u0007"), "✳ Claude Code");
+  assert.equal(parseOscTitle("\u001b]2;75_TermBeacon\u001b\\"), "75_TermBeacon");
+  assert.equal(parseOscTitle("plain text"), undefined);
 });
