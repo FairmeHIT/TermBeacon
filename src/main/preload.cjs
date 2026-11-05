@@ -10,6 +10,8 @@ const stateListeners = new Set();
 const exitListeners = new Set();
 const errorListeners = new Set();
 const hostListeners = new Set();
+const titleListeners = new Set();
+const cwdListeners = new Set();
 
 function send(message) {
   if (dataPort) {
@@ -74,6 +76,8 @@ function handleDataMessage(payload) {
   }
   if (payload.type === "state:update") stateListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:exit") exitListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:title") titleListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:cwd") cwdListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:host-ready") {
     hostListeners.forEach((listener) => listener(payload));
     // Renderer reconnected to a (possibly restarted) host: request replay of
@@ -152,4 +156,6 @@ contextBridge.exposeInMainWorld("termbeacon", {
   onExit: (listener) => { exitListeners.add(listener); return () => exitListeners.delete(listener); },
   onError: (listener) => { errorListeners.add(listener); return () => errorListeners.delete(listener); },
   onHost: (listener) => { hostListeners.add(listener); return () => hostListeners.delete(listener); },
+  onTitle: (listener) => { titleListeners.add(listener); return () => titleListeners.delete(listener); },
+  onCwd: (listener) => { cwdListeners.add(listener); return () => cwdListeners.delete(listener); },
 });

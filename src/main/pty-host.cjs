@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const pty = require("node-pty");
 const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
+const { createOscParser } = require("./osc-parser.cjs");
 const {
   AGENT_TYPES,
   normalizeCreateRequest,
@@ -17,6 +18,7 @@ const {
 const sessions = new Map();
 const sequence = new Map();
 const detectors = new Map();
+const oscParsers = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
@@ -108,6 +110,18 @@ function makeDetector(terminalId, agentType) {
   return detector;
 }
 
+function makeOscParser(terminalId) {
+  // Applications (shells, agent CLIs) report their own window title via OSC 0/2
+  // and cwd via OSC 7. Emit both to the renderer so sidebar titles stay
+  // meaningful without the user renaming terminals by hand.
+  const parser = createOscParser(
+    (title) => send({ type: "pty:title", terminalId, title, at: Date.now() }),
+    (cwd) => send({ type: "pty:cwd", terminalId, cwd, at: Date.now() }),
+  );
+  oscParsers.set(terminalId, parser);
+  return parser;
+}
+
 function assertCwd(cwd) {
   try {
     if (!fs.statSync(cwd).isDirectory()) throw protocolError("INVALID_CWD", "cwd is not a directory", { field: "cwd" });
@@ -156,6 +170,7 @@ function createSession(message) {
   sequence.set(request.terminalId, 0);
   bufferRelease(request.terminalId);
   const detector = makeDetector(request.terminalId, request.agentType);
+  const oscParser = makeOscParser(request.terminalId);
   send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: session.pid, ok: true, at: Date.now() });
 
   session.onData((data) => {
@@ -163,6 +178,7 @@ function createSession(message) {
     sequence.set(request.terminalId, next);
     bufferAppend(request.terminalId, data);
     send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, at: Date.now() });
+    try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
     detector.output(data);
     detector.tick();
   });
@@ -173,6 +189,7 @@ function createSession(message) {
     sessions.delete(request.terminalId);
     sequence.delete(request.terminalId);
     detectors.delete(request.terminalId);
+    oscParsers.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
     // the tail of the final output; it is released on explicit recreate.
   });

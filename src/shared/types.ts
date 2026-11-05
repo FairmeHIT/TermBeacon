@@ -38,6 +38,20 @@ export interface PtyOutputEvent {
   at: number;
 }
 
+export interface PtyTitleEvent {
+  type: "pty:title";
+  terminalId: string;
+  title: string;
+  at: number;
+}
+
+export interface PtyCwdEvent {
+  type: "pty:cwd";
+  terminalId: string;
+  cwd: string;
+  at: number;
+}
+
 export interface PtyExitEvent {
   type: "pty:exit";
   terminalId: string;

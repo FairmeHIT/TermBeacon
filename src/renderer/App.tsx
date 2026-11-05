@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
 import "./styles.css";
 
 declare global {
@@ -33,6 +33,8 @@ declare global {
       onExit(listener: (event: PtyExitEvent) => void): () => void;
       onError(listener: (event: PtyErrorEvent) => void): () => void;
       onHost(listener: (event: PtyHostExitEvent) => void): () => void;
+      onTitle(listener: (event: PtyTitleEvent) => void): () => void;
+      onCwd(listener: (event: PtyCwdEvent) => void): () => void;
     };
   }
 }
@@ -126,6 +128,9 @@ function App() {
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
   const consumedLocal = useRef(new Map<string, number>());
+  // Terminal titles the user renamed by hand. OSC 0/2 title reports from the
+  // shell/agent must not overwrite a name the user chose on purpose.
+  const pinnedTitles = useRef(new Set<string>());
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
@@ -189,7 +194,18 @@ function App() {
         ? { ...item, alive: false, state: "error", lastOutputSummary: event.message || "PTY host 已断开" }
         : item));
     });
-    return () => { disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); };
+    const disposeTitle = window.termbeacon.onTitle((event) => {
+      if (pinnedTitles.current.has(event.terminalId)) return;
+      setTerminals((items) => items.map((item) => item.id === event.terminalId
+        ? { ...item, title: event.title }
+        : item));
+    });
+    const disposeCwd = window.termbeacon.onCwd((event) => {
+      setTerminals((items) => items.map((item) => item.id === event.terminalId && item.cwd !== event.cwd
+        ? { ...item, cwd: event.cwd }
+        : item));
+    });
+    return () => { disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); };
   }, []);
 
   useEffect(() => {
@@ -291,6 +307,7 @@ function App() {
       return;
     }
     if (id === activeId) setActiveId(remaining[0]);
+    pinnedTitles.current.delete(id);
     setTerminals((items) => items.filter((item) => item.id !== id));
     setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: remaining } : workspace));
   }
@@ -331,6 +348,7 @@ function App() {
       if (terminal?.alive) window.termbeacon.kill({ terminalId, reason: "user-kill" });
     });
     const removedIds = new Set(target.terminalIds);
+    removedIds.forEach((id) => pinnedTitles.current.delete(id));
     setTerminals((items) => items.filter((item) => !removedIds.has(item.id)));
     const remaining = workspaces.filter((workspace) => workspace.id !== id);
     setWorkspaces(remaining);
@@ -346,6 +364,7 @@ function App() {
   }
 
   function renameTerminal(id: string, title: string) {
+    pinnedTitles.current.add(id);
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title } : item));
   }
 
