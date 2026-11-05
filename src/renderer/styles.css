@@ -31,6 +31,9 @@ button, select { font: inherit; }
 .terminal-copy small { color: #8aa1c3; font-size: 11px; }
 .terminal-copy em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 11px; font-style: normal; }
 .active-mark { color: #60a5fa; font-size: 10px; }
+.title-input { width: 100%; min-width: 0; padding: 0; font: inherit; font-size: inherit; font-weight: inherit; color: inherit; border: none; border-bottom: 1px solid #60a5fa; border-radius: 0; background: transparent; outline: none; }
+.terminal-copy .title-input { font-size: 13px; }
+.workspace-header .title-input { font-size: 14px; }
 .workspace { min-width: 0; display: flex; flex-direction: column; }
 .workspace-header { height: 58px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; border-bottom: 1px solid #26324a; background: #0f172a; }
 .workspace-header strong { display: block; font-size: 14px; }

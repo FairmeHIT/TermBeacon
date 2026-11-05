@@ -1,0 +1,55 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { sanitizeState, defaultState } = require("../src/main/state-sanitize.cjs");
+
+const validTerminal = { id: "t1", title: "终端 1", cwd: "C:\\", agentType: "claude", state: "ready", alive: false, lastActivityAt: 1 };
+
+test("returns the default state for non-object or wrong-schema input", () => {
+  assert.deepEqual(sanitizeState(null), defaultState());
+  assert.deepEqual(sanitizeState(undefined), defaultState());
+  assert.deepEqual(sanitizeState("string"), defaultState());
+  assert.deepEqual(sanitizeState({ schemaVersion: 2, terminals: [validTerminal] }), defaultState());
+});
+
+test("keeps valid terminals and workspaces, prunes dangling workspace references", () => {
+  const input = {
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1", "ghost"] }],
+    terminals: [validTerminal],
+    activeTerminalId: "t1",
+  };
+  const result = sanitizeState(input);
+  assert.equal(result.terminals.length, 1);
+  assert.deepEqual(result.workspaces[0].terminalIds, ["t1"]);
+  assert.equal(result.activeTerminalId, "t1");
+});
+
+test("drops malformed terminals and invalid agent types instead of failing", () => {
+  const input = {
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [
+      validTerminal,
+      { id: "t2" },
+      { id: "t3", title: "x", cwd: "C:\\", agentType: "not-an-agent" },
+      { id: "t4", title: "x", cwd: "C:\\", agentType: "codex", state: "bogus-state" },
+    ],
+    activeTerminalId: "t4",
+  };
+  const result = sanitizeState(input);
+  assert.equal(result.terminals.length, 1);
+  assert.equal(result.terminals[0].id, "t1");
+  // Active id fell back to the first surviving terminal.
+  assert.equal(result.activeTerminalId, "t1");
+});
+
+test("falls back to the first terminal when the active id is missing", () => {
+  const input = {
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [validTerminal, { ...validTerminal, id: "t2" }],
+    activeTerminalId: "ghost",
+  };
+  const result = sanitizeState(input);
+  assert.equal(result.activeTerminalId, "t1");
+});

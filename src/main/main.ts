@@ -1,7 +1,7 @@
 import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, utilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { copyFile, readFile, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { TerminalInstance, Workspace } from "../shared/types";
 
@@ -14,6 +14,10 @@ const { normalizeCreateRequest, protocolError } = require("./pty-validation.cjs"
     terminalId: string; title: string; cwd: string; shell: string; cols: number; rows: number; agentType: string;
   };
   protocolError: (code: string, message: string, details?: Record<string, unknown>) => Error & { code: string };
+};
+const { sanitizeState, defaultState } = require("./state-sanitize.cjs") as {
+  sanitizeState: (parsed: unknown) => PersistedState;
+  defaultState: () => PersistedState;
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,13 +38,17 @@ interface PersistedState {
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }
 
 async function readState(): Promise<PersistedState> {
+  const target = statePath();
   try {
-    const raw = await readFile(statePath(), "utf8");
-    const parsed = JSON.parse(raw) as PersistedState;
-    if (parsed.schemaVersion !== 1) throw new Error("unsupported schema");
-    return parsed;
-  } catch {
-    return { schemaVersion: 1, workspaces: [{ id: "default", name: "默认工作区", terminalIds: [] }], terminals: [] };
+    const raw = await readFile(target, "utf8");
+    return sanitizeState(JSON.parse(raw) as unknown);
+  } catch (error) {
+    // Preserve the unusable file for inspection instead of silently losing it
+    // to the next save; a missing file (ENOENT) is the normal first launch.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      try { await copyFile(target, `${target}.corrupt-${Date.now()}`); } catch { /* best effort */ }
+    }
+    return defaultState();
   }
 }
 

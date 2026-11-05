@@ -239,3 +239,25 @@ Validation:
 - Packaged exe launched with a working TermBeacon window from the unpacked output.
 
 Remaining next: real interactive task fixture recording (needs an authenticated manual run), workspaces/title persistence polish, code signing + auto-update strategy.
+
+## 6.9 Windows branch: title editing and state sanitization (2026-11-05)
+
+Branch: `win` (follows 6.8). Two parallel tracks: editable terminal titles (subagent-assisted) and persisted-state hardening (main agent).
+
+### Persisted-state hardening
+
+- New `src/main/state-sanitize.cjs`: `sanitizeState(parsed)` performs structural validation of `state.json` at load: non-object/wrong-schema input falls back to the default state; malformed terminals (missing fields, unknown agent types or states) are dropped individually instead of failing the whole load; workspace `terminalIds` referencing unknown terminals are pruned; `activeTerminalId` falls back to the first surviving terminal. Added to the runtime copy list.
+- `src/main/main.ts` `readState` now uses the shared sanitizer and, when the file exists but cannot be parsed, preserves the unusable file as `state.json.corrupt-<timestamp>` for inspection instead of letting the next save overwrite it silently (ENOENT remains the normal first-launch path).
+- New `tests/state-sanitize.test.cjs`: 4 cases covering fallback, valid passthrough with pruning, malformed-terminal dropping, and active-id fallback.
+
+### Title editing
+
+- Terminal titles are now user-editable: double-click the title in the sidebar list or the workspace header to rename (Enter/blur commits, Escape cancels, trimmed and capped, empty input keeps the old title). The rename flows through the existing debounced saveState, so titles survive restarts.
+
+Validation:
+
+- `npm test`: 40 passed, 0 failed (title-utils and state-sanitize suites included).
+- `npm run build` and `tsc --noEmit`: passed; `state-sanitize.cjs` present in `dist/main`.
+- `npm start`: production smoke launched with a working window.
+
+Remaining next: real interactive task fixture recording (needs an authenticated manual run), multi-workspace management UI, code signing + auto-update strategy.

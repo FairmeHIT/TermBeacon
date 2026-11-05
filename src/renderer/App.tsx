@@ -85,6 +85,35 @@ function newTerminal(index: number): TerminalInstance {
   };
 }
 
+const MAX_TITLE_LENGTH = 60;
+
+function normalizeTitleInput(value: string): string {
+  return value.trim().slice(0, MAX_TITLE_LENGTH);
+}
+
+// Mirrors src/main/title-utils.cjs (kept inline here because the renderer
+// bundle cannot reliably import CommonJS modules from the main process tree).
+function EditableTitle({ title, onCommit }: { title: string; onCommit: (next: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+  if (!editing) return <strong title="双击重命名" onDoubleClick={() => { setDraft(title); setEditing(true); }}>{title}</strong>;
+  function commit() {
+    setEditing(false);
+    const next = normalizeTitleInput(draft);
+    if (next) onCommit(next);
+  }
+  return <input ref={inputRef} className="title-input" value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={commit}
+    onClick={(event) => event.stopPropagation()}
+    onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Enter") commit(); else if (event.key === "Escape") setEditing(false); }} />;
+}
+
 function App() {
   const [terminals, setTerminals] = useState<TerminalInstance[]>(() => [newTerminal(1)]);
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
@@ -229,6 +258,10 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, state: "stopped", alive: false } : item));
   }
 
+  function renameTerminal(id: string, title: string) {
+    setTerminals((items) => items.map((item) => item.id === id ? { ...item, title } : item));
+  }
+
   function startAgent() {
     if (!active || active.agentType === "generic") return;
     const info = cliStatus[active.agentType];
@@ -249,7 +282,7 @@ function App() {
       <div className="terminal-list">
         {terminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
           <span className={`status-dot ${stateClass[terminal.state]}`} />
-          <span className="terminal-copy"><strong>{terminal.title}</strong><small>{terminal.agentType} · {stateLabel[terminal.state]}</small><em>{terminal.lastOutputSummary || terminal.cwd}</em></span>
+          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminal.agentType} · {stateLabel[terminal.state]}</small><em>{terminal.lastOutputSummary || terminal.cwd}</em></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
         </button>)}
       </div>
@@ -262,7 +295,7 @@ function App() {
       </div>
     </aside>
     <section className="workspace">
-      <header className="workspace-header"><div><strong>{active?.title}</strong><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
+      <header className="workspace-header"><div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
       <div className="terminal-stage">{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;
