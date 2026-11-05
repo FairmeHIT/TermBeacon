@@ -207,3 +207,35 @@ Validation:
 - `npm start`: production smoke launched.
 
 Remaining next: CWD directory picker with validation, real interactive task fixture recording, workspaces/title persistence polish, and packaging via electron-builder/Forge.
+
+## 6.8 Windows branch: CWD picker and electron-builder packaging (2026-11-05)
+
+Branch: `win` (follows 6.7). Two parallel tracks: CWD picker (subagent-assisted) and electron-builder packaging (main agent).
+
+### CWD directory picker
+
+- `src/main/main.ts` adds the `cwd:pick` IPC handler using `dialog.showOpenDialog` with `openDirectory`; returns the chosen absolute path or null on cancel.
+- `src/main/preload.cjs` exposes `pickCwd()`.
+- `src/renderer/App.tsx`: the workspace-header CWD is now a clickable `cwd-picker` element; a picked path is validated (Windows drive/UNC or Unix absolute, matching the platform constant) before updating the terminal's `cwd`. Semantics documented in the UI: the change applies to the *next* PTY creation for that terminal; live sessions are untouched (v1 boundary).
+- New `src/main/cwd-utils.cjs` with `isValidCwd(path, isWindows)` plus `tests/cwd-utils.test.cjs` (4 cases: valid Windows, valid Unix, relative rejected, empty/non-string rejected). Not wired into runtime copy since only tests use it.
+- `tsconfig.json` excludes `src/renderer` (Vite owns that build); this fixes a pre-existing tsc conflict between renderer `declare global` blocks and the main-process compilation unit.
+
+### electron-builder packaging
+
+- Added `electron-builder.config.cjs`: NSIS x64 one-click target, `npmRebuild: false` (the packaging machine has no Visual Studio), shipping node-pty's N-API prebuilds via `asarUnpack: node_modules/**`. N-API modules are ABI-stable so the prebuilt ConPTY binaries work under Electron 36.
+- `package.json`: `electron` and `electron-builder` moved to devDependencies (builder requirement), added `description`/`author`, new `npm run dist` script (build + electron-builder).
+- `release/` and `release-out/` added to `.gitignore`.
+- Validated on this machine: `npm run dist` produced `TermBeacon-0.1.0-setup.exe` (91 MB) with `conpty.node` unpacked at the expected path; the packaged app launched with a working window.
+
+### Environment issue discovered (affects builds on this machine)
+
+- The default in-project `release/` output directory hits persistent `EBUSY`/`EPERM` on `win-unpacked.tmp/resources/default_app.asar` during the Electron dist extraction step. Restart Manager reports no locking process; ACL grants do not help; the lock appears to come from a filter driver (Clash TUN / AV) and survives process cleanup. Workaround: the builder output directory is set to `D:/temp-termbeacon-release` (outside the project tree), which builds cleanly. If builds fail with EBUSY again, change `directories.output` to a fresh project-external path.
+- `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/` is needed in this network environment for the NSIS tool download (GitHub direct times out).
+
+Validation:
+
+- `npm test`: 36 passed, 0 failed.
+- `npm run build` and `tsc --noEmit`: passed.
+- Packaged exe launched with a working TermBeacon window from the unpacked output.
+
+Remaining next: real interactive task fixture recording (needs an authenticated manual run), workspaces/title persistence polish, code signing + auto-update strategy.

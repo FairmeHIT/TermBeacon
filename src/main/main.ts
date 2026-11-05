@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, ipcMain, utilityProcess } from "electron";
+import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, utilityProcess } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile, writeFile, rename } from "node:fs/promises";
@@ -129,6 +129,11 @@ app.on("before-quit", () => {
 
 ipcMain.handle("state:load", async () => readState());
 ipcMain.handle("cli:discover", () => discoverAll());
+ipcMain.handle("cwd:pick", async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
 ipcMain.handle("state:save", async (_event, state: PersistedState) => { await writeState(state); return true; });
 ipcMain.handle("pty:create", (_event, request) => {
   let normalized;

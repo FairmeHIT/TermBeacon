@@ -19,6 +19,7 @@ declare global {
       loadState(): Promise<PersistedState>;
       saveState(state: PersistedState): Promise<boolean>;
       discoverCli(): Promise<Record<string, CliInfo>>;
+      pickCwd(): Promise<string | null>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
       resize(request: unknown): void;
@@ -65,6 +66,12 @@ const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.use
 
 const DEFAULT_SHELL = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
 const DEFAULT_CWD = IS_WINDOWS ? "C:" + String.fromCharCode(92, 92) : "/";
+
+function isValidCwd(path: unknown): boolean {
+  return typeof path === "string" && path.length > 0 && (IS_WINDOWS
+    ? /^[a-zA-Z]:[\\/]/.test(path) || /^[\\/]{2}/.test(path)
+    : path.startsWith("/"));
+}
 
 function newTerminal(index: number): TerminalInstance {
   return {
@@ -229,6 +236,13 @@ function App() {
     window.termbeacon.write({ terminalId: active.id, data: `${info.command}\r` });
   }
 
+  async function pickCwd() {
+    if (!active) return;
+    const picked = await window.termbeacon.pickCwd();
+    if (!isValidCwd(picked)) return;
+    setTerminals((items) => items.map((item) => item.id === active.id ? { ...item, cwd: picked } : item));
+  }
+
   return <main className="app-shell">
     <aside className="sidebar">
       <div className="brand-row"><div><div className="brand">TermBeacon</div><div className="subtitle">CLI Agent 工作台</div></div><button className="add-button" onClick={addTerminal} title="新建终端">+</button></div>
@@ -248,7 +262,7 @@ function App() {
       </div>
     </aside>
     <section className="workspace">
-      <header className="workspace-header"><div><strong>{active?.title}</strong><span>{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
+      <header className="workspace-header"><div><strong>{active?.title}</strong><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div><div className="header-actions"><select value={active?.agentType} onChange={(event) => { const next = event.target.value as AgentType; setTerminals((items) => items.map((item) => item.id === activeId ? { ...item, agentType: next } : item)); if (active?.alive) window.termbeacon.rebuildDetector({ terminalId: active.id, agentType: next }); }}>{agents.map((agent) => <option key={agent} value={agent}>{agent}</option>)}</select><button onClick={startAgent} disabled={!active || active.agentType === "generic" || !cliStatus[active.agentType]?.installed}>启动 Agent</button><button onClick={() => active && killTerminal(active.id)}>停止</button></div></header>
       <div className="terminal-stage">{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;

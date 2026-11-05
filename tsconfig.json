@@ -17,5 +17,6 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/main/**/*.ts", "src/shared/**/*.ts"]
+  "include": ["src/main/**/*.ts", "src/shared/**/*.ts"],
+  "exclude": ["src/renderer"]
 }

@@ -35,6 +35,8 @@ button, select { font: inherit; }
 .workspace-header { height: 58px; display: flex; justify-content: space-between; align-items: center; padding: 0 18px; border-bottom: 1px solid #26324a; background: #0f172a; }
 .workspace-header strong { display: block; font-size: 14px; }
 .workspace-header span { display: block; margin-top: 3px; color: #7183a3; font-size: 11px; }
+.cwd-picker { cursor: pointer; text-decoration: underline dotted; }
+.cwd-picker:hover { color: #93c5fd; }
 .header-actions { display: flex; gap: 8px; }
 .header-actions select, .header-actions button { border: 1px solid #334155; border-radius: 7px; background: #172238; color: #cbd5e1; padding: 6px 9px; cursor: pointer; }
 .header-actions button:disabled { cursor: not-allowed; opacity: .45; }
