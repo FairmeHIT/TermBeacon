@@ -1,11 +1,13 @@
 const os = require("node:os");
+const path = require("node:path");
 
 const isWindows = process.platform === "win32";
 const isMac = process.platform === "darwin";
 
-function defaultShell() {
-  if (isWindows) return process.env.ComSpec || "cmd.exe";
-  return process.env.SHELL || "/bin/bash";
+function defaultShell(env = process.env) {
+  if (isWindows) return env.ComSpec || "cmd.exe";
+  if (typeof env.SHELL === "string" && path.isAbsolute(env.SHELL)) return env.SHELL;
+  return isMac ? "/bin/zsh" : "/bin/bash";
 }
 
 function defaultCwd() {
@@ -13,9 +15,18 @@ function defaultCwd() {
 }
 
 function isAbsoluteCwd(cwd) {
-  return typeof cwd === "string" && os.platform() === "win32"
-    ? /^[a-zA-Z]:[\\/]/.test(cwd) || /^[\\/]{2}/.test(cwd)
-    : cwd.startsWith("/");
+  if (typeof cwd !== "string") return false;
+  return isWindows ? path.win32.isAbsolute(cwd) : path.posix.isAbsolute(cwd);
 }
 
-module.exports = { isWindows, isMac, defaultShell, defaultCwd, isAbsoluteCwd };
+function platformInfo() {
+  return {
+    platform: process.platform,
+    isWindows,
+    isMac,
+    shell: defaultShell(),
+    cwd: defaultCwd(),
+  };
+}
+
+module.exports = { isWindows, isMac, defaultShell, defaultCwd, isAbsoluteCwd, platformInfo };

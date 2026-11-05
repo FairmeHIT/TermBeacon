@@ -18,6 +18,14 @@ export interface Workspace {
   terminalIds: string[];
 }
 
+export interface PlatformInfo {
+  platform: string;
+  isWindows: boolean;
+  isMac: boolean;
+  shell: string;
+  cwd: string;
+}
+
 export interface StateUpdateEvent {
   type: "state:update";
   terminalId: string;

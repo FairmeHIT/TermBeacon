@@ -9,6 +9,9 @@ const require = createRequire(import.meta.url);
 const { discoverAll } = require("./cli-discovery.cjs") as {
   discoverAll: () => Record<string, unknown>;
 };
+const { platformInfo } = require("./platform.cjs") as {
+  platformInfo: () => { platform: string; isWindows: boolean; isMac: boolean; shell: string; cwd: string };
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -123,6 +126,7 @@ app.on("before-quit", () => {
 
 ipcMain.handle("state:load", async () => readState());
 ipcMain.handle("cli:discover", () => discoverAll());
+ipcMain.handle("platform:info", () => platformInfo());
 ipcMain.handle("state:save", async (_event, state: PersistedState) => { await writeState(state); return true; });
 ipcMain.handle("pty:create", (_event, request) => {
   const terminal: TerminalInstance = {
