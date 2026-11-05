@@ -33,6 +33,7 @@ interface PersistedState {
   workspaces: Workspace[];
   terminals: TerminalInstance[];
   activeTerminalId?: string;
+  activeWorkspaceId?: string;
 }
 
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }

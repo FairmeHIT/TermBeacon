@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, StateUpdateEvent, TerminalInstance } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
 import "./styles.css";
 
 declare global {
@@ -116,6 +116,8 @@ function EditableTitle({ title, onCommit }: { title: string; onCommit: (next: st
 
 function App() {
   const [terminals, setTerminals] = useState<TerminalInstance[]>(() => [newTerminal(1)]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => [{ id: "default", name: "默认工作区", terminalIds: [] }]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default");
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [hydrated, setHydrated] = useState(false);
   const [cliStatus, setCliStatus] = useState<Record<string, CliInfo>>({});
@@ -125,14 +127,34 @@ function App() {
   const consumedLocal = useRef(new Map<string, number>());
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
+  const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
+  const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
 
   useEffect(() => {
     void window.termbeacon.discoverCli().then(setCliStatus);
     void window.termbeacon.loadState().then((state) => {
       if (state.terminals.length > 0) {
         setTerminals(state.terminals.map((terminal) => ({ ...terminal, alive: false, state: "stopped" as AgentState })));
-        setActiveId(state.activeTerminalId ?? state.terminals[0].id);
       }
+      const restored = state.workspaces.length > 0
+        ? state.workspaces
+        : [{ id: "default", name: "默认工作区", terminalIds: state.terminals.map((terminal) => terminal.id) }];
+      const restoredActiveWorkspaceId = state.activeWorkspaceId && restored.some((workspace) => workspace.id === state.activeWorkspaceId)
+        ? state.activeWorkspaceId
+        : restored[0].id;
+      if (state.terminals.length === 0) {
+        // Seed the fresh active workspace with the initial terminal so the
+        // sidebar is never empty on first launch.
+        setWorkspaces(restored.map((workspace) => workspace.id === restoredActiveWorkspaceId
+          ? { ...workspace, terminalIds: [terminals[0].id] }
+          : workspace));
+      } else {
+        setWorkspaces(restored);
+        const workspaceTerminalIds = restored.find((workspace) => workspace.id === restoredActiveWorkspaceId)?.terminalIds ?? [];
+        const fallbackId = workspaceTerminalIds.find((id) => state.terminals.some((terminal) => terminal.id === id));
+        setActiveId(state.activeTerminalId ?? fallbackId ?? state.terminals[0].id);
+      }
+      setActiveWorkspaceId(restoredActiveWorkspaceId);
       setHydrated(true);
     });
     const disposeOutput = window.termbeacon.onOutput((event) => {
@@ -213,14 +235,15 @@ function App() {
     const handle = window.setTimeout(() => {
       const state: PersistedState = {
         schemaVersion: 1,
-        workspaces: [{ id: "default", name: "默认工作区", terminalIds: terminals.map((terminal) => terminal.id) }],
+        workspaces,
         terminals,
         activeTerminalId: activeId,
+        activeWorkspaceId,
       };
       void window.termbeacon.saveState(state);
     }, 500);
     return () => window.clearTimeout(handle);
-  }, [terminals, activeId, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -250,12 +273,75 @@ function App() {
   function addTerminal() {
     const terminal = newTerminal(terminals.length + 1);
     setTerminals((items) => [...items, terminal]);
+    setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
     setActiveId(terminal.id);
+  }
+
+  function removeTerminal(id: string) {
+    const target = terminals.find((item) => item.id === id);
+    if (target?.alive) window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
+    const owner = workspaces.find((workspace) => workspace.terminalIds.includes(id));
+    const remaining = owner ? owner.terminalIds.filter((terminalId) => terminalId !== id) : [];
+    if (id === activeId && remaining.length === 0) {
+      const replacement = newTerminal(terminals.length);
+      setTerminals((items) => [...items.filter((item) => item.id !== id), replacement]);
+      setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
+      setActiveId(replacement.id);
+      return;
+    }
+    if (id === activeId) setActiveId(remaining[0]);
+    setTerminals((items) => items.filter((item) => item.id !== id));
+    setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: remaining } : workspace));
   }
 
   function killTerminal(id: string) {
     window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, state: "stopped", alive: false } : item));
+  }
+
+  function selectWorkspace(id: string) {
+    setActiveWorkspaceId(id);
+    const nextTerminalId = workspaces.find((workspace) => workspace.id === id)?.terminalIds[0];
+    if (nextTerminalId && terminals.some((terminal) => terminal.id === nextTerminalId)) {
+      setActiveId(nextTerminalId);
+      requestAnimationFrame(() => terminalViews.current.get(nextTerminalId)?.focus());
+    }
+  }
+
+  function addWorkspace() {
+    const terminal = newTerminal(terminals.length + 1);
+    const workspace: Workspace = { id: crypto.randomUUID(), name: `工作区 ${workspaces.length + 1}`, terminalIds: [terminal.id] };
+    setTerminals((items) => [...items, terminal]);
+    setWorkspaces((items) => [...items, workspace]);
+    setActiveWorkspaceId(workspace.id);
+    setActiveId(terminal.id);
+  }
+
+  function renameWorkspace(id: string, name: string) {
+    setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, name } : workspace));
+  }
+
+  function removeWorkspace(id: string) {
+    if (workspaces.length < 2) return;
+    const target = workspaces.find((workspace) => workspace.id === id);
+    if (!target) return;
+    target.terminalIds.forEach((terminalId) => {
+      const terminal = terminals.find((item) => item.id === terminalId);
+      if (terminal?.alive) window.termbeacon.kill({ terminalId, reason: "user-kill" });
+    });
+    const removedIds = new Set(target.terminalIds);
+    setTerminals((items) => items.filter((item) => !removedIds.has(item.id)));
+    const remaining = workspaces.filter((workspace) => workspace.id !== id);
+    setWorkspaces(remaining);
+    if (id === activeWorkspaceId) {
+      setActiveWorkspaceId(remaining[0].id);
+      const nextTerminalId = remaining[0].terminalIds.find((terminalId) => !removedIds.has(terminalId));
+      if (nextTerminalId) setActiveId(nextTerminalId);
+    }
+    if (removedIds.has(activeId)) {
+      const nextTerminalId = remaining.flatMap((workspace) => workspace.terminalIds).find((terminalId) => !removedIds.has(terminalId));
+      if (nextTerminalId) setActiveId(nextTerminalId);
+    }
   }
 
   function renameTerminal(id: string, title: string) {
@@ -279,11 +365,19 @@ function App() {
   return <main className="app-shell">
     <aside className="sidebar">
       <div className="brand-row"><div><div className="brand">TermBeacon</div><div className="subtitle">CLI Agent 工作台</div></div><button className="add-button" onClick={addTerminal} title="新建终端">+</button></div>
+      <div className="workspace-chips">
+        {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-chip ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.name}>
+          <EditableTitle title={workspace.name} onCommit={(next) => renameWorkspace(workspace.id, next)} />
+          {workspaces.length > 1 && workspace.id !== activeWorkspaceId && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title="删除工作区">×</span>}
+        </button>)}
+        <button className="workspace-chip add-chip" onClick={addWorkspace} title="新建工作区">+</button>
+      </div>
       <div className="terminal-list">
-        {terminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
+        {workspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
           <span className={`status-dot ${stateClass[terminal.state]}`} />
           <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminal.agentType} · {stateLabel[terminal.state]}</small><em>{terminal.lastOutputSummary || terminal.cwd}</em></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
+          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title="删除终端">×</span>
         </button>)}
       </div>
       <div className="cli-health">

@@ -31,7 +31,13 @@ function sanitizeState(parsed) {
   const activeTerminalId = typeof parsed.activeTerminalId === "string" && knownIds.has(parsed.activeTerminalId)
     ? parsed.activeTerminalId
     : terminals[0]?.id;
-  return { schemaVersion: 1, workspaces: sanitizedWorkspaces, terminals, activeTerminalId };
+  const knownWorkspaceIds = new Set(sanitizedWorkspaces.map((workspace) => workspace.id));
+  const activeWorkspaceId = typeof parsed.activeWorkspaceId === "string" && knownWorkspaceIds.has(parsed.activeWorkspaceId)
+    ? parsed.activeWorkspaceId
+    : sanitizedWorkspaces[0]?.id;
+  const result = { schemaVersion: 1, workspaces: sanitizedWorkspaces, terminals, activeTerminalId };
+  if (activeWorkspaceId !== undefined) result.activeWorkspaceId = activeWorkspaceId;
+  return result;
 }
 
 module.exports = { sanitizeState, defaultState, AGENT_TYPES, AGENT_STATES };

@@ -261,3 +261,26 @@ Validation:
 - `npm start`: production smoke launched with a working window.
 
 Remaining next: real interactive task fixture recording (needs an authenticated manual run), multi-workspace management UI, code signing + auto-update strategy.
+
+## 6.10 Multi-workspace support and macOS packaging target (2026-11-05)
+
+Branch: `main` (win branch merged at this point; both branches point to the same history).
+
+### macOS packaging target
+
+- `electron-builder.config.cjs` adds a `mac` section: dmg target for x64 and arm64, developer-tools category. The builder output directory is now platform-aware: Windows hosts keep the project-external path (filter-driver EBUSY workaround from 6.8); macOS/Linux hosts use the default in-tree `release/`.
+- New `npm run dist:mac` script. node-pty's darwin N-API prebuilds make the no-rebuild strategy valid on macOS as well.
+
+### Workspace-aware persisted state
+
+- `PersistedState` (both `src/shared/types.ts` and the main-process interface) gains an optional `activeWorkspaceId`.
+- `state-sanitize.cjs` now preserves a valid `activeWorkspaceId` (falling back to the first workspace) and the new test covers both paths.
+- Main-process side of the multi-workspace feature; the renderer UI work (workspace tabs, create/switch/rename/delete, per-workspace terminal lists, terminal deletion) was implemented in the same batch and is validated by the full suite below.
+
+Validation:
+
+- `npm test`: 45 passed, 0 failed.
+- `tsc --noEmit` (main) and renderer strict type check: passed.
+- `npm run build`: passed.
+
+Remaining next: real interactive task fixture recording (needs an authenticated manual run), code signing + auto-update strategy.

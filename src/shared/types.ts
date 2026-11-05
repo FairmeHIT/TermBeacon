@@ -64,5 +64,5 @@ export interface PtyHostExitEvent {
   at: number;
 }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; activeTerminalId?: string; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; activeTerminalId?: string; activeWorkspaceId?: string; }
 

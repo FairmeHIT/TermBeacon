@@ -53,3 +53,17 @@ test("falls back to the first terminal when the active id is missing", () => {
   const result = sanitizeState(input);
   assert.equal(result.activeTerminalId, "t1");
 });
+
+test("preserves a valid activeWorkspaceId and falls back when invalid", () => {
+  const validInput = {
+    schemaVersion: 1,
+    workspaces: [{ id: "w1", name: "A", terminalIds: ["t1"] }, { id: "w2", name: "B", terminalIds: [] }],
+    terminals: [validTerminal],
+    activeTerminalId: "t1",
+    activeWorkspaceId: "w2",
+  };
+  assert.equal(sanitizeState(validInput).activeWorkspaceId, "w2");
+
+  const invalidInput = { schemaVersion: 1, workspaces: [{ id: "w1", name: "A", terminalIds: [] }], terminals: [], activeWorkspaceId: "ghost" };
+  assert.equal(sanitizeState(invalidInput).activeWorkspaceId, "w1");
+});
