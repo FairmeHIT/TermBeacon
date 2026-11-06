@@ -37,7 +37,9 @@ git push origin v0.1.1
 npm run dist:publish
 ```
 
-如果没有签名证书，可以运行 `npm run dist` 生成未签名测试包。设置 `TERMBEACON_FORCE_SIGNING=1` 后，缺少证书会直接使发布构建失败。正式安装包启动后会从 `FairmeHIT/TermBeacon` 的 GitHub Releases 检查更新，下载完成后在界面提示重启安装；开发模式不会检查更新。
+如果没有签名证书，可以运行 `npm run dist` 生成未签名测试包。设置 `TERMBEACON_FORCE_SIGNING=1` 后，缺少证书会直接使发布构建失败。正式安装包启动后会从 `FairmeHIT/TermBeacon` 的 GitHub Releases 检查更新，下载完成后在界面提示重启安装；也可以随时点侧栏左下角齿轮 →「更新」→「检查更新」手动检查（显示当前版本、下载进度和失败原因）。开发模式会提示“开发模式（未打包），不检查更新”；设置 `TERMBEACON_DISABLE_UPDATES=1` 可完全禁用。
+
+> 更新检查访问的是 `github.com`（electron-updater 的 GitHub provider 读取 `releases.atom`），不是 `api.github.com`。网络无法直连 `github.com` 时检查会超时，界面会显示失败原因，恢复网络后再点一次「检查更新」即可。
 
 macOS 发布还需要 Apple 公证相关环境变量（`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`）以及可用的 Developer ID 证书。
 
