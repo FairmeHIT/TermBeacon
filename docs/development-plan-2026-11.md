@@ -3,6 +3,8 @@
 日期：2026-11-05  
 依据：`HANDOFF.md`、`docs/termbeacon-engineering-spec.md`、`docs/development-handbook.md` 与当前 `src/`、`tests/` 源码审阅。
 
+状态校正：2026-11-06。本文早期批次描述保留为历史记录；当前实现已经完成布局持久化、磁盘 scrollback、PTY host 恢复、自动更新配置和首次未签名 Windows Release。后续工作以本文末尾“下一阶段执行计划”为准。
+
 ## 一、现状判断
 
 TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、xterm.js、node-pty/ConPTY、独立 utility process 的 `pty-host`、MessagePort 数据面、六状态机、Agent Registry、JSONL fixture、多工作区、持久化、NSIS 打包都已落地。交接记录显示上一轮基线为 45 项测试通过；当前基线为 111 项全部通过，构建通过，并已在本机验证过三个 CLI 的 `--version` 与 `--help` 启动链路。
@@ -43,7 +45,7 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 
 ### P2：工程与文档卫生
 
-`package.json` 里 `electron-builder` 重复声明了两次（批次 A 已修复），`HANDOFF.md` 前 112 行的乱码和 `README.md` 的过时描述也已重建（批次 A）。`electron-builder.config.cjs` 仍把 Windows 输出目录写死为 `D:/temp-termbeacon-release`，换机器就会失效，留到批次 E 改为可配置项。
+`package.json` 里 `electron-builder` 重复声明了两次（批次 A 已修复），`HANDOFF.md` 前 112 行的乱码和 `README.md` 的过时描述也已重建（批次 A）。当前 release 输出目录为项目内 `release/`，发布脚本会使用项目外临时目录规避 Windows 文件锁；下一版仍需在干净环境验证该策略。
 
 ## 三、推进顺序
 
@@ -77,11 +79,39 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 
 目标是让多终端日常使用顺手。工作项包括删除终端/工作区的确认、快捷键与焦点管理、侧栏宽度与窗口尺寸持久化、最近活动时间与摘要持久化、可选的磁盘 scrollback 快照（设上限、低频写入）。验收是重启后布局、激活终端和工作区恢复；误点删除不会直接杀进程。
 
-进展（2026-11-06）：删除确认、`Ctrl+Shift+T/W/↑↓` 快捷键、设置面板说明、窗口 resize 适配、输出摘要 100ms 合并、xterm 释放已完成；侧栏宽度/窗口尺寸持久化和磁盘 scrollback 快照仍未做。
+进展（2026-11-06）：删除确认、`Ctrl+Shift+T/W/↑↓` 快捷键、设置面板说明、窗口 resize 适配、输出摘要 100ms 合并、xterm 释放、侧栏宽度/窗口尺寸持久化和磁盘 scrollback 快照均已落地。仍需 Windows 侧手工验证恢复行为。
 
 ### 批次 E：发布工程化
 
-目标是把当前只能在本机跑的安装包变成可分发版本。工作项包括把 release 输出目录改为可配置项而不是写死 `D:/temp-termbeacon-release`、代码签名、自动更新策略、崩溃日志、在干净 Windows 环境验证安装/升级/卸载。验收是在没有 Node.js 的机器上安装后可启动并创建终端，升级后保留 `state.json`。
+目标是把当前只能在本机跑的安装包变成可分发版本。代码路径已接入可配置输出目录、代码签名环境变量、GitHub Releases 自动更新和发布脚本；剩余工作是配置真实证书、补崩溃日志、在干净 Windows 环境验证安装/升级/卸载，并修正首次发布时 tag 与 `latest.yml` 的流程问题。
+
+## 五、下一阶段执行计划（2026-11-06）
+
+### 批次 F：任务历史与接续工作
+
+当前终端持久化能恢复终端元数据和最近 scrollback，但不能按任务查看开始/完成/失败记录。本批次新增 `TaskRecord`，由已有 `state:update` 事件聚合生成，保存任务状态、时间、摘要和错误；侧栏或工作区提供当前终端的最近任务列表。
+
+验收：执行一个会进入 `working` 再完成的任务，关闭并重启应用后仍能看到该任务及其最终状态；等待输入和错误任务不会被错误标记为完成；删除终端时对应任务记录一并清理；任务记录数量和磁盘大小有上限。
+
+进展（2026-11-06）：第一版已落地。新增 `TaskRecord`、`state.json.tasks` 清洗与容量限制、状态事件聚合、输入摘要和当前终端“任务历史”面板；`npm test` 122 项通过，`npm run build` 和 Electron 启动验证通过。真实 CLI 场景和跨重启手工验收仍待执行。
+
+### 批次 G：真实 CLI 验收
+
+在 Windows 真实环境安装 opencode 插件和 Claude Hook 配置，分别运行最小任务、权限询问、错误和 `Ctrl+C` 场景，录制脱敏 fixture。以 Hook/原生事件为主路径、输出检测为回退，校准各 CLI 版本差异。
+
+进展（2026-11-06）：新增只读 `npm run preflight:cli`，当前 Windows 已确认 opencode、Codex、Claude 均可执行 `--version`/`--help` 并正常退出；Hook 客户端和插件源码语法通过，opencode 插件已安装。Claude Hook 配置器和只读 capture 审计已落地，当前 `npm run preflight:cli -- --strict` 已通过。真实任务调用仍按验收矩阵手工执行；自动化不代替需要账号或权限的交互任务。
+
+新增 `npm run audit:cli-capture -- --json captures/<file>.jsonl`，会在不输出终端正文的前提下判断 capture 是否具备提炼 fixture 的结构条件。`fixtureEligible` 只代表存在任务输入、自然退出和无录制错误，不代表业务成功；缺少退出回执的 Codex/opencode capture 继续保留为诊断材料。
+
+新增 `npm run fixture:from-capture -- --sanitized --input <capture> --output <fixture> --expected <state>`，用于人工审核后的受控转换。转换器默认移除环境元数据和原始输入，保留状态机回放需要的 output/tick/hook，并补充显式断言；未人工脱敏的 capture 不应直接转换进 `tests/fixtures/agents/`。
+
+已从现有 Claude Windows capture 提取一份仅含 OSC 标题信号的真实派生 fixture `claude-real-title-task.jsonl`，回放验证 `completed-unseen`。该样本只覆盖标题检测路径，Hook、权限等待和业务结果仍需独立真实验收。
+
+录制器已支持可选 `--hook-log`，能够把本地 bridge 收到的事件写入 capture；参数解析和 fake CLI bridge 路径均有回归测试。下一次真实 Claude 录制应同时启用该开关，以便把 Hook Stop/Notification 与 PTY 输出放在同一时间轴核对。
+
+### 批次 H：发布候选验证
+
+配置 Windows 代码签名证书，按“先推 tag、再发布”的顺序生成安装包；在无 Node.js 的干净 Windows 环境验证安装、升级、卸载、自动更新和 `state.json`/terminal-history 保留。macOS 继续执行 `dist:mac` 和签名/公证环境验证。
 
 ## 四、依赖、风险与边界
 
@@ -90,3 +120,11 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 当前开发环境的 Linux 沙箱无法启动 Windows Electron 或本机 CLI，`npm start` 和 `npm run smoke:cli` 需要在 Windows PowerShell 侧执行；本会话能可靠完成的是 Node 单元测试、TypeScript/Vite 构建和源码级验证。涉及 Electron 的手工验收项会在批次记录里明确标注为“待在 Windows 侧执行”，不会写成已通过。
 
 另一个边界是 PTY 不跨应用重启存活，这是 v1 设计，不是缺陷。批次 C 的“恢复”指 host 崩溃后的重建和渲染器重连，不包含跨进程重启保留原 PTY。
+
+## 批次 I：终端标签与恢复一致性（2026-11-06）
+
+修复终端元数据恢复：用户手动重命名会写入 `titlePinned`，重启后不会被 shell 的 OSC 标题覆盖；旧状态文件会根据“终端 N”生成标题自动兼容。恢复 PTY 时先回到 `generic`，再由输出探测实际 CLI，避免尚未启动 opencode 时显示旧的 opencode。Windows 新终端默认 Shell 统一为 PowerShell，cmd.exe 和 PowerShell 7 仍可在设置中选择。
+
+左侧终端条目现在只显示标题、当前 CLI/Shell 名称和状态；移除了第三行 cwd/摘要。右侧工作区顶栏移除重复的终端标题，只保留可点击的项目路径和既有操作按钮。持久化防抖从 1 秒缩短为 150ms，以降低快速退出时丢失刚刚改名的概率。
+
+验证：`npm test` 151 passed，`npm run build` 通过。仍需在 Windows Electron 界面手工确认重命名后立即关闭、旧状态迁移和 PowerShell 启动提示符。

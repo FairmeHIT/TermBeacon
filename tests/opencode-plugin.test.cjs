@@ -20,20 +20,42 @@ test("opencode plugin maps session and tool events to hook statuses", async (t) 
   });
 
   const moduleUrl = pathToFileURL(path.join(__dirname, "..", "hooks", "opencode", "termbeacon.js")).href;
-  const { TermBeacon } = await import(moduleUrl);
-  const hooks = await TermBeacon();
-  assert.equal(typeof hooks.event, "function");
+  const { default: plugin } = await import(moduleUrl);
+  assert.equal(plugin.id, "termbeacon");
 
-  await hooks.event({ event: { type: "session.status", properties: { status: { type: "busy" } } } });
-  await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s1" } } });
-  await hooks.event({ event: { type: "session.error", properties: {} } });
-  await hooks.event({ event: { type: "permission.asked", properties: { status: "pending" } } });
+  const queue = [];
+  let wake;
+  let closed = false;
+  const subscribe = async function* () {
+    while (!closed) {
+      if (!queue.length) await new Promise((resolve) => { wake = resolve; });
+      if (closed) break;
+      yield queue.shift();
+    }
+  };
+  const push = (event) => {
+    queue.push(event);
+    if (wake) { const resolve = wake; wake = undefined; resolve(); }
+  };
+  const ctx = {
+    event: { subscribe },
+    session: { hook: async () => ({ dispose() {} }) },
+    tool: { hook: async () => ({ dispose() {} }) },
+  };
+  const cleanup = await plugin.setup(ctx);
+  push({ type: "session.status", data: { status: { type: "busy" } } });
+  push({ type: "session.idle", data: {} });
+  push({ type: "session.execution.failed", data: {} });
+  push({ type: "permission.asked", data: { status: "pending" } });
   await new Promise((resolve) => setTimeout(resolve, 200));
+  closed = true;
+  if (wake) { const resolve = wake; wake = undefined; resolve(); }
+  cleanup();
 
   assert.deepEqual(events.map((event) => [event.event, event.status]), [
     ["session.status", "running"],
     ["session.idle", "completed"],
-    ["session.error", "failed"],
+    ["session.execution.failed", "failed"],
     ["permission.asked", "waiting"],
   ]);
   assert.ok(events.every((event) => event.terminalId === "opencode-1"));

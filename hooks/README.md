@@ -133,13 +133,23 @@ node scripts/hooks-install.cjs --print-claude
 
 ### 合并方式
 
-先备份，再把 `hooks` 对象合并进 `~/.claude/settings.json`（或项目的 `.claude/settings.json`）：
+推荐使用配置器显式合并。它保留现有字段和 Hook，写入前为已有文件生成带时间戳的 `.bak-*` 备份，并且重复执行不会重复添加 TermBeacon Hook：
+
+```powershell
+npm run hooks:configure:claude
+node scripts/hooks-install.cjs --project --configure-claude
+node scripts/hooks-install.cjs --configure-claude --settings "C:\path\to\settings.json"
+```
+
+默认目标是 `~/.claude/settings.json`；`--project` 使用当前项目的 `.claude/settings.json`，`--settings` 可指定其他文件。脚本默认不会修改配置，只有显式传入 `--configure-claude` 才会写入。
+
+手工合并时，先备份，再把 `hooks` 对象合并进 `~/.claude/settings.json`（或项目的 `.claude/settings.json`）：
 
 ```powershell
 Copy-Item "$env:USERPROFILE\.claude\settings.json" "$env:USERPROFILE\.claude\settings.json.bak" -ErrorAction SilentlyContinue
 ```
 
-如果本来没有这个文件，直接把 `--print-claude` 的输出保存为 `settings.json` 即可。合并后 `preflight:cli` 应显示 `Claude Hook settings: configured`（检查方式是递归搜索配置里是否出现 `termbeacon-hook.cjs`）。
+如果本来没有这个文件，直接运行配置器即可；也可以把 `--print-claude` 的输出保存为 `settings.json`。合并后 `preflight:cli` 应显示 `Claude Hook settings: configured`（检查方式是递归搜索配置里是否出现 `termbeacon-hook.cjs`）。
 
 ### 事件映射
 

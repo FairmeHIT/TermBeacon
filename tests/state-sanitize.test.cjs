@@ -24,6 +24,16 @@ test("keeps valid terminals and workspaces, prunes dangling workspace references
   assert.equal(result.activeTerminalId, "t1");
 });
 
+test("preserves the manual terminal title pin", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1"] }],
+    terminals: [{ ...validTerminal, title: "我的任务", titlePinned: true }],
+  });
+  assert.equal(result.terminals[0].title, "我的任务");
+  assert.equal(result.terminals[0].titlePinned, true);
+});
+
 test("drops malformed terminals and invalid agent types instead of failing", () => {
   const input = {
     schemaVersion: 1,
@@ -78,4 +88,18 @@ test("clamps persisted layout and window bounds", () => {
   });
   assert.equal(result.sidebarWidth, 460);
   assert.deepEqual(result.windowBounds, { width: 900, height: 2160, x: 41, y: -12, isMaximized: true });
+});
+
+test("keeps bounded task history only for known terminals", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1"] }],
+    terminals: [validTerminal],
+    tasks: [
+      { id: "task-1", terminalId: "t1", startedAt: 10, state: "working", prompt: "  run tests  " },
+      { id: "task-ghost", terminalId: "ghost", startedAt: 20, state: "completed" },
+      { id: "task-bad", terminalId: "t1", startedAt: "bad", state: "completed" },
+    ],
+  });
+  assert.deepEqual(result.tasks, [{ id: "task-1", terminalId: "t1", startedAt: 10, state: "working", prompt: "run tests" }]);
 });

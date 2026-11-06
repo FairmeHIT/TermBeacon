@@ -5,7 +5,9 @@ const isWindows = process.platform === "win32";
 const isMac = process.platform === "darwin";
 
 function defaultShell(env = process.env) {
-  if (isWindows) return env.ComSpec || "cmd.exe";
+  // PowerShell is the default interactive shell on Windows. cmd.exe remains
+  // available as an explicit setting for projects that need it.
+  if (isWindows) return "powershell.exe";
   if (typeof env.SHELL === "string" && path.isAbsolute(env.SHELL)) return env.SHELL;
   return isMac ? "/bin/zsh" : "/bin/bash";
 }

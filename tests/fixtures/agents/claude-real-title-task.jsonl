@@ -1,0 +1,16 @@
+{"kind":"meta","agent":"claude","version":"2.1.318 (Claude Code)","name":"real-title-task","description":"Windows capture 派生的 Claude 标题状态；正文已移除"}
+{"kind":"output","data":"\u001b]0;✳ Claude Code\u0007","at":1181}
+{"kind":"input","data":"[task]\r","at":7000}
+{"kind":"output","data":"\u001b]0;◐ Claude Code\u0007","at":8000}
+{"kind":"output","data":"\u001b]0;◑ Claude Code\u0007","at":8980}
+{"kind":"output","data":"\u001b]0;◐ Claude Code\u0007","at":9923}
+{"kind":"output","data":"\u001b]0;◑ Claude Code\u0007","at":10890}
+{"kind":"output","data":"\u001b]0;◐ Claude Code\u0007","at":11845}
+{"kind":"output","data":"\u001b]0;✳ Claude Code\u0007","at":12834}
+{"kind":"output","data":"\u001b]0;◐ Claude Code\u0007","at":12864}
+{"kind":"output","data":"\u001b]0;◑ Claude Code\u0007","at":13824}
+{"kind":"output","data":"\u001b]0;◐ Claude Code\u0007","at":14784}
+{"kind":"output","data":"\u001b]0;◑ Claude Code\u0007","at":15747}
+{"kind":"output","data":"\u001b]0;✳ Claude Code\u0007","at":24034}
+{"kind":"tick","at":27034}
+{"kind":"assert","state":"completed-unseen"}

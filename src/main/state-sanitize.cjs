@@ -2,12 +2,13 @@
 // can require it directly and scripts/copy-runtime.mjs can ship it.
 
 function defaultState() {
-  return { schemaVersion: 1, workspaces: [{ id: "default", name: "默认工作区", terminalIds: [] }], terminals: [] };
+  return { schemaVersion: 1, workspaces: [{ id: "default", name: "默认工作区", terminalIds: [] }], terminals: [], tasks: [] };
 }
 
 const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude"]);
 const AGENT_STATES = new Set(["working", "completed-unseen", "ready", "awaiting-input", "error", "stopped"]);
-const SHELL_TYPES = new Set(["cmd.exe", "powershell.exe", "pwsh.exe", "/bin/bash"]);
+const SHELL_TYPES = new Set(["cmd.exe", "powershell.exe", "pwsh.exe", "/bin/bash", "/bin/zsh"]);
+const TASK_STATES = new Set(["working", "completed", "awaiting-input", "error", "cancelled"]);
 
 // Structural validation so a corrupted or hand-edited state.json cannot crash
 // the renderer at hydration. Invalid entries are dropped rather than fatal.
@@ -22,10 +23,32 @@ function sanitizeState(parsed) {
     ? parsed.terminals.filter((terminal) =>
       Boolean(terminal) && typeof terminal.id === "string" && typeof terminal.title === "string"
         && typeof terminal.cwd === "string" && AGENT_TYPES.has(terminal.agentType)
+        && (terminal.titlePinned === undefined || typeof terminal.titlePinned === "boolean")
         && (terminal.state === undefined || AGENT_STATES.has(terminal.state))
         && (terminal.shell === undefined || SHELL_TYPES.has(terminal.shell)))
+      .map((terminal) => ({
+        ...terminal,
+        ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
+      }))
     : [];
   const knownIds = new Set(terminals.map((terminal) => terminal.id));
+  const tasks = Array.isArray(parsed.tasks)
+    ? parsed.tasks.filter((task) => Boolean(task)
+      && typeof task.id === "string" && task.id.length > 0
+      && typeof task.terminalId === "string" && knownIds.has(task.terminalId)
+      && Number.isFinite(task.startedAt) && TASK_STATES.has(task.state))
+      .slice(-1000)
+      .map((task) => ({
+        id: task.id,
+        terminalId: task.terminalId,
+        startedAt: Math.round(task.startedAt),
+        ...(Number.isFinite(task.finishedAt) ? { finishedAt: Math.round(task.finishedAt) } : {}),
+        state: task.state,
+        ...(typeof task.prompt === "string" && task.prompt.trim() ? { prompt: task.prompt.trim().slice(0, 500) } : {}),
+        ...(typeof task.summary === "string" && task.summary.trim() ? { summary: task.summary.trim().slice(0, 500) } : {}),
+        ...(typeof task.error === "string" && task.error.trim() ? { error: task.error.trim().slice(0, 500) } : {}),
+      }))
+    : [];
   const sanitizedWorkspaces = workspaces.map((workspace) => ({
     ...workspace,
     terminalIds: (workspace.terminalIds || []).filter((id) => knownIds.has(id)),
@@ -37,7 +60,7 @@ function sanitizeState(parsed) {
   const activeWorkspaceId = typeof parsed.activeWorkspaceId === "string" && knownWorkspaceIds.has(parsed.activeWorkspaceId)
     ? parsed.activeWorkspaceId
     : sanitizedWorkspaces[0]?.id;
-  const result = { schemaVersion: 1, workspaces: sanitizedWorkspaces, terminals, activeTerminalId };
+  const result = { schemaVersion: 1, workspaces: sanitizedWorkspaces, terminals, tasks, activeTerminalId };
   if (activeWorkspaceId !== undefined) result.activeWorkspaceId = activeWorkspaceId;
   if (SHELL_TYPES.has(parsed.defaultShell)) result.defaultShell = parsed.defaultShell;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
@@ -53,4 +76,4 @@ function sanitizeState(parsed) {
   return result;
 }
 
-module.exports = { sanitizeState, defaultState, AGENT_TYPES, AGENT_STATES, SHELL_TYPES };
+module.exports = { sanitizeState, defaultState, AGENT_TYPES, AGENT_STATES, SHELL_TYPES, TASK_STATES };

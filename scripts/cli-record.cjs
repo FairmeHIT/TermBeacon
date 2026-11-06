@@ -18,6 +18,7 @@ const path = require("node:path");
 const { isWindows, defaultShell } = require("../src/main/platform.cjs");
 const { discoverAll } = require("../src/main/cli-discovery.cjs");
 const { stripInputSequences } = require("../src/main/detection-engine.cjs");
+const { createHookServer } = require("../src/main/hook-server.cjs");
 
 // Mouse reports, focus events and Kitty key-release events are useful to the
 // CLI but pure noise in a capture. Keep only text, Enter and Ctrl+C; forward
@@ -34,6 +35,10 @@ function parseArgs(argv) {
     if (token === "--help" || token === "-h") { args.help = true; continue; }
     if (!token.startsWith("--")) continue;
     const key = token.slice(2);
+    if (key === "hook-log") {
+      args.hookLog = true;
+      continue;
+    }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) {
       args[key] = true;
@@ -67,10 +72,12 @@ function usage() {
   --max-minutes <n>                      Safety timeout (default 15)
   --task <string>                        Auto-submit this task after --task-delay
   --task-delay <ms>                      Auto-task delay (default 12000)
+  --hook-log                            Start a local bridge and record Hook events
 
 Exit the CLI normally to finish the capture.`);
 }
 
+async function main() {
 const args = parseArgs(process.argv.slice(2));
 if (args.help) { usage(); process.exit(0); }
 if (!args.cli && !args.command) { usage(); process.exit(1); }
@@ -90,6 +97,25 @@ let closed = false;
 function record(entry) {
   if (closed) return;
   stream.write(`${JSON.stringify(entry)}\n`);
+}
+
+let hookServer = null;
+let hookEnv = {};
+if (args.hookLog) {
+  hookServer = createHookServer({
+    onEvent: (event) => record({
+      kind: "hook",
+      event: event.event,
+      status: event.status,
+      at: Math.max(0, event.at - startedAt),
+    }),
+  });
+  const hookPort = await hookServer.start();
+  hookEnv = {
+    TERMBEACON_HOOK_PORT: String(hookPort),
+    TERMBEACON_HOOK_TOKEN: hookServer.token,
+    TERMBEACON_TERMINAL_ID: `capture-${agent}-${process.pid}`,
+  };
 }
 
 record({
@@ -124,15 +150,15 @@ try {
     cols: args.cols,
     rows: args.rows,
     cwd: process.cwd(),
-    env: process.env,
+    env: { ...process.env, ...hookEnv },
     ...(isWindows ? { useConpty: true } : {}),
   });
 } catch (error) {
   record({ kind: "error", at: Date.now() - startedAt, message: error instanceof Error ? error.message : String(error) });
-  stream.end(() => {
+  Promise.resolve(hookServer?.close()).then(() => stream.end(() => {
     console.error("[record] failed to start:", error);
     process.exit(1);
-  });
+  }));
   return;
 }
 
@@ -182,11 +208,12 @@ function finish(exitCode, signal) {
   if (rawMode) {
     try { process.stdin.setRawMode(false); } catch { /* terminal already gone */ }
   }
-  stream.end(() => {
+  const finishStream = () => stream.end(() => {
     console.error(`[record] saved: ${outPath}`);
     console.error("[record] review the capture for secrets before turning it into a fixture.");
     process.exit(0);
   });
+  Promise.resolve(hookServer?.close()).then(finishStream);
 }
 
 child.onData((data) => {
@@ -202,3 +229,13 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   try { child.kill(); } catch { /* already gone */ }
 });
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[record] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { parseArgs, isMeaningfulInput };

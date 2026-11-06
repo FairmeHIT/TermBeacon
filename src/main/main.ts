@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFile, copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
-import type { ShellType, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
+import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 
 const require = createRequire(import.meta.url);
 // electron-updater is CommonJS; a named ESM import fails at runtime with
@@ -65,6 +65,7 @@ interface PersistedState {
   schemaVersion: 1;
   workspaces: Workspace[];
   terminals: TerminalInstance[];
+  tasks?: TaskRecord[];
   activeTerminalId?: string;
   activeWorkspaceId?: string;
   defaultShell?: ShellType;

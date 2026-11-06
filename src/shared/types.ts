@@ -1,5 +1,6 @@
 export type AgentType = "generic" | "opencode" | "codex" | "claude";
 export type AgentState = "working" | "completed-unseen" | "ready" | "awaiting-input" | "error" | "stopped";
+export type TaskState = "working" | "completed" | "awaiting-input" | "error" | "cancelled";
 export type ShellType = "cmd.exe" | "powershell.exe" | "pwsh.exe" | "/bin/bash" | "/bin/zsh";
 
 export interface WindowBounds {
@@ -13,6 +14,8 @@ export interface WindowBounds {
 export interface TerminalInstance {
   id: string;
   title: string;
+  /** True after the user explicitly renamed the terminal. */
+  titlePinned?: boolean;
   cwd: string;
   shell?: ShellType;
   agentType: AgentType;
@@ -26,6 +29,17 @@ export interface Workspace {
   id: string;
   name: string;
   terminalIds: string[];
+}
+
+export interface TaskRecord {
+  id: string;
+  terminalId: string;
+  startedAt: number;
+  finishedAt?: number;
+  state: TaskState;
+  prompt?: string;
+  summary?: string;
+  error?: string;
 }
 
 export interface PlatformInfo {
@@ -105,5 +119,5 @@ export interface PtyHostExitEvent {
   at: number;
 }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; sidebarWidth?: number; windowBounds?: WindowBounds; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; sidebarWidth?: number; windowBounds?: WindowBounds; }
 

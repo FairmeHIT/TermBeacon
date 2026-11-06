@@ -49,7 +49,9 @@ macOS 发布还需要 Apple 公证相关环境变量（`APPLE_ID`、`APPLE_APP_S
 npm run record:cli -- --cli claude --name claude-task --task "列出当前目录并说明结果"
 ```
 
-录制时正常操作 CLI；也可以在延迟后自动提交 `--task` 指定的任务。完成后退出即可，原始捕获写入 `captures/`（已 gitignore），脱敏后再转成 `tests/fixtures/agents/` 下的 fixture。
+录制时正常操作 CLI；也可以在延迟后自动提交 `--task` 指定的任务。完成后退出即可，原始捕获写入 `captures/`（已 gitignore），脱敏后再转成 `tests/fixtures/agents/` 下的 fixture。需要同时记录 Hook 时加 `--hook-log`，录制器会启动本地 bridge 并只写入 Hook 的事件名、状态和相对时间。
+录制后可先运行 `npm run audit:cli-capture -- --json captures/<file>.jsonl`，它只输出记录数量、字节数、时长、标题信号、退出回执和是否满足 fixture 提炼的结构条件，不输出提示词或终端正文。`fixtureEligible: true` 只表示 capture 结构完整，仍需人工脱敏和状态核对。
+人工确认并完成脱敏后，可用 `npm run fixture:from-capture -- --sanitized --input captures/<file>.jsonl --output tests/fixtures/agents/<name>.jsonl --expected completed-unseen` 生成回放 fixture。转换器默认移除环境元数据并把输入替换为 `[task]`，不会把 `exit`/`error` 记录写入 fixture；输出内容仍需人工复核。
 
 开始真实 CLI 验收前，先运行只读预检：
 
@@ -66,10 +68,12 @@ npm run preflight:cli -- --json
 
 ```powershell
 npm run hooks:install    # 安装 opencode 插件，每个环境执行一次
+npm run hooks:configure:claude # 幂等合并 Claude Hook，并自动备份已有 settings
 npm run preflight:cli    # 检查 CLI 版本、hook 客户端与插件配置
 ```
 
 opencode / Claude Code 这类全屏 TUI 需要装插件或 Hook 才能得到准确状态；只靠文本启发式时可能一直显示"工作中"。完整配置、验证、排查和新机器清单见 `hooks/README.md`。
+`hooks:configure:claude` 只有显式执行时才会写入 Claude 配置；已有文件会先生成带时间戳的 `.bak-*` 备份，重复执行不会重复添加 TermBeacon Hook。
 
 MVP 当前包含：
 
@@ -83,5 +87,6 @@ MVP 当前包含：
 - 基于 prompt、输入和基础等待输入模式的第一版状态检测。
 
 当前状态检测已抽出 Agent Registry，并提供 opencode、Codex、Claude Code 和 generic CLI 的 JSONL fixture 回放测试。原生 Hook 已提供统一入口，OSC 9;4 已作为辅助评分信号接入；host 侧已用 250 ms 定时器驱动检测器，终端静默后无需后续输出也能完成确认。任务历史会保存到 `state.json.tasks` 并在当前终端的“任务历史”面板显示。Hook/插件的安装、验证与排查见 `hooks/README.md`。
+当前 fixture 中包含一份从 Windows Claude capture 脱敏派生的标题状态样本；它只用于回归 OSC 标题检测，不等同于完整的真实 CLI 业务验收。
 
 

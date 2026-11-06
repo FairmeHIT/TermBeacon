@@ -70,13 +70,13 @@ tests/fixtures/agents/*.jsonl
 
 中优先级：host 崩溃后没有终端级重建入口，固定 250 ms 重启也没有退避和上限；渲染器没有窗口 resize 监听，删除终端不 `dispose()` xterm；每个 PTY 输出块都会 `setState`，没有手册要求的批处理/节流；Hook 只有统一入口，没有真实 Claude/Codex 配置、超时和失效回退；CWD 修改只对下一次 PTY 创建生效。
 
-发布级：release 输出目录在 Windows 上写死为 `D:/temp-termbeacon-release`；没有代码签名、自动更新、崩溃日志和干净 Windows 环境的升级/卸载验证；`node-pty` 原生模块的打包路径虽已用预编译产物验证，但仍需在无 Node.js 的机器上回归。
+发布级：代码已接入 `release/` 输出、`electron-updater`、GitHub Releases 发布源和签名环境变量；当前阻塞项是没有证书的签名验证、崩溃日志、干净 Windows 环境的安装/升级/卸载回归，以及首次发布流程中 tag 与 `latest.yml` 的自动化修正。
 
 已知边界：PTY 不跨应用重启存活，这是 v1 设计，不是 bug。host 崩溃会丢失内存输出缓冲和 PTY 会话，replay 只覆盖渲染器端口断开/重连。
 
 ## 5. 下一步建议
 
-按 `docs/development-plan-2026-11.md` 执行。顺序是：批次 A 让状态灯真正可用（本批次已实施）；批次 B 用真实 CLI 录制 fixture、校准 Registry、接入 Hook，并区分“启动 Agent”和“提交任务”；批次 C 做 host 恢复、resize、dispose、输出节流；批次 D 做工作区体验和布局持久化；批次 E 做发布工程化。
+按 `docs/development-plan-2026-11.md` 执行。A-E 的代码批次已基本落地；下一步是批次 F 任务历史与接续工作，随后进行 G 真实 CLI 验收和 H 发布候选验证。
 
 ## 6. 开发约束
 
@@ -362,7 +362,7 @@ npm start
 
 ## 8. 当前交接结论
 
-MVP 的核心架构、终端链路、持久化和打包已经落地。当前最重要的不是继续加功能，而是把状态检测从“单元测试正确”变成“真实终端可用”：先用定时 tick 和输入/证据过滤修好基础误判（本批次），再用三个真实 CLI 的录制样本校准 Registry 和 Hook，之后补 host 恢复、渲染资源管理和发布工程化。
+MVP 的核心架构、终端链路、布局/scrollback 持久化、host 恢复和自动更新代码路径已经落地。任务历史第一版已开始提供“重启后接续工作”的上下文，但仍需要 Windows 真机验证状态聚合和真实 CLI 任务样本。下一顺序是：真实 CLI Hook/fixture 验收、签名与干净环境发布验证、再根据 8 终端压力测试结果继续做性能优化。
 
 ## 6.18 布局、磁盘快照与发布更新（2026-11-06）
 
@@ -387,3 +387,82 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 构建产物目录收敛为 `release/`：`release-out/` 是 2026-11-05 22:00/22:42 两次 EBUSY 失败构建残留的 `default_app.asar` 碎片（219 KB），已删除；`.gitignore` 保留该条目以防历史残留重现。`release/` 现含 0.1.1 安装包、blockmap、latest.yml 和 0.1.1 的 `win-unpacked`；0.1.0 旧包暂留。
 
 验证：合并 macOS 平台支持后 `npm test` 119 passed, 0 failed；`npm run build` 通过。本次发布产物对应 tag `v0.1.1`（提交 `2eb02a2`）；`main` 上随后合入的 macOS 平台支持（`61033db`）尚未进入该安装包，需要下一版（0.1.2）发布。
+
+## 6.21 状态校正与批次 F 启动（2026-11-06）
+
+文档与源码状态已重新对齐：窗口尺寸/位置/最大化状态、侧栏宽度、终端 scrollback 磁盘快照、PTY host 退避重启、终端重建入口、自动更新配置和 macOS 打包路径均已实现。Windows 代码签名只完成配置入口，尚未提供 `CSC_LINK` 证书；`v0.1.1` 安装包因此为未签名版本，下一版发布前需要补签名并在干净 Windows 环境回归。
+
+当前开始推进批次 F“任务历史与接续工作”：在已有终端状态事件之上增加任务级记录，持久化任务开始/结束时间、状态、摘要和错误，并在界面提供最近任务列表。该记录用于恢复上下文，不改变 PTY 不跨应用重启存活的 v1 边界。
+
+## 6.22 任务历史第一版（2026-11-06）
+
+新增 `TaskRecord` 共享类型和状态清洗逻辑。渲染器根据 `state:update` 聚合任务生命周期：进入 `working` 创建任务，进入 `awaiting-input` 保持未完成，进入 `completed-unseen`/`error`/`stopped` 记录结束时间和最终状态；PTY 退出、请求错误和 host 断开也会结束对应任务。任务提示词从用户回车提交的输入缓冲中提取，过滤 ANSI/控制序列并限制 500 字符。
+
+任务记录作为 `state.json.tasks` 保存，单次最多保留 1000 条且只接受已知终端 ID；删除终端时同步删除任务记录。当前终端标题栏新增“任务历史”入口，显示最近 20 条任务、状态、时间、耗时和错误信息。旧版没有 `tasks` 字段的状态文件会自动按空列表兼容加载。
+
+新增 `src/main/task-history.cjs` 和 `tests/task-history.test.cjs`，验证任务输入清洗；状态清洗测试覆盖孤立终端、非法时间和任务字段。
+
+验证：`npm test` 122 passed, 0 failed；`npm run build` 通过；`git diff --check` 无实际格式错误；`npm start` 能启动 Electron，随后由本会话主动停止。Vite 仍提示 renderer bundle 大于 500KB，该警告未影响构建。
+
+剩余限制：任务提示词依赖终端输入事件，TUI 内部提交可能没有可读文本；真实 Claude/Codex/opencode 任务仍需在 Windows 环境安装 Hook/插件后验收；当前未执行签名发布和干净环境升级测试。
+
+## 6.23 真实 CLI 预检批次（2026-11-06）
+
+新增只读 `scripts/cli-preflight.cjs` 和 `npm run preflight:cli`。它检查已安装 CLI 版本、Hook 客户端、用户目录下的 opencode 插件和 Claude settings 是否包含 `termbeacon-hook.cjs`，支持 `--json` 输出和 `--strict` 验收模式，不会修改用户配置或调用模型。
+
+本机实测：opencode v2.2.1、Codex CLI 0.166.0、Claude Code 2.1.318 的 `--version` 和 `--help` 均通过；Hook 客户端和插件源码语法通过；`C:\Users\fairm\.config\opencode\plugin\termbeacon.js` 已存在。`C:\Users\fairm\.claude\settings.json` 仍未配置 TermBeacon Hook，因此 `npm run preflight:cli -- --strict` 按预期返回退出码 1。
+
+新增预检测试后，`npm test` 为 134 passed，`npm run build` 通过。opencode 插件现在已安装，下一步只需合并 Claude Hook 设置，再执行最小任务、权限等待、失败和 `Ctrl+C` 四类真实场景；本阶段不自动发起可能产生 API 消耗的模型任务。
+
+## 6.24 Claude Hook 配置器（2026-11-06）
+
+新增 `npm run hooks:configure:claude`，以及 `scripts/hooks-install.cjs --configure-claude`。配置器默认目标为用户级 `~/.claude/settings.json`，支持 `--project` 写入当前项目的 `.claude/settings.json`，也支持 `--settings <path>` 指定文件。它解析并保留已有顶层字段和 Hook，只追加缺失的 TermBeacon Hook；已有配置会先生成带时间戳的 `.bak-*` 备份，再通过临时文件原子替换，重复执行保持幂等。JSON 无效时直接失败且不写回原文件。
+
+默认的 `preflight:cli` 仍是只读检查，不会自动调用配置器；只有显式执行 `hooks:configure:claude` 才会修改 Claude settings。下一阶段在用户确认配置已就绪后，再进行真实 CLI 的最小任务、权限等待、失败和 `Ctrl+C` 验收，避免未经授权产生模型调用费用。
+
+验证：`npm test` 137 passed，`npm run build` 通过，`npm run preflight:cli -- --json` 输出当前三种 CLI 与 Hook 就绪状态；严格预检仍因本机 Claude settings 尚未配置而按预期返回退出码 1。
+
+## 6.25 真实 CLI 验收准备与 capture 审计（2026-11-06）
+
+新增只读 `scripts/cli-capture-audit.cjs` 和 `npm run audit:cli-capture`。它解析 `cli-record` 生成的 JSONL，只输出 agent/version、时长、记录与字节统计、OSC 标题信号数量、输入记录数量、错误数、退出回执和结构审计结论，不输出提示词、终端正文或原始环境字段。`fixtureEligible` 只表示存在 meta、任务输入、自然退出且无录制错误；`reviewReasons` 明确缺失退出、非零退出或录制错误等原因。新增测试覆盖格式错误、超时 capture 和敏感正文不泄露。
+
+新增 `scripts/cli-capture-to-fixture.cjs` 和 `npm run fixture:from-capture`。转换器要求显式 `--sanitized`，剥离命令、可执行路径、平台、启动时间等环境元数据，默认把输入替换为 `[task]`，保留回放需要的 output/tick/hook，补充用户指定的 `assert.state`，并丢弃 capture 的 exit/error 记录。它不会自动声称业务成功；输出流和期望状态仍需人工复核。
+
+本机无模型调用的 ConPTY 冒烟矩阵已通过：`npm run smoke:cli -- --version` 与 `npm run smoke:cli -- --help` 均对 opencode v2.2.1、Codex CLI 0.166.0、Claude Code 2.1.318 返回退出码 0。审计现有 capture 的结果是：Claude 任务录制有自然退出回执；Codex 和 opencode 录制达到录制时限后停止，没有自然退出回执，因此只能作为诊断材料，不能当作真实任务成功证据。
+
+当前工作区已将 opencode 插件测试更新到 V2 `default export + setup(ctx)` 契约，避免插件迁移后旧 V1 测试误报。验证：`npm test` 139 passed，`npm run build` 通过，capture 审计命令通过。随后只读预检发现 Claude Hook settings 已配置，`npm run preflight:cli -- --strict` 现已通过，说明真实交互验收前置条件就绪。下一步仍需用户在已配置账号的 Windows 环境中手动完成最小任务、权限等待、失败和 `Ctrl+C` 四类真实场景；本阶段不自动触发模型调用。
+
+## 6.26 Capture 到 fixture 的受控转换（2026-11-06）
+
+新增 `scripts/cli-capture-to-fixture.cjs` 和 `npm run fixture:from-capture`。转换器要求显式传入 `--sanitized`，剥离原始命令、可执行路径、平台和启动时间等环境元数据，默认把输入替换为 `[task]`，保留回放所需的 output/tick/hook，补充指定的 `assert.state`，并丢弃 capture 的 exit/error 记录。它只处理人工审核后的 capture，不把转换结果自动视为业务成功。
+
+验证：`npm test` 147 passed，`npm run build` 通过；用现有 Claude capture 做过生成流程验证后已删除临时输出，未把未人工脱敏的真实终端正文加入仓库。`npm run preflight:cli -- --strict` 继续通过。
+
+## 6.27 Claude 真实标题派生 fixture（2026-11-06）
+
+从现有 Windows Claude capture 中只提取白名单标题 `◐/◑/✳ Claude Code`，加入 `tests/fixtures/agents/claude-real-title-task.jsonl`。fixture 使用 `[task]` 脱敏输入和最终 `completed-unseen` 断言，保留真实时间间隔，任务正文、命令、路径和退出记录均未写入。它验证 Claude 的 OSC 标题工作/空闲检测路径，不代表 Claude Hook、权限等待或业务结果已经完成验收。
+
+验证：`npm test` 148 passed，`git diff --check` 通过。下一份真实 fixture 应覆盖 Hook `Stop` 或权限 `Notification` 事件，并继续保持正文脱敏。
+
+录制器新增可选 `--hook-log`。启用后会为被录制 CLI 启动独立 loopback Hook bridge，把收到的事件以 `{ kind: "hook", event, status, at }` 写入同一 capture，并在退出时关闭 bridge；默认关闭，不改变既有录制路径。下一次 Claude/opencode 真实录制可同时保留输出和 Hook 证据。
+
+本地 fake CLI 验证已确认 `UserPromptSubmit → running` 与 `Stop → completed` 能写入 capture，且进程自然退出；新增录制器参数回归测试。真实 Claude 权限/完成场景仍需在实际 CLI 中录制。
+
+## 6.28 录制器 Hook bridge 回归（2026-11-06）
+
+修复 `scripts/cli-record.cjs` 对 `--hook-log` 的参数解析：带连字符的布尔选项现在正确映射为 `hookLog`。新增 `tests/cli-record.test.cjs`，覆盖 Hook 开关和输入过滤；本地 fake CLI 通过录制器验证了 `UserPromptSubmit`/`Stop` Hook 事件、bridge 环境注入和自然退出清理。
+
+验证：`npm test` 150 passed，`npm run build` 通过，`git diff --check` 通过。临时 fake CLI 和 capture 已删除。
+
+## 6.29 终端标题、CLI 标签与工作区顶栏修复（2026-11-06）
+
+本轮修复左侧终端栏和右侧工作区顶栏：
+
+- `TerminalInstance.titlePinned` 记录用户是否手动重命名。保存到 `state.json`，恢复时自动回填旧版状态文件，并阻止 shell/CLI 的 OSC 0/2 标题覆盖用户标题。
+- 恢复终端时将运行态 `agentType` 重置为 `generic`，等待本次 PTY 输出重新识别 Codex、Claude Code 或 opencode；因此没有启动 opencode 的终端不会显示旧的 opencode。
+- Windows 主进程和渲染器 fallback 默认 Shell 改为 `powershell.exe`；cmd.exe、PowerShell 7 仍在设置选项中保留。
+- 左侧条目移除第三行 cwd/输出摘要，只保留标题、CLI 或 Shell 名称和状态。
+- 右侧顶栏移除重复的可编辑标题，只保留可点击的当前项目路径；路径选择行为不变。
+- 状态保存防抖从 1000ms 调整为 150ms，降低改名后快速退出导致的丢失窗口。
+
+验证：`npm test` 151 passed，`npm run build` 通过。待 Windows 真机手工验收：改名后立即关闭并重启、旧 `state.json` 迁移、PowerShell 默认提示符，以及运行 CLI 后标签是否更新为实际 CLI 名称。

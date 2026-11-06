@@ -8,6 +8,7 @@ test("platform defaults use the current user's home directory and shell", () => 
   assert.equal(platformInfo().cwd, os.homedir());
   assert.equal(platformInfo().shell, defaultShell());
   assert.ok(defaultShell().length > 0);
+  if (process.platform === "win32") assert.equal(defaultShell({ ComSpec: "C:\\Windows\\System32\\cmd.exe" }), "powershell.exe");
 });
 
 test("absolute cwd validation follows the host platform", () => {

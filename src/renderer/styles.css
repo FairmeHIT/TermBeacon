@@ -62,6 +62,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   color: var(--text);
   background: var(--app-bg);
 }
+.app-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
 
 /* Sidebar */
 .sidebar {
@@ -91,31 +92,49 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   justify-content: space-between;
   padding: 0 6px;
 }
+.brand-actions { display: flex; gap: 6px; align-items: center; }
 .brand {
   position: relative;
-  padding-left: 16px;
   font-size: 14px;
   font-weight: 650;
   letter-spacing: .01em;
   line-height: 20px;
 }
-.brand::before {
-  content: "";
-  position: absolute;
-  top: 6px;
-  left: 1px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
 .subtitle {
-  margin: 2px 0 0 16px;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: 10px;
   letter-spacing: .03em;
   line-height: 16px;
+}
+.sidebar-toggle {
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--accent);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
+  cursor: pointer;
+}
+.sidebar-toggle:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--panel-active);
+}
+.sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 .add-button, .sidebar-tool {
   display: inline-flex;
@@ -131,31 +150,49 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: transparent;
   cursor: pointer;
 }
-.add-button { font-size: 20px; font-weight: 300; line-height: 1; }
+.add-button {
+  color: var(--text);
+  border-color: var(--border-strong);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.add-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
 .add-button:hover, .sidebar-tool:hover, .sidebar-tool.active {
   color: var(--text);
   border-color: var(--border);
   background: var(--panel-soft);
 }
+.add-button:hover { color: var(--accent); border-color: var(--accent); background: var(--panel-active); }
 
 .workspace-chips {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 min(42vh, 320px);
   gap: 4px;
-  align-items: center;
+  align-items: stretch;
   margin: 8px -2px 12px;
+  min-height: 38px;
   padding: 0 2px 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
 }
-.workspace-chips::-webkit-scrollbar { display: none; }
 .workspace-chip {
   position: relative;
   display: flex;
   flex-shrink: 0;
   gap: 3px;
   align-items: center;
-  max-width: 150px;
+  max-width: none;
   min-height: 28px;
   padding: 4px 8px;
   color: var(--muted);
@@ -165,6 +202,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: transparent;
   cursor: pointer;
 }
+.workspace-chip:not(.add-chip) { width: 100%; justify-content: space-between; }
 .workspace-chip:hover { color: var(--text-soft); background: var(--panel-soft); }
 .workspace-chip.active {
   color: var(--text);
@@ -172,27 +210,44 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--panel-active);
 }
 .workspace-chip strong {
+  min-width: 0;
   overflow: hidden;
   font-size: 11px;
   font-weight: 550;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .workspace-remove {
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  padding: 0 2px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
+  font-size: 15px;
+  line-height: 18px;
+  border-radius: 4px;
+  cursor: pointer;
 }
-.workspace-chip:hover .workspace-remove, .workspace-chip:focus-visible .workspace-remove { display: inline; }
 .workspace-remove:hover { color: var(--danger); }
 .workspace-chip.add-chip {
-  padding: 3px 8px;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 8px;
   color: var(--muted);
-  font-size: 17px;
-  font-weight: 300;
+  font-size: 11px;
+}
+.workspace-chip.add-chip svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 .workspace-chip.add-chip:hover { color: var(--accent); }
 
@@ -298,15 +353,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.terminal-copy em {
-  overflow: hidden;
-  color: var(--quiet);
-  font-size: 10px;
-  font-style: normal;
-  line-height: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .active-mark { display: none; }
 .title-input {
   width: 100%;
@@ -380,6 +426,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   border-radius: 8px;
   background: var(--panel-bg);
   box-shadow: var(--overlay-shadow);
+}
+.sidebar-toggle-collapsed {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 5;
 }
 .settings-title { color: var(--text); font-size: 12px; font-weight: 650; }
 .settings-caption { margin: 14px 0 7px; color: var(--muted); font-size: 10px; }
@@ -463,6 +515,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   border-bottom: 1px solid var(--border);
   background: var(--app-bg);
 }
+.app-shell.sidebar-collapsed .workspace-header { padding-left: 64px; }
 .workspace-header > div:first-child { min-width: 0; overflow: hidden; }
 .workspace-header strong {
   display: block;
@@ -475,10 +528,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .workspace-header span {
   display: block;
-  margin-top: 2px;
   color: var(--muted);
-  font-size: 10px;
-  line-height: 15px;
+  font-size: 11px;
+  line-height: 18px;
 }
 .cwd-picker {
   overflow: hidden;
