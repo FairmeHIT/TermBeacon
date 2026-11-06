@@ -32,8 +32,8 @@ npm run dist:publish
 发布前必须先推送 tag：GitHub 拒绝为不存在的 tag 创建“已发布”Release，electron-builder 会返回 422 `Published releases must have a valid tag`。
 
 ```powershell
-git tag v0.1.1
-git push origin v0.1.1
+git tag vX.Y.Z
+git push origin vX.Y.Z
 npm run dist:publish
 ```
 

@@ -466,3 +466,15 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 - 状态保存防抖从 1000ms 调整为 150ms，降低改名后快速退出导致的丢失窗口。
 
 验证：`npm test` 151 passed，`npm run build` 通过。待 Windows 真机手工验收：改名后立即关闭并重启、旧 `state.json` 迁移、PowerShell 默认提示符，以及运行 CLI 后标签是否更新为实际 CLI 名称。
+
+## 6.30 0.1.8 发布与工作区清理（2026-11-06）
+
+本批把此前未提交的任务历史、真实 CLI 工具链和终端标签修复合并为 0.1.8：
+
+- 任务历史第一版（`TaskRecord`、`state.json.tasks`、“任务历史”面板）与 `src/main/task-history.cjs`。
+- 只读的 `preflight:cli`、`audit:cli-capture`、`fixture:from-capture` 脚本和 `hooks:configure:claude` 幂等配置器。
+- 录制器 `--hook-log`、opencode 插件 V2 契约测试，以及脱敏派生的 `claude-real-title-task.jsonl`。
+- `titlePinned` 标题固定、恢复时重置 `agentType`、Windows 默认 PowerShell、可折叠侧栏和 150ms 状态保存防抖。
+- 本地验证产物目录 `artifacts/` 加入 `.gitignore`，不再入库；仓库只保留源码、文档和测试。
+
+验证：`npm test` 153 passed, 0 failed；`npm run build` 通过。安装包仍为未签名版本（未配置 `CSC_LINK`），Windows 首次运行会出现 SmartScreen 提示。
