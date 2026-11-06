@@ -477,4 +477,4 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 - `titlePinned` 标题固定、恢复时重置 `agentType`、Windows 默认 PowerShell、可折叠侧栏和 150ms 状态保存防抖。
 - 本地验证产物目录 `artifacts/` 加入 `.gitignore`，不再入库；仓库只保留源码、文档和测试。
 
-验证：`npm test` 153 passed, 0 failed；`npm run build` 通过。安装包仍为未签名版本（未配置 `CSC_LINK`），Windows 首次运行会出现 SmartScreen 提示。
+验证：`npm test` 153 passed, 0 failed；`npm run build` 通过。`v0.1.8` 已发布：https://github.com/FairmeHIT/TermBeacon/releases/tag/v0.1.8 ，资产为 `TermBeacon-0.1.8-setup.exe`（95,723,340 B）、`.blockmap` 和 `latest.yml`；重新下载安装包计算出的 sha512 与 `latest.yml` 一致。安装包仍为未签名版本（未配置 `CSC_LINK`），Windows 首次运行会出现 SmartScreen 提示。
