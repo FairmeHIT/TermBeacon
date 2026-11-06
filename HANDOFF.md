@@ -370,10 +370,20 @@ MVP 的核心架构、终端链路、持久化和打包已经落地。当前最�
 
 正式包已接入 `electron-updater` 和 GitHub Releases 发布源。打包时可用 `GH_TOKEN` 发布，Windows 代码签名使用 `CSC_LINK`/`CSC_KEY_PASSWORD`，设置 `TERMBEACON_FORCE_SIGNING=1` 可强制缺证书时失败。已下载更新会在界面提示“重启并安装”；开发模式不会检查更新。
 
-验证：`npm run build` 通过；`npm test` 112 passed, 0 failed。尚未执行真实签名或 GitHub 发布，需要在具备证书和发布 token 的环境运行 `npm run dist:publish`。
+验证：`npm run build` 通过；`npm test` 112 passed, 0 failed。首次 GitHub 发布已在 6.20 完成（未签名）。
 
 ## 6.19 macOS 平台支持合并（2026-11-06）
 
 macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shell 为 `/bin/zsh`，新建终端默认工作目录使用主进程返回的用户 Home；渲染器通过 `platform:info` IPC 获取运行时平台、Shell 和 CWD，保留 `/bin/bash` 作为可选 Shell。GUI 启动时继续补全用户 PATH，CLI discovery、PTY 参数校验、平台检测和 CLI smoke 测试均保留。
 
 本次合并保留了 0.1.1 的 auto-update、hook bridge、PTY Host 恢复、工作区与窗口布局持久化、终端历史、CWD picker 和发布脚本。合并后应在 macOS 上执行 `npm run build`、`npm test`、`npm run smoke:cli`，并使用 `npm run dist:mac` 验证 Electron 打包。
+
+## 6.20 首次 GitHub Release 发布（2026-11-06）
+
+`v0.1.1` 已发布：https://github.com/FairmeHIT/TermBeacon/releases/tag/v0.1.1 。资产为 `TermBeacon-0.1.1-setup.exe`（95,719,188 B）、`.blockmap` 和 `latest.yml`，`latest.yml` 的 sha512 与安装包一致。安装包未签名（未配置 `CSC_LINK`），Windows 首次运行会出现 SmartScreen 提示。
+
+发布流程问题：electron-builder 的 GitHub provider 配置为 `releaseType: "release"` 时，GitHub 要求 tag 已存在，否则创建 Release 返回 422 `Published releases must have a valid tag`。首次发布在 tag 推送前执行，exe 已上传成功，但 `latest.yml` 和 `.blockmap` 缺失；补推 tag 后用 GitHub Assets API 手工补传，并核对 `latest.yml` 的下载内容与本地一致。后续发布顺序应为：`git tag vX.Y.Z` → `git push origin vX.Y.Z` → `npm run dist:publish`（或用项目外输出目录加 `--publish always`）。
+
+构建产物目录收敛为 `release/`：`release-out/` 是 2026-11-05 22:00/22:42 两次 EBUSY 失败构建残留的 `default_app.asar` 碎片（219 KB），已删除；`.gitignore` 保留该条目以防历史残留重现。`release/` 现含 0.1.1 安装包、blockmap、latest.yml 和 0.1.1 的 `win-unpacked`；0.1.0 旧包暂留。
+
+验证：合并 macOS 平台支持后 `npm test` 119 passed, 0 failed；`npm run build` 通过。本次发布产物对应 tag `v0.1.1`（提交 `2eb02a2`）；`main` 上随后合入的 macOS 平台支持（`61033db`）尚未进入该安装包，需要下一版（0.1.2）发布。
