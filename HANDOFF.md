@@ -478,3 +478,15 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 - 本地验证产物目录 `artifacts/` 加入 `.gitignore`，不再入库；仓库只保留源码、文档和测试。
 
 验证：`npm test` 153 passed, 0 failed；`npm run build` 通过。`v0.1.8` 已发布：https://github.com/FairmeHIT/TermBeacon/releases/tag/v0.1.8 ，资产为 `TermBeacon-0.1.8-setup.exe`（95,723,340 B）、`.blockmap` 和 `latest.yml`；重新下载安装包计算出的 sha512 与 `latest.yml` 一致。安装包仍为未签名版本（未配置 `CSC_LINK`），Windows 首次运行会出现 SmartScreen 提示。
+
+## 6.31 发版流程固化为项目 skill（2026-11-06）
+
+新增 `.opencode/skills/release/`，把 0.1.8 的实际发版过程固化为 OpenCode 项目级 skill（ID `release`，会自动发现）：
+
+- `SKILL.md`：硬性规则（先推 tag 再建 Release、产物不入库、未签名如实说明）+ 9 步流程 + 故障处置表。
+- `scripts/create-release.mjs`：创建/复用 GitHub Release 并上传 `exe`、`.blockmap`、`latest.yml`；上传前校验 `--version` 与 `latest.yml` 一致、本地 sha512 与清单一致；`--verify-download` 重新下载并比对；`--dry-run`、`--verify-only` 供复查；token 优先取 `GH_TOKEN`/`GITHUB_TOKEN`，回退 `git credential fill`（本机无 `gh` CLI）。
+- `references/lesson-log.md`：422、EBUSY、api.github.com 超时、更新源是 `github.com/releases.atom`、未签名、`release/` 累积、PowerShell 伪失败等踩坑记录。
+
+修正 `.gitignore`：`release/` 改为 `/release/`，避免误伤 `.opencode/skills/release/`。
+
+验证：`npm test` 157 passed, 0 failed（新增 `tests/release-skill.test.cjs` 覆盖 `parseArgs`、`parseLatestYml`、`sha512File` 与无副作用导入）；`create-release.mjs --version 0.1.8 --dry-run`、`--verify-only` 与幂等重跑（全部 skip）均通过。

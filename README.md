@@ -18,6 +18,8 @@ npm start
 
 ## 发布、签名与自动更新
 
+> 完整发版流程（提交 → 升版号 → tag → push → 构建 → 上传资产 → 校验）已固化为项目 skill：`.opencode/skills/release/SKILL.md`。在 OpenCode 里说“发布新版本”即可自动加载，或用 `@release` 显式调用；其中 `scripts/create-release.mjs` 也可脱离 OpenCode 单独运行。
+
 窗口大小、位置、最大化状态和侧栏宽度会保存到 Electron `userData/state.json`。每个终端的最近滚动内容会以磁盘快照保存到 `userData/terminal-history/`，单终端上限约 250 KB，低频批量写入，重启后自动恢复。
 
 正式发布使用 GitHub Releases。先设置 `GH_TOKEN`，Windows 代码签名使用 electron-builder 的 `CSC_LINK` 和 `CSC_KEY_PASSWORD` 环境变量，然后运行：
