@@ -6,6 +6,10 @@ import "@xterm/xterm/css/xterm.css";
 import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, ShellType, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
 import "./styles.css";
 
+// Mirrors the payload the main process sends on update:event and returns from
+// update:check / update:state.
+type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
+
 declare global {
   interface CliInfo {
     id: AgentType;
@@ -26,6 +30,8 @@ declare global {
       appendHistory(terminalId: string, data: string): Promise<boolean>;
       removeHistory(terminalId: string): Promise<boolean>;
       installUpdate(): Promise<boolean>;
+      getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
+      checkForUpdates(): Promise<UpdateStatus>;
       restartHost(): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -43,8 +49,26 @@ declare global {
       onTitle(listener: (event: PtyTitleEvent) => void): () => void;
       onCwd(listener: (event: PtyCwdEvent) => void): () => void;
       onAgent(listener: (event: PtyAgentEvent) => void): () => void;
-      onUpdate(listener: (event: { type: string; version?: string; percent?: number; message?: string }) => void): () => void;
+      onUpdate(listener: (event: UpdateStatus) => void): () => void;
     };
+  }
+}
+
+// One line of feedback for the settings popover, derived from the last update
+// event so it stays in sync with the banner above the terminal.
+function describeUpdate(status: UpdateStatus | null, packaged: boolean) {
+  if (!packaged) return "开发模式（未打包），不检查更新";
+  if (!status) return "";
+  switch (status.type) {
+    case "checking": return "正在检查更新…";
+    case "available": return `发现新版本 ${status.version ?? ""}，正在后台下载…`;
+    case "downloading": return `正在下载更新 ${Math.round(status.percent || 0)}%`;
+    case "not-available": return "已是最新版本";
+    case "downloaded": return `新版本 ${status.version ?? ""} 已下载，重启应用即可安装`;
+    case "disabled": return "已禁用更新检查（TERMBEACON_DISABLE_UPDATES=1）";
+    case "unsupported": return status.message ?? "当前版本不支持自动更新";
+    case "error": return `检查失败：${status.message ?? "未知错误"}`;
+    default: return "";
   }
 }
 
@@ -189,7 +213,10 @@ function App() {
   const [hostDown, setHostDown] = useState(false);
   const [hostMessage, setHostMessage] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(300);
-  const [updateState, setUpdateState] = useState<{ type: string; version?: string; percent?: number; message?: string } | null>(null);
+  const [updateState, setUpdateState] = useState<UpdateStatus | null>(null);
+  const [appVersion, setAppVersion] = useState("");
+  const [appPackaged, setAppPackaged] = useState(true);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
@@ -329,6 +356,13 @@ function App() {
         : item));
     });
     const disposeUpdate = window.termbeacon.onUpdate((event) => setUpdateState(event));
+    // The automatic check runs before this renderer mounts, so read the last
+    // known result instead of assuming idle (a download may already be running).
+    void window.termbeacon.getUpdateState().then((info) => {
+      setAppVersion(info.currentVersion);
+      setAppPackaged(info.packaged);
+      if (info.status.type !== "idle") setUpdateState(info.status);
+    }).catch(() => undefined);
     const flushOnVisibilityChange = () => { if (document.visibilityState === "hidden") flushPendingHistory(); };
     document.addEventListener("visibilitychange", flushOnVisibilityChange);
     window.addEventListener("beforeunload", flushPendingHistory);
@@ -525,6 +559,23 @@ function App() {
     });
   }
 
+  // Manual check from the settings popover. The main process keeps a single
+  // in-flight check, so a double click just returns the current status.
+  async function checkForUpdates() {
+    setUpdateBusy(true);
+    setUpdateState({ type: "checking" });
+    try {
+      const status = await window.termbeacon.checkForUpdates();
+      if (status) setUpdateState(status);
+    } catch (error) {
+      setUpdateState({ type: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  const updateHint = describeUpdate(updateState, appPackaged);
+
   function restartTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
     if (!terminal || terminal.alive) return;
@@ -691,7 +742,7 @@ function App() {
         <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title="打开设置" aria-label="打开设置"><SettingsIcon /></button>
         <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}><ThemeIcon theme={theme} /></button>
         {settingsOpen && <div className="settings-popover">
-          <div className="settings-title">外观</div>
+          <div className="settings-title">设置</div>
           <div className="settings-caption">主题</div>
           <div className="theme-options" role="group" aria-label="主题">
             {(["dark", "light"] as Theme[]).map((option) => <button key={option} className={`theme-option ${theme === option ? "selected" : ""}`} onClick={() => setTheme(option)}><ThemeIcon theme={option} />{option === "dark" ? "深色" : "浅色"}</button>)}
@@ -702,6 +753,13 @@ function App() {
           </select>
           <div className="settings-caption">快捷键</div>
           <div className="settings-note">Ctrl+Shift+T 新建终端 · Ctrl+Shift+W 关闭当前终端 · Ctrl+Shift+↑/↓ 切换终端</div>
+          <div className="settings-caption">更新</div>
+          <div className="settings-update">
+            <span>{appVersion ? `当前版本 ${appVersion}` : "当前版本未知"}</span>
+            <button onClick={() => void checkForUpdates()} disabled={updateBusy || updateState?.type === "downloading"}>{updateBusy ? "检查中…" : "检查更新"}</button>
+          </div>
+          {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
+          {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
         </div>}
       </div>
       <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title="拖动调整侧栏宽度" />

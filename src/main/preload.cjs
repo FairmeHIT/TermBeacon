@@ -128,6 +128,8 @@ contextBridge.exposeInMainWorld("termbeacon", {
   appendHistory: (terminalId, data) => ipcRenderer.invoke("history:append", terminalId, data),
   removeHistory: (terminalId) => ipcRenderer.invoke("history:remove", terminalId),
   installUpdate: () => ipcRenderer.invoke("update:install"),
+  getUpdateState: () => ipcRenderer.invoke("update:state"),
+  checkForUpdates: () => ipcRenderer.invoke("update:check"),
   restartHost: () => ipcRenderer.invoke("pty:restart-host"),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {

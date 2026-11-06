@@ -54,6 +54,11 @@ let stateCache: PersistedState | null = null;
 let windowSaveTimer: NodeJS.Timeout | undefined;
 let updateConfigured = false;
 let quitPersisting = false;
+// Last update result, kept so the settings popover can show it without
+// waiting for a new event (the renderer may open after the startup check).
+type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
+let updateStatus: UpdateStatus = { type: "idle" };
+let updateCheckInFlight = false;
 const historyWrites = new Map<string, Promise<boolean>>();
 
 interface PersistedState {
@@ -114,6 +119,7 @@ function scheduleWindowStateSave() {
 }
 
 function sendUpdateEvent(type: string, payload: Record<string, unknown> = {}) {
+  updateStatus = { type, ...payload } as UpdateStatus;
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send("update:event", { type, ...payload });
 }
@@ -129,7 +135,25 @@ function configureAutoUpdater() {
   autoUpdater.on("download-progress", (progress) => sendUpdateEvent("downloading", { percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendUpdateEvent("downloaded", { version: info.version }));
   autoUpdater.on("error", (error) => sendUpdateEvent("error", { message: error instanceof Error ? error.message : String(error) }));
-  void autoUpdater.checkForUpdates().catch(() => undefined);
+}
+
+// Both the startup check and the settings button go through here, so a second
+// click cannot start a concurrent check and the renderer always gets the last
+// known result back (electron-updater rejects overlapping checks).
+async function checkForUpdatesNow() {
+  if (!app.isPackaged) return { ...updateStatus, type: "unsupported", message: "开发模式（未打包）不检查更新" } as UpdateStatus;
+  if (process.env.TERMBEACON_DISABLE_UPDATES === "1") return { ...updateStatus, type: "disabled", message: "已通过 TERMBEACON_DISABLE_UPDATES 禁用更新" } as UpdateStatus;
+  configureAutoUpdater();
+  if (updateStatus.type === "downloaded" || updateCheckInFlight) return updateStatus;
+  updateCheckInFlight = true;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    sendUpdateEvent("error", { message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    updateCheckInFlight = false;
+  }
+  return updateStatus;
 }
 
 async function loadTerminalHistory(terminalId: string) {
@@ -350,7 +374,7 @@ if (!hasSingleInstanceLock) {
     registerMenu();
     startPtyHost();
     createWindow(stateCache);
-    configureAutoUpdater();
+    void checkForUpdatesNow();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(stateCache || defaultState()); });
   });
 }
@@ -400,6 +424,13 @@ ipcMain.handle("update:install", () => {
   autoUpdater.quitAndInstall(false, true);
   return true;
 });
+ipcMain.handle("update:state", () => ({
+  status: updateStatus,
+  currentVersion: app.getVersion(),
+  packaged: app.isPackaged,
+  configured: updateConfigured,
+}));
+ipcMain.handle("update:check", () => checkForUpdatesNow());
 ipcMain.handle("pty:restart-host", () => {
   if (isQuitting) return false;
   if (hostRestartTimer) {

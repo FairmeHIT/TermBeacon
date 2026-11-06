@@ -107,6 +107,13 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .update-banner, .update-progress { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 7px 18px; color: var(--text-soft); border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 10%, var(--panel-bg)); font-size: 12px; }
 .update-banner button { padding: 5px 9px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel-active); cursor: pointer; font-size: 11px; }
 .update-banner button:hover { color: var(--accent); }
+.settings-update { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted-strong); font-size: 11px; }
+.settings-update button, .settings-install { padding: 5px 9px; color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel-active); cursor: pointer; font-size: 11px; }
+.settings-update button:hover, .settings-install:hover { color: var(--accent); }
+.settings-update button:disabled { opacity: .55; cursor: default; }
+.settings-install { width: 100%; margin-top: 7px; }
+.settings-hint { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.settings-hint.error { color: #f87171; }
 .terminal-stage { position: relative; flex: 1; min-height: 0; padding: 18px; background: radial-gradient(circle at 70% 0%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 36%), var(--panel-bg); }
 .terminal-stage::before { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .18; background-image: linear-gradient(color-mix(in srgb, var(--border) 50%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--border) 50%, transparent) 1px, transparent 1px); background-size: 32px 32px; mask-image: linear-gradient(to bottom, black, transparent 75%); }
 .terminal-host { position: absolute; inset: 18px; z-index: 1; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel-bg); box-shadow: 0 18px 45px rgba(15,23,42,.18), inset 0 1px 0 rgba(255,255,255,.03); }
