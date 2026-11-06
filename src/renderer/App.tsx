@@ -549,11 +549,24 @@ function App() {
     });
   }
 
+  // The rename inputs are rendered inside the chip/terminal <button>, so the
+  // double-click that opens one also reaches the button's onClick. Focusing the
+  // terminal view on the next frame then blurred the fresh input, whose onBlur
+  // commits and unmounts it -- rename looked impossible. Skip the steal while
+  // a title input owns focus.
+  function focusTerminalView(id: string) {
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active.classList.contains("title-input")) return;
+      terminalViews.current.get(id)?.focus();
+    });
+  }
+
   function selectTerminal(id: string) {
     setActiveId(id);
     window.termbeacon.viewed(id);
     setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
-    requestAnimationFrame(() => terminalViews.current.get(id)?.focus());
+    focusTerminalView(id);
   }
 
   function addTerminal() {
@@ -598,7 +611,7 @@ function App() {
     const nextTerminalId = workspaces.find((workspace) => workspace.id === id)?.terminalIds[0];
     if (nextTerminalId && terminals.some((terminal) => terminal.id === nextTerminalId)) {
       setActiveId(nextTerminalId);
-      requestAnimationFrame(() => terminalViews.current.get(nextTerminalId)?.focus());
+      focusTerminalView(nextTerminalId);
     }
   }
 
