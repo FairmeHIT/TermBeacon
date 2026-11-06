@@ -5,6 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
 import taskHistoryUtils from "../main/task-history.cjs";
+import { splitScreenOutput } from "./terminal-screen";
 import "./styles.css";
 
 const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInterrupted } = taskHistoryUtils as {
@@ -148,8 +149,12 @@ function terminalStateLabel(terminal: TerminalInstance): string {
   return stateLabel[terminal.state];
 }
 
+function isClaudeStatusTitle(title: string): boolean {
+  return /^(?:[◐◑✳]\s*)?Claude Code$/i.test(title.trim());
+}
+
 function isGeneratedTerminalTitle(title: string): boolean {
-  return /^终端\s+\d+$/.test(title.trim());
+  return /^终端\s+\d+$/.test(title.trim()) || isClaudeStatusTitle(title);
 }
 
 type Theme = "dark" | "light";
@@ -316,6 +321,9 @@ function App() {
   const workspaceStrip = useRef<HTMLDivElement | null>(null);
   const pendingOutput = useRef(new Map<string, { at: number; summary?: string }>());
   const pendingHistory = useRef(new Map<string, string[]>());
+  const alternateScreenByTerminal = useRef(new Map<string, boolean>());
+  const pendingOpenCodeWheel = useRef(new Map<string, { data: string; frame: number }>());
+  const taskTitles = useRef(new Map<string, string>());
   const historyFlushTimer = useRef<number | null>(null);
   const lastSavedState = useRef("");
   const outputFlushTimer = useRef<number | null>(null);
@@ -336,6 +344,32 @@ function App() {
     pending.forEach((chunks, terminalId) => {
       if (chunks.length > 0) void window.termbeacon.appendHistory(terminalId, chunks.join(""));
     });
+  }
+
+  function isWheelMouseReport(data: string) {
+    // SGR mouse mode encodes wheel-up/down as buttons 64/65. OpenCode emits
+    // these reports while its alternate-screen renderer is active.
+    return /^\x1b\[<6[45];\d+;\d+[mM]$/.test(data);
+  }
+
+  function writeOpenCodeInput(terminalId: string, data: string, agentType?: AgentType) {
+    const detected = agentType ?? agentTypeByTerminal.current.get(terminalId);
+    if (detected !== "opencode" || !isWheelMouseReport(data)) {
+      window.termbeacon.write({ terminalId, data });
+      return;
+    }
+    const previous = pendingOpenCodeWheel.current.get(terminalId);
+    if (previous) {
+      // Keep the newest wheel direction while the current frame is waiting.
+      previous.data = data;
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      const pending = pendingOpenCodeWheel.current.get(terminalId);
+      pendingOpenCodeWheel.current.delete(terminalId);
+      if (pending) window.termbeacon.write({ terminalId, data: pending.data });
+    });
+    pendingOpenCodeWheel.current.set(terminalId, { data, frame });
   }
 
   useEffect(() => {
@@ -408,10 +442,12 @@ function App() {
         if (event.sequence <= seen && !event.replay) return;
         consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
       }
+      const screen = splitScreenOutput(event.data, alternateScreenByTerminal.current.get(event.terminalId) ?? false);
+      alternateScreenByTerminal.current.set(event.terminalId, screen.alternate);
       view?.write(event.data);
-      if (!event.replay) {
+      if (!event.replay && screen.normalData) {
         const chunks = pendingHistory.current.get(event.terminalId) || [];
-        chunks.push(event.data);
+        chunks.push(screen.normalData);
         pendingHistory.current.set(event.terminalId, chunks);
         if (historyFlushTimer.current === null) {
           historyFlushTimer.current = window.setTimeout(() => {
@@ -437,8 +473,10 @@ function App() {
       }
     });
     const disposeState = window.termbeacon.onState((event) => {
+      const prompt = lastInput.current.get(event.terminalId);
+      if (event.current === "working" && prompt) syncClaudeTaskTitle(event.terminalId, prompt);
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState } : item));
-      setTasks((items) => applyTaskEvent(items, event, lastInput.current.get(event.terminalId)));
+      setTasks((items) => applyTaskEvent(items, event, prompt));
     });
     const disposeExit = window.termbeacon.onExit((event) => {
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, alive: false, state: event.reason === "user-kill" || event.exitCode === 0 ? "stopped" : "error" } : item));
@@ -469,6 +507,10 @@ function App() {
     });
     const disposeTitle = window.termbeacon.onTitle((event) => {
       if (pinnedTitles.current.has(event.terminalId)) return;
+      // Claude Code uses OSC 0 for a spinner/status title, not the task name.
+      // Keep the submitted task title in the sidebar instead of replacing it
+      // with the static "Claude Code" label on every redraw.
+      if (isClaudeStatusTitle(event.title)) return;
       setTerminals((items) => items.map((item) => item.id === event.terminalId
         ? { ...item, title: event.title }
         : item));
@@ -557,7 +599,9 @@ function App() {
       if (terminalViews.current.has(terminal.id)) return;
       agentTypeByTerminal.current.set(terminal.id, terminal.agentType);
       const term = new Terminal({
-        convertEol: true,
+        // TUI applications use LF together with cursor movement sequences.
+        // Converting every LF to CRLF shifts the cursor and corrupts redraws.
+        convertEol: false,
         cursorBlink: true,
         fontFamily: "Cascadia Mono, Consolas, monospace",
         fontSize: 14,
@@ -575,7 +619,7 @@ function App() {
           inputBuffers.current.delete(terminal.id);
         } else {
           if (/^\x1b/.test(data)) {
-            window.termbeacon.write({ terminalId: terminal.id, data });
+            writeOpenCodeInput(terminal.id, data, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType);
             return;
           }
           let nextBuffer = buffer;
@@ -608,7 +652,12 @@ function App() {
       void (async () => {
         try {
           const history = await window.termbeacon.loadHistory(terminal.id);
-          if (history && terminalViews.current.get(terminal.id) === term) term.write(history);
+          let historyEndsInAlternateScreen = false;
+          if (history && terminalViews.current.get(terminal.id) === term) {
+            const replay = splitScreenOutput(history);
+            term.write(replay.normalData);
+            historyEndsInAlternateScreen = replay.alternate;
+          }
           const result = await window.termbeacon.createTerminal({
             terminalId: terminal.id,
             title: terminal.title,
@@ -620,10 +669,25 @@ function App() {
             agentType: terminal.agentType,
           });
           const existing = Boolean((result as { existing?: boolean } | undefined)?.existing);
+          if (!existing) {
+            // The saved history can end in a TUI's alternate screen even when
+            // its old process is gone. A fresh shell always starts on normal
+            // screen, so do not carry that parser state into the new PTY.
+            alternateScreenByTerminal.current.set(terminal.id, false);
+          } else if (historyEndsInAlternateScreen) {
+            alternateScreenByTerminal.current.set(terminal.id, true);
+          }
           setTerminals((items) => items.map((item) => item.id === terminal.id
             ? { ...item, alive: true, state: existing ? item.state === "stopped" ? "ready" : item.state : "ready", recoveryState: existing ? "recovered" : item.recoveryState, resumeError: undefined }
             : item));
           if (existing) {
+            // A detached TUI may still be painting its alternate screen in the
+            // PTY host. The disk history intentionally excludes that repaint
+            // traffic, so reconstruct it from the host ring when the history
+            // snapshot ended inside the alternate screen.
+            if (historyEndsInAlternateScreen) {
+              window.termbeacon.replay({ terminalId: terminal.id, fromSequence: 0 });
+            }
             setTasks((items) => items.map((task) => task.terminalId === terminal.id && task.state === "interrupted"
               ? { ...task, state: "working", finishedAt: undefined, recoveryState: "recovered", error: undefined, summary: undefined }
               : task));
@@ -948,6 +1012,11 @@ function App() {
     consumedLocal.current.delete(id);
     terminalNodes.current.delete(id);
     pendingHistory.current.delete(id);
+    alternateScreenByTerminal.current.delete(id);
+    const pendingWheel = pendingOpenCodeWheel.current.get(id);
+    if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
+    pendingOpenCodeWheel.current.delete(id);
+    taskTitles.current.delete(id);
     agentTypeByTerminal.current.delete(id);
     lastInput.current.delete(id);
     inputBuffers.current.delete(id);
@@ -1023,6 +1092,11 @@ function App() {
       consumedLocal.current.delete(terminalId);
       terminalNodes.current.delete(terminalId);
       pendingHistory.current.delete(terminalId);
+      alternateScreenByTerminal.current.delete(terminalId);
+      const pendingWheel = pendingOpenCodeWheel.current.get(terminalId);
+      if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
+      pendingOpenCodeWheel.current.delete(terminalId);
+      taskTitles.current.delete(terminalId);
       agentTypeByTerminal.current.delete(terminalId);
       lastInput.current.delete(terminalId);
       inputBuffers.current.delete(terminalId);
@@ -1049,7 +1123,19 @@ function App() {
 
   function renameTerminal(id: string, title: string) {
     pinnedTitles.current.add(id);
+    taskTitles.current.delete(id);
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title, titlePinned: true } : item));
+  }
+
+  function syncClaudeTaskTitle(id: string, prompt: string) {
+    if (pinnedTitles.current.has(id)) return;
+    if (agentTypeByTerminal.current.get(id) !== "claude") return;
+    const title = normalizeTitleInput(prompt);
+    if (!title || taskTitles.current.get(id) === title) return;
+    taskTitles.current.set(id, title);
+    setTerminals((items) => items.map((item) => item.id === id && !item.titlePinned
+      ? { ...item, title, titlePinned: false }
+      : item));
   }
 
   return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>

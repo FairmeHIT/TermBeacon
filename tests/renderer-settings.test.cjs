@@ -129,6 +129,28 @@ test("terminals spawn with the fitted size instead of a hardcoded grid", () => {
   assert.match(restart, /term\.rows > 1 \? term\.rows : 32/);
 });
 
+test("TUI output keeps native LF handling", () => {
+  assert.match(app, /convertEol:\s*false/);
+  assert.doesNotMatch(app, /convertEol:\s*true/);
+});
+
+test("alternate-screen repaint output is isolated from scrollback", () => {
+  const screen = fs.readFileSync(path.join(__dirname, "../src/renderer/terminal-screen.ts"), "utf8");
+  assert.match(screen, /1049/);
+  assert.match(screen, /1047/);
+  assert.match(screen, /47/);
+  assert.match(app, /splitScreenOutput\(event\.data/);
+  assert.match(app, /if \(!event\.replay && screen\.normalData\)/);
+});
+
+test("OpenCode wheel reports are coalesced per animation frame", () => {
+  assert.match(app, /function isWheelMouseReport\(data: string\)/);
+  assert.match(app, /6\[45\]/);
+  assert.match(app, /requestAnimationFrame\(\(\) =>/);
+  assert.match(app, /detected !== "opencode"/);
+  assert.match(app, /writeOpenCodeInput\(terminal\.id, data/);
+});
+
 test("pty resizes are deduped and debounced", () => {
   // Same-size resizes must never reach the pty twice.
   const applyPtySize = app.match(/function applyPtySize\(id: string, cols: number, rows: number\) \{([\s\S]*?)\n  \}/)?.[1];
@@ -161,6 +183,15 @@ test("workspace titles mirror the folder name until the user renames them", () =
   // Hydration only re-derives names for unpinned workspaces with a folder.
   assert.match(app, /workspace\.namePinned \|\| !workspace\.cwd/);
   assert.match(app, /folderNameFromPath\(workspace\.cwd\)/);
+});
+
+test("Claude task titles stay in the sidebar while OSC status labels are ignored", () => {
+  assert.match(app, /function isClaudeStatusTitle\(title: string\): boolean/);
+  assert.match(app, /return \/\^\(\?:\[◐◑✳\]\\s\*\)\?Claude Code\$\/i\.test/);
+  assert.match(app, /if \(isClaudeStatusTitle\(event\.title\)\) return;/);
+  assert.match(app, /if \(event\.current === "working" && prompt\) syncClaudeTaskTitle\(event\.terminalId, prompt\)/);
+  assert.match(app, /taskTitles\.current\.set\(id, title\)/);
+  assert.match(app, /titlePinned: false/);
 });
 
 test("settings popover is mounted outside the clipped sidebar", () => {
