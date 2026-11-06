@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.json && vite build && node scripts/copy-runtime.mjs",
     "start": "electron .",
     "smoke:cli": "node scripts/cli-smoke.cjs",
+    "preflight:cli": "node scripts/cli-preflight.cjs",
+    "hooks:install": "node scripts/hooks-install.cjs",
     "record:cli": "node scripts/cli-record.cjs",
     "dist": "npm run build && node scripts/dist-win.mjs",
     "dist:publish": "npm run build && electron-builder --win --config electron-builder.config.cjs --publish always",

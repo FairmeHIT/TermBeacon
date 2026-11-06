@@ -49,9 +49,25 @@ npm run record:cli -- --cli claude --name claude-task --task "列出当前目录
 
 录制时正常操作 CLI；也可以在延迟后自动提交 `--task` 指定的任务。完成后退出即可，原始捕获写入 `captures/`（已 gitignore），脱敏后再转成 `tests/fixtures/agents/` 下的 fixture。
 
+开始真实 CLI 验收前，先运行只读预检：
+
+```powershell
+npm run preflight:cli
+npm run preflight:cli -- --json
+```
+
+预检会列出已安装 CLI 版本、Hook 客户端、opencode 插件和 Claude Hook 配置状态。它不会修改用户配置，也不会调用模型；`--strict` 会在插件或 Claude Hook 尚未配置时返回失败，适合验收脚本使用。
+
 ## CLI 状态 Hook
 
 `pty-host` 会在本机回环地址启动一个带随机 token 的 hook 桥，并把地址注入每个 PTY 的环境变量。opencode 插件示例在 `hooks/opencode/termbeacon.js`，Claude Code 设置示例在 `hooks/claude/settings.example.json`，安装说明见 `hooks/README.md`。
+
+```powershell
+npm run hooks:install    # 安装 opencode 插件，每个环境执行一次
+npm run preflight:cli    # 检查 CLI 版本、hook 客户端与插件配置
+```
+
+opencode / Claude Code 这类全屏 TUI 需要装插件或 Hook 才能得到准确状态；只靠文本启发式时可能一直显示"工作中"。完整配置、验证、排查和新机器清单见 `hooks/README.md`。
 
 MVP 当前包含：
 
@@ -64,6 +80,6 @@ MVP 当前包含：
 - 工作中、已完成未查看、就绪、等待输入、异常、已停止状态灯。
 - 基于 prompt、输入和基础等待输入模式的第一版状态检测。
 
-当前状态检测已抽出 Agent Registry，并提供 opencode、Codex、Claude Code 和 generic CLI 的 JSONL fixture 回放测试。原生 Hook 已提供统一入口，OSC 9;4 已作为辅助评分信号接入；host 侧已用 250 ms 定时器驱动检测器，终端静默后无需后续输出也能完成确认。真实 CLI 交互 fixture 和 Hook 配置仍在推进中。
+当前状态检测已抽出 Agent Registry，并提供 opencode、Codex、Claude Code 和 generic CLI 的 JSONL fixture 回放测试。原生 Hook 已提供统一入口，OSC 9;4 已作为辅助评分信号接入；host 侧已用 250 ms 定时器驱动检测器，终端静默后无需后续输出也能完成确认。任务历史会保存到 `state.json.tasks` 并在当前终端的“任务历史”面板显示。Hook/插件的安装、验证与排查见 `hooks/README.md`。
 
 
