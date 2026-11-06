@@ -100,8 +100,8 @@ const agentLabel: Record<AgentType, string> = {
 type Theme = "dark" | "light";
 
 const terminalThemes: Record<Theme, { background: string; foreground: string; cursor: string }> = {
-  dark: { background: "#111827", foreground: "#e5e7eb", cursor: "#93c5fd" },
-  light: { background: "#f8fafc", foreground: "#1e293b", cursor: "#2563eb" },
+  dark: { background: "#101215", foreground: "#d7dce3", cursor: "#8ab8ed" },
+  light: { background: "#ffffff", foreground: "#29313b", cursor: "#2563a8" },
 };
 
 declare global {
