@@ -536,3 +536,26 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 - 断开 UI 不会结束任务；host 崩溃仍会触发原有错误和重启路径。Windows 系统重启后 host 进程无法保留，CLI session resume 适配器仍属于后续批次。
 
 验证：`npm test` 通过；`npm run build` 通过；Windows 本机 Named Pipe 验证确认 UI 主进程结束后 host PID 继续存活，重新连接同一 `terminalId` 返回 `existing: true` 并可继续写入 PTY。
+
+## 6.36 工作区侧栏重构与 TUI 乱码修复（2026-11-06）
+
+本批收编此前遗留的 hook-server / host-app / session-resume 未提交改动，并完成侧栏信息架构重构与偶发 TUI 错位乱码的根治。
+
+侧栏与工作区：
+
+- 侧栏拆分为「工作区」「终端」两个带标题的独立分区，各自的 + 按钮只作用于本分区。
+- 工作区改为按本地文件夹创建（目录选择器），文件夹名默认成为工作区标题（双击可改名，改名后 `namePinned` 固定不再被覆盖）；工作区卡片下方以等宽字体显示目录路径。
+- 工作区内新建终端默认以工作区目录为 `cwd`；删除工作区最后一个终端时的替补终端同样继承。
+- 移除右侧顶栏的目录显示，移除右上角「任务历史」入口与面板；`TaskRecord` 采集与 state.json 持久化（上限 1000 条）完整保留，供后续任务列表 UI 使用。
+- 移除空置的右侧顶栏，终端全高显示；「重启终端」改为终端停止时悬浮于右上角的按钮。
+
+TUI 乱码修复（症状：agent 输出期间偶发错位乱码，最大化/恢复或切换终端可恢复，滚动不可恢复；根因是 PTY 尺寸与 xterm 不同步导致 TUI 坐标错位）：
+
+- 创建终端时先 fit 出真实容器尺寸再建 PTY，替换硬编码 120x32；`restartTerminal` 同样取 xterm 活跃尺寸。
+- resize 去重：记录每个终端最后发送的 cols/rows（`sentSizes`），尺寸不变不发 IPC，消灭拖拽侧栏时的 resize 风暴。
+- resize 防抖：容器尺寸变化期间本地立即 fit，PTY 通知 50ms 合并，只把最终稳定尺寸送达应用。
+- `convertEol` 关闭：TUI 用 LF 加光标移动序列绘制，把每个 LF 转成 CRLF 会让光标错位。
+- 新增 `src/renderer/terminal-screen.ts`：按 DEC 私有模式（47/1047/1049）跟踪备用屏幕，把 TUI 重绘流量排除在持久历史之外；历史快照结束于备用屏时用 host ring buffer 重放还原界面。
+- opencode 滚轮上报按动画帧合并，避免滚动风暴。
+
+验证：`npm test` 186 passed, 0 failed；`npm run build` 通过（仅有 Vite chunk 体积警告）。
