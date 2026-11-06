@@ -1,5 +1,4 @@
 import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen, utilityProcess } from "electron";
-import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFile, copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
@@ -7,6 +6,9 @@ import { createRequire } from "node:module";
 import type { ShellType, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 
 const require = createRequire(import.meta.url);
+// electron-updater is CommonJS; a named ESM import fails at runtime with
+// "Named export 'autoUpdater' not found". Load it through createRequire.
+const { autoUpdater } = require("electron-updater") as typeof import("electron-updater");
 const { discoverAll } = require("./cli-discovery.cjs") as {
   discoverAll: () => Record<string, unknown>;
 };
