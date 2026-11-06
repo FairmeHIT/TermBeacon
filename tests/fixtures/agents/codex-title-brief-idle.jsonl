@@ -1,0 +1,7 @@
+{"kind": "meta", "agent": "codex", "name": "title-brief-idle", "description": "真实标题流：2 秒的纯标题空档不足以完成"}
+{"kind": "input", "data": "列出当前目录下的文件，然后用一句话总结\r", "at": 0}
+{"kind": "output", "data": "\u001b]0;⠋ 75_TermBeacon\u0007", "at": 1000}
+{"kind": "output", "data": "\u001b]0;75_TermBeacon\u0007", "at": 5000}
+{"kind": "output", "data": "\u001b]0;⠙ 75_TermBeacon\u0007", "at": 6000}
+{"kind": "tick", "at": 9000}
+{"kind": "assert", "state": "working"}

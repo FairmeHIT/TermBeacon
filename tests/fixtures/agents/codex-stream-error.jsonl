@@ -1,0 +1,7 @@
+{"kind": "meta", "agent": "codex", "name": "stream-error", "description": "真实输出：Stream disconnected 后进入异常并保持"}
+{"kind": "input", "data": "列出当前目录下的文件，然后用一句话总结\r", "at": 0}
+{"kind": "output", "data": "\u001b]0;⠋ 75_TermBeacon\u0007", "at": 1000}
+{"kind": "output", "data": "  └ Stream disconnected before completion: Our servers are currently overloaded.\r\n", "at": 2000}
+{"kind": "output", "data": "\u001b]0;75_TermBeacon\u0007", "at": 5000}
+{"kind": "tick", "at": 9000}
+{"kind": "assert", "state": "error"}

@@ -1,10 +1,16 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createDetector } = require("../src/main/detection-engine.cjs");
+const { createDetector, parseOscTitle } = require("../src/main/detection-engine.cjs");
 
 function make() {
   const updates = [];
   const detector = createDetector("generic", (update) => updates.push(update));
+  return { detector, updates };
+}
+
+function makeAgent(agent) {
+  const updates = [];
+  const detector = createDetector(agent, (update) => updates.push(update));
   return { detector, updates };
 }
 
@@ -81,10 +87,194 @@ test("missing tool-end marker is bounded by the tool grace window", () => {
   assert.equal(updates.at(-1).current, "completed-unseen");
 });
 
-test("OSC completion progress alone does not complete a task", () => {
+test("OSC completion progress alone does not complete within short quiet windows", () => {
   const { detector, updates } = make();
   detector.input("run task\r");
   detector.output("\u001b]9;4;1;100\u0007", 1000);
-  detector.tick(10000);
+  // The old invariant was relaxed: OSC alone can now settle, but only after
+  // the extended (3x) quiet window; the normal window must not fire.
+  detector.tick(4000);
   assert.equal(updates.at(-1).current, "working");
+});
+
+test("OSC progress 100 settles at low confidence after the extended quiet window", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  // candidateMs is 1200, oscOnlyConfirmMs is confirmMs * 3 = 7500.
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).confidence, 0.6);
+  assert.equal(updates.at(-1).source, "osc");
+});
+
+test("OSC progress 100 does not settle within the normal confirm window", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  detector.tick(4000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("OSC state 0 counts as completion evidence for the osc-only path", () => {
+  const { detector, updates } = make();
+  detector.input("run task\r");
+  detector.output("\u001b]9;4;0;\u0007", 1000);
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).source, "osc");
+});
+
+test("OSC completion accelerates a text-evidenced candidate", () => {
+  const { detector, updates } = make();
+  detector.input("build\r");
+  detector.output("\u001b]9;4;1;100\u0007Done\r\n$ ", 1000);
+  // confirmMs is 2500, halved to 1250 by OSC evidence; candidate age 1400ms
+  // at tick(2400) is beyond it while remaining below the plain 2500ms window.
+  detector.tick(2400);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).confidence, 0.88);
+});
+
+test("unarmed OSC progress without user activity never settles", () => {
+  const { detector, updates } = make();
+  detector.output("\u001b]9;4;1;100\u0007", 1000);
+  detector.tick(20000);
+  assert.equal(updates.length, 0);
+});
+
+test("arrow keys and mouse reports do not arm a task", () => {
+  const { detector, updates } = make();
+  detector.input("\u001b[A");
+  detector.input("\u001b[<0;10;20M");
+  detector.output("$ ", 1000);
+  detector.tick(5000);
+  assert.equal(updates.length, 0);
+});
+
+test("bracketed paste still arms a task", () => {
+  const { detector, updates } = make();
+  detector.input("\u001b[200~dir\u001b[201~");
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("cmd.exe prompt completes without any further output chunk", () => {
+  const { detector, updates } = make();
+  detector.input("dir\r");
+  detector.output(" Volume in drive C has no label.\r\nC:\\Users\\me>", 1000);
+  detector.tick(3600);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+});
+
+test("PowerShell prompt is recognized as completion evidence", () => {
+  const { detector, updates } = make();
+  detector.input("Get-ChildItem\r");
+  detector.output("PS C:\\Users\\me>", 1000);
+  detector.tick(3600);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+});
+
+test("an old Done outside the recent evidence window does not confirm", () => {
+  const { detector, updates } = make();
+  detector.input("build\r");
+  detector.output("Done\r\n", 1000);
+  detector.output("step one\r\nstep two\r\nstep three\r\nworking on next\r\n", 1100);
+  detector.tick(6000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("bare failed in ordinary log output does not become an error", () => {
+  const { detector, updates } = make();
+  detector.input("run\r");
+  detector.output("warning: failed to read cache\r\n", 1000);
+  detector.tick(5000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("Claude-style permission dialog enters awaiting-input", () => {
+  const { detector, updates } = make();
+  detector.input("read file\r");
+  detector.output("Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n", 1000);
+  assert.equal(updates.at(-1).current, "awaiting-input");
+});
+
+test("cmd batch termination prompt is not a permission dialog", () => {
+  const { detector, updates } = make();
+  detector.input("claude\r");
+  detector.output("终止批处理操作吗(Y/N)? ", 1000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("working-looking banner output alone does not arm a task", () => {
+  const { detector, updates } = make();
+  detector.output("Running commands are available\r\n$ ", 1000);
+  detector.tick(10000);
+  assert.equal(updates.length, 0);
+});
+
+test("launching an agent does not arm a task", () => {
+  const { detector, updates } = make();
+  detector.launch();
+  detector.output("Claude Code v2.1.316\r\n❯ ", 1000);
+  detector.tick(6000);
+  assert.equal(detector.runtime.state, "ready");
+  assert.equal(detector.runtime.armed, false);
+  assert.equal(updates.length, 0);
+});
+
+test("Claude title spinner returning to idle completes a task", () => {
+  const { detector, updates } = makeAgent("claude");
+  detector.input("list files\r");
+  detector.output("\u001b]0;◐ Claude Code\u0007", 1000);
+  detector.output("\u001b]0;✳ Claude Code\u0007", 5000);
+  detector.tick(7500);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+  assert.equal(updates.at(-1).source, "title");
+});
+
+test("Codex brief plain-title gap does not complete a task", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.input("list files\r");
+  detector.output("\u001b]0;⠋ 75_TermBeacon\u0007", 1000);
+  detector.output("\u001b]0;75_TermBeacon\u0007", 5000);
+  detector.output("\u001b]0;⠙ 75_TermBeacon\u0007", 6000);
+  detector.tick(9000);
+  assert.equal(updates.at(-1).current, "working");
+});
+
+test("idle title without a submitted task does not complete", () => {
+  const { detector, updates } = makeAgent("claude");
+  detector.output("\u001b]0;✳ Claude Code\u0007", 1000);
+  detector.tick(10000);
+  assert.equal(updates.length, 0);
+  assert.equal(detector.runtime.state, "ready");
+});
+
+test("Codex stream disconnect enters error and title idle does not override it", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.input("list files\r");
+  detector.output("\u001b]0;⠋ 75_TermBeacon\u0007", 1000);
+  detector.output("  └ Stream disconnected before completion: Our servers are currently overloaded.\r\n", 2000);
+  assert.equal(updates.at(-1).current, "error");
+  detector.output("\u001b]0;75_TermBeacon\u0007", 5000);
+  detector.tick(9000);
+  assert.equal(detector.runtime.state, "error");
+});
+
+test("error stays sticky until the user submits again", () => {
+  const { detector, updates } = make();
+  detector.input("run\r");
+  detector.output("Error: fatal\r\n", 1000);
+  assert.equal(updates.at(-1).current, "error");
+  detector.output("still printing diagnostics\r\n", 2000);
+  detector.tick(8000);
+  assert.equal(detector.runtime.state, "error");
+  detector.input("retry\r");
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("parseOscTitle accepts BEL and ST terminators", () => {
+  assert.equal(parseOscTitle("\u001b]0;✳ Claude Code\u0007"), "✳ Claude Code");
+  assert.equal(parseOscTitle("\u001b]2;75_TermBeacon\u001b\\"), "75_TermBeacon");
+  assert.equal(parseOscTitle("plain text"), undefined);
 });

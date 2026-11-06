@@ -3,11 +3,16 @@ const { contextBridge, ipcRenderer } = require("electron");
 let dataPort = null;
 const queued = [];
 const pendingCreates = new Map();
+const replayNeeds = new Map();
+const consumedSequences = new Map();
 const outputListeners = new Set();
 const stateListeners = new Set();
 const exitListeners = new Set();
 const errorListeners = new Set();
 const hostListeners = new Set();
+const titleListeners = new Set();
+const cwdListeners = new Set();
+const agentListeners = new Set();
 
 function send(message) {
   if (dataPort) {
@@ -64,10 +69,28 @@ function handleDataMessage(payload) {
     errorListeners.forEach((listener) => listener(payload));
     return;
   }
-  if (payload.type === "pty:output") outputListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:output") {
+    if (typeof payload.terminalId === "string" && Number.isInteger(payload.sequence)) {
+      consumedSequences.set(payload.terminalId, Math.max(consumedSequences.get(payload.terminalId) || 0, payload.sequence));
+    }
+    outputListeners.forEach((listener) => listener(payload));
+  }
   if (payload.type === "state:update") stateListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:exit") exitListeners.forEach((listener) => listener(payload));
-  if (payload.type === "pty:host-ready") hostListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:title") titleListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:cwd") cwdListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:agent") agentListeners.forEach((listener) => listener(payload));
+  if (payload.type === "pty:host-ready") {
+    hostListeners.forEach((listener) => listener(payload));
+    // Renderer reconnected to a (possibly restarted) host: request replay of
+    // any buffered output beyond what this renderer already consumed.
+    if (replayNeeds.size > 0) {
+      for (const [terminalId, fromSequence] of replayNeeds) {
+        send({ type: "pty:replay-request", terminalId, fromSequence });
+      }
+      replayNeeds.clear();
+    }
+  }
 }
 
 ipcRenderer.on("pty:connect", (_event) => {
@@ -78,6 +101,9 @@ ipcRenderer.on("pty:connect", (_event) => {
   dataPort.onmessage = (messageEvent) => handleDataMessage(messageEvent.data);
   dataPort.onmessageerror = () => {
     dataPort = null;
+    if (consumedSequences.size > 0) {
+      for (const [terminalId, sequenceNumber] of consumedSequences) replayNeeds.set(terminalId, sequenceNumber);
+    }
     hostListeners.forEach((listener) => listener({ type: "pty:host-disconnected", at: Date.now() }));
   };
   dataPort.start();
@@ -97,6 +123,12 @@ contextBridge.exposeInMainWorld("termbeacon", {
   loadState: () => ipcRenderer.invoke("state:load"),
   discoverCli: () => ipcRenderer.invoke("cli:discover"),
   getPlatformInfo: () => ipcRenderer.invoke("platform:info"),
+  pickCwd: () => ipcRenderer.invoke("cwd:pick"),
+  loadHistory: (terminalId) => ipcRenderer.invoke("history:load", terminalId),
+  appendHistory: (terminalId, data) => ipcRenderer.invoke("history:append", terminalId, data),
+  removeHistory: (terminalId) => ipcRenderer.invoke("history:remove", terminalId),
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  restartHost: () => ipcRenderer.invoke("pty:restart-host"),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {
     const requestId = crypto.randomUUID();
@@ -121,12 +153,23 @@ contextBridge.exposeInMainWorld("termbeacon", {
     });
   },
   write: (request) => send({ type: "pty:write", ...request }),
+  launch: (request) => send({ type: "pty:write", ...request, launch: true }),
   resize: (request) => send({ type: "pty:resize", ...request }),
+  replay: (request) => send({ type: "pty:replay-request", ...request }),
   kill: (request) => send({ type: "pty:kill", ...request }),
   viewed: (terminalId) => send({ type: "state:viewed", terminalId }),
+  rebuildDetector: (request) => send({ type: "state:rebuild-detector", ...request }),
   onOutput: (listener) => { outputListeners.add(listener); return () => outputListeners.delete(listener); },
   onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
   onExit: (listener) => { exitListeners.add(listener); return () => exitListeners.delete(listener); },
   onError: (listener) => { errorListeners.add(listener); return () => errorListeners.delete(listener); },
   onHost: (listener) => { hostListeners.add(listener); return () => hostListeners.delete(listener); },
+  onTitle: (listener) => { titleListeners.add(listener); return () => titleListeners.delete(listener); },
+  onCwd: (listener) => { cwdListeners.add(listener); return () => cwdListeners.delete(listener); },
+  onAgent: (listener) => { agentListeners.add(listener); return () => agentListeners.delete(listener); },
+  onUpdate: (listener) => {
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on("update:event", handler);
+    return () => ipcRenderer.removeListener("update:event", handler);
+  },
 });
