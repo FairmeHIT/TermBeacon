@@ -54,7 +54,18 @@ function statusOf(value) {
   return typeof type === "string" ? STATUS[type.toLowerCase()] : undefined;
 }
 
-async function post(connection, event, status) {
+function sessionIdOf(event) {
+  const data = event && event.data;
+  const candidates = [
+    data?.sessionId, data?.session_id, data?.sessionID,
+    data?.session?.id, data?.session?.sessionId,
+    event?.sessionId, event?.session_id,
+  ];
+  const value = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
+  return value && !/[\u0000-\u001f\u007f]/.test(value) ? value.trim().slice(0, 256) : undefined;
+}
+
+async function post(connection, event, status, sessionId) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
   try {
@@ -68,6 +79,7 @@ async function post(connection, event, status) {
         terminalId: connection.terminalId,
         event,
         status,
+        ...(sessionId ? { sessionId } : {}),
       }),
       signal: controller.signal,
     });
@@ -86,17 +98,19 @@ export default {
     if (!connection) return;
 
     let last = "";
+    let lastSessionId = "";
     let lastAt = 0;
 
-    function report(event, status) {
+    function report(event, status, sessionId) {
       if (!status) return;
       const now = Date.now();
       // The same status within one second is a duplicate (multiple plugin
       // instances, or several events for one transition).
-      if (status === last && now - lastAt < 1000) return;
+      if (status === last && sessionId === lastSessionId && now - lastAt < 1000) return;
       last = status;
+      lastSessionId = sessionId || "";
       lastAt = now;
-      void post(connection, event, status);
+      void post(connection, event, status, sessionId);
     }
 
     const controller = new AbortController();
@@ -112,23 +126,24 @@ export default {
         })) {
           const type = event && event.type;
           const data = (event && event.data) || {};
+          const sessionId = sessionIdOf(event);
           if (type === "session.status") {
-            report(type, statusOf(data.status));
+            report(type, statusOf(data.status), sessionId);
           } else if (type === "session.idle") {
-            report(type, statusOf(data.outcome) || "completed");
+            report(type, statusOf(data.outcome) || "completed", sessionId);
           } else if (type === "session.execution.started") {
-            report(type, "running");
+            report(type, "running", sessionId);
           } else if (
             type === "session.execution.succeeded" ||
             type === "session.execution.interrupted"
           ) {
-            report(type, "completed");
+            report(type, "completed", sessionId);
           } else if (type === "session.execution.failed") {
-            report(type, "failed");
+            report(type, "failed", sessionId);
           } else if (type === "permission.asked") {
-            report(type, "waiting");
+            report(type, "waiting", sessionId);
           } else if (type === "permission.replied") {
-            report(type, "running");
+            report(type, "running", sessionId);
           }
         }
       } catch {

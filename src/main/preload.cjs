@@ -13,6 +13,7 @@ const hostListeners = new Set();
 const titleListeners = new Set();
 const cwdListeners = new Set();
 const agentListeners = new Set();
+const sessionListeners = new Set();
 
 function send(message) {
   if (dataPort) {
@@ -80,6 +81,7 @@ function handleDataMessage(payload) {
   if (payload.type === "pty:title") titleListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:cwd") cwdListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:agent") agentListeners.forEach((listener) => listener(payload));
+  if (payload.type === "session:update") sessionListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:host-ready") {
     hostListeners.forEach((listener) => listener(payload));
     // Renderer reconnected to a (possibly restarted) host: request replay of
@@ -130,6 +132,10 @@ contextBridge.exposeInMainWorld("termbeacon", {
   installUpdate: () => ipcRenderer.invoke("update:install"),
   getUpdateState: () => ipcRenderer.invoke("update:state"),
   checkForUpdates: () => ipcRenderer.invoke("update:check"),
+  getResumeSpec: (request) => ipcRenderer.invoke("session:resume-spec", request),
+  getIntegrationStatus: () => ipcRenderer.invoke("integration:status"),
+  installOpencodePlugin: () => ipcRenderer.invoke("integration:install-opencode"),
+  configureClaudeHook: () => ipcRenderer.invoke("integration:configure-claude"),
   restartHost: () => ipcRenderer.invoke("pty:restart-host"),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {
@@ -161,6 +167,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
   kill: (request) => send({ type: "pty:kill", ...request }),
   viewed: (terminalId) => send({ type: "state:viewed", terminalId }),
   rebuildDetector: (request) => send({ type: "state:rebuild-detector", ...request }),
+  onSession: (listener) => { sessionListeners.add(listener); return () => sessionListeners.delete(listener); },
   onOutput: (listener) => { outputListeners.add(listener); return () => outputListeners.delete(listener); },
   onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
   onExit: (listener) => { exitListeners.add(listener); return () => exitListeners.delete(listener); },

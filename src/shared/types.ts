@@ -1,6 +1,7 @@
 export type AgentType = "generic" | "opencode" | "codex" | "claude";
 export type AgentState = "working" | "completed-unseen" | "ready" | "awaiting-input" | "error" | "stopped";
-export type TaskState = "working" | "completed" | "awaiting-input" | "error" | "cancelled";
+export type RecoveryState = "none" | "interrupted" | "resumable" | "recovering" | "recovered" | "unsupported";
+export type TaskState = "working" | "completed" | "awaiting-input" | "interrupted" | "error" | "cancelled";
 export type ShellType = "cmd.exe" | "powershell.exe" | "pwsh.exe" | "/bin/bash" | "/bin/zsh";
 
 export interface WindowBounds {
@@ -23,11 +24,19 @@ export interface TerminalInstance {
   alive: boolean;
   lastActivityAt: number;
   lastOutputSummary?: string;
+  lastSessionId?: string;
+  resumeAvailable?: boolean;
+  recoveryState?: RecoveryState;
+  resumeError?: string;
 }
 
 export interface Workspace {
   id: string;
   name: string;
+  /** True after the user renamed the workspace by hand. */
+  namePinned?: boolean;
+  /** Local folder this workspace is anchored to; new terminals start here. */
+  cwd?: string;
   terminalIds: string[];
 }
 
@@ -40,6 +49,7 @@ export interface TaskRecord {
   prompt?: string;
   summary?: string;
   error?: string;
+  recoveryState?: RecoveryState;
 }
 
 export interface PlatformInfo {
@@ -90,6 +100,13 @@ export interface PtyAgentEvent {
   type: "pty:agent";
   terminalId: string;
   agentType: AgentType;
+  at: number;
+}
+
+export interface PtySessionEvent {
+  type: "session:update";
+  terminalId: string;
+  sessionId: string;
   at: number;
 }
 

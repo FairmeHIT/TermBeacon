@@ -8,7 +8,10 @@ function defaultState() {
 const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude"]);
 const AGENT_STATES = new Set(["working", "completed-unseen", "ready", "awaiting-input", "error", "stopped"]);
 const SHELL_TYPES = new Set(["cmd.exe", "powershell.exe", "pwsh.exe", "/bin/bash", "/bin/zsh"]);
-const TASK_STATES = new Set(["working", "completed", "awaiting-input", "error", "cancelled"]);
+const TASK_STATES = new Set(["working", "completed", "awaiting-input", "interrupted", "error", "cancelled"]);
+const RECOVERY_STATES = new Set(["none", "interrupted", "resumable", "recovering", "recovered", "unsupported"]);
+const MAX_SESSION_ID_LENGTH = 256;
+const MAX_RESUME_ERROR_LENGTH = 500;
 
 // Structural validation so a corrupted or hand-edited state.json cannot crash
 // the renderer at hydration. Invalid entries are dropped rather than fatal.
@@ -18,17 +21,24 @@ function sanitizeState(parsed) {
   const workspaces = Array.isArray(parsed.workspaces)
     ? parsed.workspaces.filter((workspace) =>
       Boolean(workspace) && typeof workspace.id === "string" && typeof workspace.name === "string" && Array.isArray(workspace.terminalIds))
-    : [];
-  const terminals = Array.isArray(parsed.terminals)
+    : [];  const terminals = Array.isArray(parsed.terminals)
     ? parsed.terminals.filter((terminal) =>
       Boolean(terminal) && typeof terminal.id === "string" && typeof terminal.title === "string"
         && typeof terminal.cwd === "string" && AGENT_TYPES.has(terminal.agentType)
         && (terminal.titlePinned === undefined || typeof terminal.titlePinned === "boolean")
         && (terminal.state === undefined || AGENT_STATES.has(terminal.state))
-        && (terminal.shell === undefined || SHELL_TYPES.has(terminal.shell)))
+        && (terminal.shell === undefined || SHELL_TYPES.has(terminal.shell))
+        && (terminal.lastSessionId === undefined || (typeof terminal.lastSessionId === "string" && terminal.lastSessionId.length > 0 && terminal.lastSessionId.length <= MAX_SESSION_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(terminal.lastSessionId)))
+        && (terminal.resumeAvailable === undefined || typeof terminal.resumeAvailable === "boolean")
+        && (terminal.recoveryState === undefined || RECOVERY_STATES.has(terminal.recoveryState))
+        && (terminal.resumeError === undefined || typeof terminal.resumeError === "string"))
       .map((terminal) => ({
         ...terminal,
         ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
+        ...(typeof terminal.lastSessionId === "string" ? { lastSessionId: terminal.lastSessionId.slice(0, MAX_SESSION_ID_LENGTH) } : {}),
+        ...(typeof terminal.resumeAvailable === "boolean" ? { resumeAvailable: terminal.resumeAvailable } : {}),
+        ...(RECOVERY_STATES.has(terminal.recoveryState) ? { recoveryState: terminal.recoveryState } : {}),
+        ...(typeof terminal.resumeError === "string" && terminal.resumeError.trim() ? { resumeError: terminal.resumeError.trim().slice(0, MAX_RESUME_ERROR_LENGTH) } : {}),
       }))
     : [];
   const knownIds = new Set(terminals.map((terminal) => terminal.id));
@@ -47,12 +57,20 @@ function sanitizeState(parsed) {
         ...(typeof task.prompt === "string" && task.prompt.trim() ? { prompt: task.prompt.trim().slice(0, 500) } : {}),
         ...(typeof task.summary === "string" && task.summary.trim() ? { summary: task.summary.trim().slice(0, 500) } : {}),
         ...(typeof task.error === "string" && task.error.trim() ? { error: task.error.trim().slice(0, 500) } : {}),
+        ...(RECOVERY_STATES.has(task.recoveryState) ? { recoveryState: task.recoveryState } : {}),
       }))
     : [];
-  const sanitizedWorkspaces = workspaces.map((workspace) => ({
-    ...workspace,
-    terminalIds: (workspace.terminalIds || []).filter((id) => knownIds.has(id)),
-  }));
+  const sanitizedWorkspaces = workspaces.map((workspace) => {
+    const next = {
+      ...workspace,
+      terminalIds: (workspace.terminalIds || []).filter((id) => knownIds.has(id)),
+    };
+    if (typeof workspace.cwd === "string" && workspace.cwd.trim()) next.cwd = workspace.cwd;
+    else delete next.cwd;
+    if (workspace.namePinned === true) next.namePinned = true;
+    else delete next.namePinned;
+    return next;
+  });
   const activeTerminalId = typeof parsed.activeTerminalId === "string" && knownIds.has(parsed.activeTerminalId)
     ? parsed.activeTerminalId
     : terminals[0]?.id;
@@ -76,4 +94,4 @@ function sanitizeState(parsed) {
   return result;
 }
 
-module.exports = { sanitizeState, defaultState, AGENT_TYPES, AGENT_STATES, SHELL_TYPES, TASK_STATES };
+module.exports = { sanitizeState, defaultState, AGENT_TYPES, AGENT_STATES, SHELL_TYPES, TASK_STATES, RECOVERY_STATES };

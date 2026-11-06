@@ -72,7 +72,7 @@ tests/fixtures/agents/*.jsonl
 
 发布级：代码已接入 `release/` 输出、`electron-updater`、GitHub Releases 发布源和签名环境变量；当前阻塞项是没有证书的签名验证、崩溃日志、干净 Windows 环境的安装/升级/卸载回归，以及首次发布流程中 tag 与 `latest.yml` 的自动化修正。
 
-已知边界：PTY 不跨应用重启存活，这是 v1 设计，不是 bug。host 崩溃会丢失内存输出缓冲和 PTY 会话，replay 只覆盖渲染器端口断开/重连。
+已知边界：独立 host 上线前的旧版本 PTY 不跨应用重启存活；当前版本已支持应用重启后重新连接 host。Windows 系统重启或 host 崩溃仍会丢失内存输出缓冲和 PTY 会话，replay 只覆盖 host 存活期间的客户端重连。
 
 ## 5. 下一步建议
 
@@ -392,7 +392,7 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 
 文档与源码状态已重新对齐：窗口尺寸/位置/最大化状态、侧栏宽度、终端 scrollback 磁盘快照、PTY host 退避重启、终端重建入口、自动更新配置和 macOS 打包路径均已实现。Windows 代码签名只完成配置入口，尚未提供 `CSC_LINK` 证书；`v0.1.1` 安装包因此为未签名版本，下一版发布前需要补签名并在干净 Windows 环境回归。
 
-当前开始推进批次 F“任务历史与接续工作”：在已有终端状态事件之上增加任务级记录，持久化任务开始/结束时间、状态、摘要和错误，并在界面提供最近任务列表。该记录用于恢复上下文，不改变 PTY 不跨应用重启存活的 v1 边界。
+当前开始推进批次 F“任务历史与接续工作”：在已有终端状态事件之上增加任务级记录，持久化任务开始/结束时间、状态、摘要和错误，并在界面提供最近任务列表。该记录用于 host 不可用时恢复上下文；独立 host 负责应用重启期间保留原 PTY。
 
 ## 6.22 任务历史第一版（2026-11-06）
 
@@ -490,3 +490,49 @@ macOS 平台支持已合并到 `main` 的 0.1.1 发布批次。macOS 默认 Shel
 修正 `.gitignore`：`release/` 改为 `/release/`，避免误伤 `.opencode/skills/release/`。
 
 验证：`npm test` 157 passed, 0 failed（新增 `tests/release-skill.test.cjs` 覆盖 `parseArgs`、`parseLatestYml`、`sha512File` 与无副作用导入）；`create-release.mjs --version 0.1.8 --dry-run`、`--verify-only` 与幂等重跑（全部 skip）均通过。
+
+## 6.32 工作区标签交互收敛（2026-11-06）
+
+- 工作区标签的 `×` 默认 `opacity: 0` + `visibility: hidden`，仅在 `.workspace-chip:hover` 或 `:focus-within` 时显现；宽高保持 16px，避免出现/消失时文字左右跳动。键盘聚焦标签同样会露出删除入口。
+- “新建工作区”从工作区胶囊里的文字按钮改为同一行右侧的纯图标按钮（`.workspace-add`，26×26，`title`/`aria-label` 仍为“新建工作区”），滚动标签区与新增按钮分离，标签再多也不会把加号挤出可视区。
+- 顺带清理 `.workspace-chip:not(.add-chip)` 这类已无对应 DOM 的遗留选择器。
+
+验证：`npm test` 全部通过（`tests/renderer-settings.test.cjs` 新增用例断言 × 默认隐藏、hover/focus 显现，且不再渲染“新建工作区”文案）；`npm run build` 通过。
+
+## 6.33 工作区紧凑化（2026-11-06）
+
+0.1.8 的工作区 tab 行用了 `flex: 0 1 min(42vh, 320px)` + `align-items: stretch` + `.workspace-chip { width: 100% }`，单个工作区会被拉成一大块空白，同时 `overflow-x: hidden` 把“新建工作区”挤出可视区。本轮改为紧凑单行：
+
+- 新增 `.workspace-bar` 容器：左侧是可横向滚动的工作区条（`.workspace-chips`），右侧固定一个 26px 的“+”按钮（`.workspace-add`），不再占用额外行高。
+- 工作区 chip 固定 26px 高、最大宽 148px、`flex: 0 0 auto`，删除按钮缩到 16px 且只在 hover/焦点时出现，避免挤占标题；“+”不再作为 chip 参与滚动。
+- 工作区条高 26px（原 38px 起、被撑到半屏），终端列表可用高度从 342px 提升到 542px（1200×760，3 个工作区）。
+- 切换或新建工作区后，`App.tsx` 用 `workspaceStrip` ref 把当前 chip 滚入可视区，且只调整条内 `scrollLeft`，不影响整窗滚动。
+- 终端条目 `min-height` 70→52px、内边距 11→8px，长列表一屏可见条目更多。
+- 右侧顶栏 58→42px，路径与操作按钮仍单行对齐；折叠后顶栏左边距由 64px 收到 14px（折叠按钮在左下角，不再需要顶部让位）。
+- 折叠按钮从品牌区移到侧栏页脚左侧（与设置在、主题同排），品牌区只保留新建终端按钮；折叠态入口固定在左下角 14px。
+- 工作区条纵向会被裁切，键盘聚焦 chip 时把焦点环改为 `outline-offset: -2px` 内嵌，焦点状态始终可见。
+
+验证：`npm test` 161 passed, 0 failed（新增 `renderer-settings.test.cjs` 断言工作区条单行、不换行、不预留 `max-height`、chip 高度 26px、焦点环内嵌、`workspace-add` 与 `ref={workspaceStrip}` 存在）；`npm run build` 通过。用 `artifacts/compact-ui-check.cjs`（Electron + 内存 bridge preload）在 1200×760 与 760×560 下截图核对深色/浅色、设置浮层、折叠态、13 个工作区横向滚动，控制台无报错；3 个工作区时 `scrollWidth <= clientWidth`（不出现无效滚动）。截图脚本在无头窗口下会卡住 CSS transition，导致浅色截图仍显示深色底，已在捕获前禁用过渡并强制重排。
+
+## 6.34 Agent 启动状态修复（2026-11-06）
+
+修复从 Shell 输入 `claude`、`opencode` 或 `codex` 后未提交任务却长期显示“工作中”的问题：
+
+- 渲染器识别 Agent 启动命令的输入前缀，走 `launch` 通道，不创建虚假任务记录。
+- PTY Host 在 Agent banner 识别后发布 `ready` 基线，清理 generic 检测器因启动命令产生的临时 `working` 状态。
+- Agent 识别后，PTY 输出、tick 和退出事件均从当前检测器 Map 读取，避免继续调用创建终端时捕获的 generic 检测器。
+- 新增 PTY Host 回归测试，覆盖 Claude banner 切换和状态复位。
+
+验证：`npm test` 160 passed, 0 failed；`npm run build` 通过。当前已运行的安装包需重启或使用新构建产物才能加载修复。
+
+## 6.35 PTY Host 跨应用重启存活（2026-11-06）
+
+实现 TermBeacon 关闭后保留运行中 CLI 任务：
+
+- `pty-host.cjs` 增加 Named Pipe JSON 行协议，既支持旧的 Electron `MessagePort`，也支持独立 host 客户端。
+- 新增 `src/host-app/` 无窗口 Electron host 入口。主进程通过 `child_process.spawn(..., { detached: true })` 启动它，host 独立持有 node-pty 和 CLI 子进程。
+- `main.ts` 改为通过按用户数据目录哈希生成的 Named Pipe 连接 host；Electron 退出时发送 `detach` 并关闭客户端，不再发送 `shutdown` 或杀死 host。
+- 同一 `terminalId` 再次创建时返回 `existing: true`，使 renderer 重启后重新绑定已有 PTY，而不是重复启动 Shell。
+- 断开 UI 不会结束任务；host 崩溃仍会触发原有错误和重启路径。Windows 系统重启后 host 进程无法保留，CLI session resume 适配器仍属于后续批次。
+
+验证：`npm test` 通过；`npm run build` 通过；Windows 本机 Named Pipe 验证确认 UI 主进程结束后 host PID 继续存活，重新连接同一 `terminalId` 返回 `existing: true` 并可继续写入 PTY。

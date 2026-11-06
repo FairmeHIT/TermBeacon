@@ -22,6 +22,7 @@ const crypto = require("node:crypto");
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_FIELD_LENGTH = 128;
 const MAX_EVENT_LENGTH = 64;
+const MAX_SESSION_ID_LENGTH = 256;
 
 const STATUSES = new Set(["started", "running", "waiting", "completed", "failed"]);
 
@@ -41,7 +42,8 @@ function validPayload(payload) {
     && payload.event.length > 0
     && payload.event.length <= MAX_EVENT_LENGTH
     && typeof payload.status === "string"
-    && STATUSES.has(payload.status);
+    && STATUSES.has(payload.status)
+    && (payload.sessionId === undefined || (typeof payload.sessionId === "string" && payload.sessionId.length > 0 && payload.sessionId.length <= MAX_SESSION_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(payload.sessionId)));
 }
 
 function createHookServer({ onEvent } = {}) {
@@ -87,7 +89,7 @@ function createHookServer({ onEvent } = {}) {
         return;
       }
       try {
-        handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, at: Date.now() });
+        handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, sessionId: payload.sessionId, at: Date.now() });
         response.writeHead(204);
         response.end();
       } catch {

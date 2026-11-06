@@ -40,6 +40,19 @@ test("hook client forwards a status from the PTY environment", async (t) => {
   );
 });
 
+test("hook client forwards Claude session_id from stdin", async (t) => {
+  const events = [];
+  const server = createHookServer({ onEvent: (event) => events.push(event) });
+  const port = await server.start();
+  t.after(() => server.close());
+  const child = execFile(process.execPath, [script, "running", "SessionStart"], {
+    env: { ...process.env, TERMBEACON_HOOK_PORT: String(port), TERMBEACON_HOOK_TOKEN: server.token, TERMBEACON_TERMINAL_ID: "terminal-2" },
+  });
+  child.stdin.end(JSON.stringify({ session_id: "claude-session-1" }));
+  await new Promise((resolve, reject) => { child.on("exit", resolve); child.on("error", reject); });
+  assert.equal(events[0].sessionId, "claude-session-1");
+});
+
 test("hook client is a no-op outside TermBeacon", async () => {
   const result = await run(process.execPath, [script, "completed", "Stop"], {
     env: { ...process.env, TERMBEACON_HOOK_PORT: "", TERMBEACON_HOOK_TOKEN: "", TERMBEACON_TERMINAL_ID: "" },

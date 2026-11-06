@@ -23,6 +23,23 @@ const command = process.platform === "win32"
 execFileSync(command, { stdio: "inherit", shell: true });
 
 mkdirSync(releaseDir, { recursive: true });
+function copyTreeBestEffort(from, to) {
+  mkdirSync(to, { recursive: true });
+  for (const child of readdirSync(from, { withFileTypes: true })) {
+    const source = resolve(from, child.name);
+    const target = resolve(to, child.name);
+    if (child.isDirectory()) {
+      copyTreeBestEffort(source, target);
+      continue;
+    }
+    try {
+      cpSync(source, target, { force: true });
+    } catch (error) {
+      console.warn(`[dist] could not copy locked file ${child.name}: ${error.code ?? error.message}`);
+    }
+  }
+}
+
 for (const entry of readdirSync(scratch)) {
   const from = resolve(scratch, entry);
   const to = resolve(releaseDir, entry);
@@ -30,8 +47,13 @@ for (const entry of readdirSync(scratch)) {
     cpSync(from, to, { recursive: true });
     console.log("[dist] copied:", entry);
   } catch (error) {
-    console.warn(`[dist] could not copy ${entry}: ${error.code ?? error.message} (the file is lock-remnant debris; skipping)`);
-    rmSync(from, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+    if (entry === "win-unpacked" && existsSync(from)) {
+      console.warn(`[dist] win-unpacked contains locked files; copying available files individually: ${error.code ?? error.message}`);
+      copyTreeBestEffort(from, to);
+    } else {
+      console.warn(`[dist] could not copy ${entry}: ${error.code ?? error.message} (the file is lock-remnant debris; skipping)`);
+      rmSync(from, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
+    }
   }
 }
 

@@ -28,7 +28,7 @@ TermBeacon 是一个 Windows 终端管理工具，把多个本地 CLI Agent 聚�
 - Electron + React + TypeScript + Vite 工程。
 - xterm.js + FitAddon 终端视图。
 - node-pty + Windows ConPTY。
-- 独立 Electron `utilityProcess` 运行 PTY host。
+- 独立 detached host 运行 PTY，Electron UI 通过 Named Pipe 重连。
 - `MessageChannelMain` / `MessagePort` 高频 PTY 数据面。
 - 多终端创建、切换、停止和后台输出保留。
 - 六种状态：`working`、`completed-unseen`、`ready`、`awaiting-input`、`error`、`stopped`。
@@ -48,7 +48,8 @@ TermBeacon 是一个 Windows 终端管理工具，把多个本地 CLI Agent 聚�
 - 将 Codex 原生状态事件接入真实 CLI 通道。
 - 将 OSC 9;4 进度序列真正纳入状态决策链；目前已有解析函数和测试。
 - 任务级历史记录（开始时间、结束时间、状态、摘要和错误），目前只保存终端元数据与 scrollback。
-- PTY 跨应用重启存活。
+- PTY host 已可独立于 Electron UI 存活，应用重启后可重新连接同一 PTY；Windows 系统重启后的 CLI session resume 仍未覆盖。
+- Windows 系统重启后，活动任务会迁移为“可恢复”，由用户显式点击恢复；Claude、OpenCode、Codex 分别使用各自的 session resume/continue 入口，不会自动重放原 prompt。
 - Windows/macOS 真机验收、签名证书配置、干净环境安装升级测试和发布 CI。
 
 ## 3. 技术边界和不可破坏的约束
@@ -154,6 +155,7 @@ flowchart LR
 - `pty:kill`
 - `state:viewed`
 - `state:hook`
+- `session:update`
 - `pty:output`
 - `state:update`
 - `pty:exit`
@@ -240,12 +242,13 @@ flowchart LR
 
 ```powershell
 cd D:\01-cmcc\codes-win\75_TermBeacon
-npm install
+npm ci
+npm run doctor
 npm test
 npm run build
 ```
 
-要求：测试全部通过，构建退出码为 0。先检查 `git diff`，不要覆盖其他 Agent 已经做出的改动。
+要求：`doctor`、测试和构建都退出码为 0。首次准备 Windows 打包环境时再执行 `npm run dist`，该命令会自动调用 `npm run verify:dist` 检查安装包和 `node-pty` 原生文件。先检查 `git diff`，不要覆盖其他 Agent 已经做出的改动。
 
 ### Step 1：明确任务边界
 
@@ -304,6 +307,8 @@ npm start
 - `cli-discovery.cjs`
 
 新增 CJS runtime 文件时必须同步修改 `scripts/copy-runtime.mjs`。
+
+Windows 发布前还必须确认 `release/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/` 下存在 `pty.node`、`conpty.node` 和 `conpty_console_list.node`。这些文件由 `npm run verify:dist` 自动检查，避免安装后才发现 PTY 无法启动。
 
 ### Step 6：记录结果
 
@@ -371,7 +376,7 @@ npm start
 - 增加重命名、关闭确认和批量停止。
 - 增加键盘快捷键和焦点管理。
 
-验收：重启后元数据恢复，PTY 按设计进入 `stopped`，用户可以一键重建终端。
+验收：重启后元数据恢复，应用重新连接独立 host 中的 PTY；host 不可用时终端进入 `error`，用户可以一键重建终端。
 
 ### 批次 E：发布工程化（代码路径已完成，真机验证待完成）
 
@@ -396,7 +401,7 @@ npm start
 4. 性能剖析：在 8 个并发终端下测量 CPU、内存、PTY 吞吐和 xterm 渲染延迟，再决定是否引入 WebGL addon 或更激进的后台降频。
 5. 工作效率：任务筛选、终端排序/克隆、命令面板和分屏等功能在上述链路稳定后再扩展。
 
-当前版本边界仍保留：PTY 不跨应用重启存活，任务历史恢复依赖磁盘记录和 scrollback，不承诺恢复原进程。
+当前版本边界：PTY 可跨 TermBeacon 应用重启存活，但 Windows 系统重启或独立 host 崩溃后不能恢复原进程；这类情况仍依赖后续 CLI session resume 适配器和任务历史。
 
 ## 11. 性能基线
 

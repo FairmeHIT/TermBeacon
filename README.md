@@ -2,12 +2,32 @@
 
 后续开发请先阅读 [交接文档](HANDOFF.md)、[推进计划](docs/development-plan-2026-11.md)、[开发推进提示词](docs/continuation-prompt.md)、[开发手册](docs/development-handbook.md) 和 [工程 Spec](docs/termbeacon-engineering-spec.md)。
 
-## 开发
+## 新机器开发
+
+项目可以从干净仓库恢复，不依赖提交 `node_modules` 或本机 Electron 缓存。开发机要求：
+
+- Node.js 20 或更新版本，npm 10 或更新版本。
+- Windows 10 22H2 / Windows 11 用于运行 ConPTY 和生成 Windows 安装包；macOS/Linux 可用于代码检查、测试和前端构建。
+- Git 和 PowerShell。`opencode`、Codex CLI、Claude Code 是可选集成，未安装时不影响普通终端使用。
+
+首次配置和验证：
 
 ```powershell
-npm install
+npm ci
+npm run doctor
+npm test
+npm run build
+```
+
+`npm ci` 严格按照 `package-lock.json` 安装依赖；不要把 `node_modules/` 提交到仓库。`npm run doctor` 会检查 Node/npm 版本、锁文件版本和关键依赖。若 `node-pty` 安装脚本在受限环境中失败，应先在 Windows 主机使用 npm 官方缓存完成安装，再重新执行 `npm ci`。
+
+启动开发模式：
+
+```powershell
 npm run dev
 ```
+
+开发模式会启动 Vite 和 Electron 两个进程，窗口使用本地开发服务器；自动更新在未打包模式下不会检查。
 
 ## 构建与启动
 
@@ -15,6 +35,18 @@ npm run dev
 npm run build
 npm start
 ```
+
+生成 Windows 安装包（必须在 Windows 上执行）：
+
+```powershell
+npm run dist
+```
+
+输出位于 `release/`，安装文件名为 `TermBeacon-<version>-setup.exe`。安装包包含 Electron、React 渲染资源、主进程、`node-pty` 及 Windows ConPTY 原生文件；用户机器不需要安装 Node.js 或 npm，按安装向导完成后即可从开始菜单或桌面快捷方式启动。安装为当前用户安装，不要求管理员权限。
+
+`npm run dist` 会在打包后自动执行 `npm run verify:dist`，检查安装程序、未解包应用、ASAR 内的运行时文件和 `node-pty` 的 win32-x64 原生文件。Windows 上如果遇到本地文件锁，可把已经解压的 Electron 目录通过 `TERMBEACON_ELECTRON_DIST` 指定给 electron-builder；普通新环境不需要设置此变量，构建会使用 electron-builder 的下载缓存。
+
+安装包人工冒烟步骤：安装后启动 TermBeacon，创建一个 PowerShell 终端，执行 `echo TermBeacon-ready`，关闭并再次启动应用，确认窗口和终端列表可恢复，原 PTY 仍可输入。PTY 由独立的无窗口 host 进程持有，关闭 UI 不会停止任务；Windows 系统重启或 host 崩溃后的 CLI session resume 仍需对应 Agent 的恢复适配器。CLI Agent 需要用户另行安装对应 CLI；安装包已经携带 opencode 插件和 Claude Hook，不需要 Node.js。打开设置 →「CLI 集成」即可按需安装或配置，Claude 原有 `settings.json` 会自动备份；Codex 不需要额外 Hook。源码开发环境的手动配置说明见 [`hooks/README.md`](hooks/README.md)。
 
 ## 发布、签名与自动更新
 
@@ -82,7 +114,7 @@ MVP 当前包含：
 - Electron + React + TypeScript + Vite。
 - xterm.js + FitAddon 终端视图。
 - node-pty + Windows ConPTY。
-- 独立 Electron utility process 运行 `pty-host`。
+- 独立 Electron host 进程运行 `pty-host`，通过 Named Pipe 与 UI 连接，支持应用重启后重新绑定已有 PTY。
 - MessageChannelMain/MessagePort 高频 PTY 数据面。
 - 多终端创建、切换、停止和后台输出保留。
 - 工作中、已完成未查看、就绪、等待输入、异常、已停止状态灯。

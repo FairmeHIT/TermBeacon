@@ -13,8 +13,10 @@ TermBeacon 的"工作中 / 已完成 / 等待输入 / 异常"来自 `pty-host` �
 
 ## 1. 换环境三步走
 
+使用已安装的 Windows EXE 时，不需要 Node.js 或源码仓库：打开 TermBeacon 设置里的「CLI 集成」，即可安装 opencode 插件或配置 Claude Hook。Codex 不需要额外 Hook。下面的命令适用于源码开发环境或手动管理配置的场景。
+
 ```powershell
-npm install                 # 或按 README 安装依赖
+npm ci                      # 源码开发环境安装依赖
 npm run hooks:install       # 安装 opencode 插件到 ~/.config/opencode/plugin
 npm run preflight:cli       # 只读检查：CLI 版本、hook 客户端、插件、Claude 配置
 ```
@@ -275,7 +277,9 @@ Get-Content payload.json | node scripts/termbeacon-hook.cjs   # 读取 Claude �
 
 ## 9. 新机器配置清单
 
-- [ ] 安装 TermBeacon 与 Node（opencode / Claude / Codex 按需）
+- [ ] 安装 TermBeacon；opencode / Claude / Codex 按需单独安装
+- [ ] EXE 用户：打开设置 →「CLI 集成」，按需安装 opencode 插件或配置 Claude Hook
+- [ ] 源码用户：安装 Node.js 后执行 `npm ci`
 - [ ] `npm run hooks:install`（或手动复制插件到 `~/.config/opencode/plugin/`）
 - [ ] `opencode reload`（或重启 opencode），`opencode plugin list` 中 `termbeacon` 的 ID 不是 `-`
 - [ ] 用 `opencode --standalone` 启动（共享后台 server 读不到终端环境）

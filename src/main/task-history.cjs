@@ -59,4 +59,10 @@ function settleTask(items, terminalId, state, at, detail) {
     : task);
 }
 
-module.exports = { cleanTaskPrompt, applyTaskEvent, settleTask };
+function markInterrupted(items, at, detail = "应用重启，任务中断") {
+  return items.map((task) => task.state === "working" || task.state === "awaiting-input"
+    ? { ...task, state: "interrupted", finishedAt: at, recoveryState: "resumable", error: detail, summary: detail }
+    : task);
+}
+
+module.exports = { cleanTaskPrompt, applyTaskEvent, settleTask, markInterrupted };

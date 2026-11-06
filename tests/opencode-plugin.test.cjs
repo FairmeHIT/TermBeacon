@@ -43,7 +43,7 @@ test("opencode plugin maps session and tool events to hook statuses", async (t) 
     tool: { hook: async () => ({ dispose() {} }) },
   };
   const cleanup = await plugin.setup(ctx);
-  push({ type: "session.status", data: { status: { type: "busy" } } });
+  push({ type: "session.status", data: { sessionId: "opencode-session-1", status: { type: "busy" } } });
   push({ type: "session.idle", data: {} });
   push({ type: "session.execution.failed", data: {} });
   push({ type: "permission.asked", data: { status: "pending" } });
@@ -59,4 +59,5 @@ test("opencode plugin maps session and tool events to hook statuses", async (t) 
     ["permission.asked", "waiting"],
   ]);
   assert.ok(events.every((event) => event.terminalId === "opencode-1"));
+  assert.equal(events[0].sessionId, "opencode-session-1");
 });

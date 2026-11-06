@@ -3,19 +3,28 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, ShellType, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
 import taskHistoryUtils from "../main/task-history.cjs";
 import "./styles.css";
 
-const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords } = taskHistoryUtils as {
+const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInterrupted } = taskHistoryUtils as {
   cleanTaskPrompt: (value: string) => string | undefined;
   applyTaskEvent: (items: TaskRecord[], event: StateUpdateEvent, prompt?: string) => TaskRecord[];
   settleTask: (items: TaskRecord[], terminalId: string, state: Extract<TaskState, "completed" | "error" | "cancelled">, at: number, detail?: string) => TaskRecord[];
+  markInterrupted: (items: TaskRecord[], at: number, detail?: string) => TaskRecord[];
 };
 
 // Mirrors the payload the main process sends on update:event and returns from
 // update:check / update:state.
 type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
+type IntegrationStatus = {
+  assetsAvailable: boolean;
+  opencodePluginInstalled: boolean;
+  claudeHookConfigured: boolean;
+  opencodePluginPath: string;
+  claudeSettingsPath: string;
+  hookScriptPath: string;
+};
 
 declare global {
   interface CliInfo {
@@ -39,6 +48,10 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
+      getIntegrationStatus(): Promise<IntegrationStatus>;
+      installOpencodePlugin(): Promise<{ target: string; existed: boolean; bytes: number }>;
+      configureClaudeHook(): Promise<{ target: string; backupPath?: string; hookScript: string }>;
+      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string }>;
       restartHost(): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -56,6 +69,7 @@ declare global {
       onTitle(listener: (event: PtyTitleEvent) => void): () => void;
       onCwd(listener: (event: PtyCwdEvent) => void): () => void;
       onAgent(listener: (event: PtyAgentEvent) => void): () => void;
+      onSession(listener: (event: PtySessionEvent) => void): () => void;
       onUpdate(listener: (event: UpdateStatus) => void): () => void;
     };
   }
@@ -97,28 +111,23 @@ const stateClass: Record<AgentState, string> = {
   stopped: "stopped",
 };
 
-const taskStateLabel: Record<TaskState, string> = {
-  working: "工作中",
-  completed: "已完成",
-  "awaiting-input": "等待输入",
-  error: "异常",
-  cancelled: "已中断",
-};
-
-const taskStateClass: Record<TaskState, string> = {
-  working: "working",
-  completed: "completed",
-  "awaiting-input": "awaiting",
-  error: "error",
-  cancelled: "stopped",
-};
-
 const agentLabel: Record<AgentType, string> = {
   generic: "",
   opencode: "opencode",
   codex: "Codex",
   claude: "Claude Code",
 };
+
+const AGENT_COMMANDS = ["opencode", "claude", "codex"];
+
+function isAgentLaunchInput(value: string | undefined, agentType: AgentType): boolean {
+  if (agentType !== "generic" || !value) return false;
+  const normalized = value.trimStart().toLowerCase();
+  if (!normalized) return false;
+  return AGENT_COMMANDS.some((command) => normalized === command
+    || normalized.startsWith(`${command} `)
+    || command.startsWith(normalized));
+}
 
 const shellLabel: Record<string, string> = {
   "cmd.exe": "命令提示符",
@@ -130,6 +139,13 @@ const shellLabel: Record<string, string> = {
 
 function terminalCliLabel(terminal: TerminalInstance): string {
   return agentLabel[terminal.agentType] || shellLabel[terminal.shell || DEFAULT_SHELL] || terminal.shell || "Shell";
+}
+
+function terminalStateLabel(terminal: TerminalInstance): string {
+  if (terminal.recoveryState === "recovering") return "正在恢复";
+  if (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") return "可恢复";
+  if (terminal.recoveryState === "unsupported") return "无法恢复";
+  return stateLabel[terminal.state];
 }
 
 function isGeneratedTerminalTitle(title: string): boolean {
@@ -203,8 +219,22 @@ function normalizeTitleInput(value: string): string {
   return value.trim().slice(0, MAX_TITLE_LENGTH);
 }
 
-function formatTaskTime(value: number): string {
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+// "D:\a\b\my-project" -> "my-project"; "/home/user/my-project" -> "my-project".
+const PATH_SEPARATORS = /[\\/]+/;
+function folderNameFromPath(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  if (!trimmed) return "";
+  const last = trimmed.split(PATH_SEPARATORS).filter(Boolean).pop();
+  return last ? last.slice(0, MAX_TITLE_LENGTH) : "";
+}
+
+function BrandMark() {
+  return <svg className="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+    <rect className="brand-mark-tile" x=".5" y=".5" width="31" height="31" rx="9.5" />
+    <path className="brand-mark-signal" d="M16 10a6 6 0 0 1 6 6M16 5a11 11 0 0 1 11 11" />
+    <circle className="brand-mark-core" cx="16" cy="19" r="4" />
+    <path className="brand-mark-base" d="M12 26h8" />
+  </svg>;
 }
 
 function ThemeIcon({ theme }: { theme: Theme }) {
@@ -258,7 +288,6 @@ function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default");
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
-  const [taskHistoryOpen, setTaskHistoryOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(FALLBACK_PLATFORM);
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
@@ -276,16 +305,21 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [appPackaged, setAppPackaged] = useState(true);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [integration, setIntegration] = useState<IntegrationStatus | null>(null);
+  const [integrationBusy, setIntegrationBusy] = useState<"opencode" | "claude" | null>(null);
+  const [integrationMessage, setIntegrationMessage] = useState("");
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
   const consumedLocal = useRef(new Map<string, number>());
   const terminalStage = useRef<HTMLDivElement | null>(null);
+  const workspaceStrip = useRef<HTMLDivElement | null>(null);
   const pendingOutput = useRef(new Map<string, { at: number; summary?: string }>());
   const pendingHistory = useRef(new Map<string, string[]>());
   const historyFlushTimer = useRef<number | null>(null);
   const lastSavedState = useRef("");
   const outputFlushTimer = useRef<number | null>(null);
+  const agentTypeByTerminal = useRef(new Map<string, AgentType>());
   const lastInput = useRef(new Map<string, string>());
   const inputBuffers = useRef(new Map<string, string>());
   // Terminal titles the user renamed by hand. OSC 0/2 title reports from the
@@ -295,10 +329,6 @@ function App() {
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
   const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
-  const activeTasks = useMemo(() => tasks
-    .filter((task) => task.terminalId === activeId)
-    .sort((left, right) => right.startedAt - left.startedAt)
-    .slice(0, 20), [tasks, activeId]);
 
   function flushPendingHistory() {
     const pending = new Map(pendingHistory.current);
@@ -314,27 +344,42 @@ function App() {
       const runtimeDefaultShell = isSupportedShell(info.shell) ? info.shell : DEFAULT_SHELL;
       const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : runtimeDefaultShell;
       setDefaultShell(restoredDefaultShell);
-      setTasks(state.tasks ?? []);
+      const restoredAt = Date.now();
+      setTasks(markInterrupted(state.tasks ?? [], restoredAt));
       if (typeof state.sidebarWidth === "number") setSidebarWidth(state.sidebarWidth);
       const freshTerminal = state.terminals.length === 0 ? newTerminal(1, restoredDefaultShell, info.cwd) : null;
       if (state.terminals.length > 0) {
-        const restoredTerminals = state.terminals.map((terminal) => ({
+        const restoredTerminals = state.terminals.map((terminal) => {
+          const interrupted = terminal.state === "working" || terminal.state === "awaiting-input";
+          const recoveryState: RecoveryState = interrupted
+            ? "resumable"
+            : (terminal.recoveryState || "none");
+          return ({
           ...terminal,
-          // A restored PTY starts a fresh shell. Agent detection upgrades this
-          // to Codex, Claude Code, or opencode when its banner appears.
-          agentType: "generic" as AgentType,
+          // Preserve the detected agent and session metadata so a new shell
+          // can explicitly resume the CLI session after a machine restart.
+          agentType: terminal.agentType,
           shell: isSupportedShell(terminal.shell) ? terminal.shell : restoredDefaultShell,
           titlePinned: terminal.titlePinned ?? !isGeneratedTerminalTitle(terminal.title),
           alive: false,
-          state: "stopped" as AgentState,
-        }));
+          state: interrupted ? "stopped" as AgentState : terminal.state,
+          resumeAvailable: terminal.agentType !== "generic" ? true : terminal.resumeAvailable,
+          recoveryState,
+          ...(interrupted ? { resumeError: undefined } : {}),
+        });
+        });
         pinnedTitles.current = new Set(restoredTerminals.filter((terminal) => terminal.titlePinned).map((terminal) => terminal.id));
         setTerminals(restoredTerminals);
       } else {
         setTerminals(freshTerminal ? [freshTerminal] : []);
       }
+      // A workspace title mirrors its folder name until the user renames it.
       const restored = state.workspaces.length > 0
-        ? state.workspaces
+        ? state.workspaces.map((workspace) => {
+          if (workspace.namePinned || !workspace.cwd) return workspace;
+          const folderName = folderNameFromPath(workspace.cwd);
+          return folderName ? { ...workspace, name: folderName } : workspace;
+        })
         : [{ id: "default", name: "默认工作区", terminalIds: state.terminals.map((terminal) => terminal.id) }];
       const restoredActiveWorkspaceId = state.activeWorkspaceId && restored.some((workspace) => workspace.id === state.activeWorkspaceId)
         ? state.activeWorkspaceId
@@ -392,7 +437,7 @@ function App() {
       }
     });
     const disposeState = window.termbeacon.onState((event) => {
-      setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped" } : item));
+      setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState } : item));
       setTasks((items) => applyTaskEvent(items, event, lastInput.current.get(event.terminalId)));
     });
     const disposeExit = window.termbeacon.onExit((event) => {
@@ -402,7 +447,7 @@ function App() {
     const disposeError = window.termbeacon.onError((event) => {
       if (!event.terminalId) return;
       setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, alive: false, state: "error", lastOutputSummary: String(event.message || "PTY request failed").slice(-90) }
+        ? { ...item, alive: false, state: "error", recoveryState: item.recoveryState === "recovering" ? "unsupported" : item.recoveryState, resumeError: item.recoveryState === "recovering" ? String(event.message || "恢复命令失败").slice(-500) : item.resumeError, lastOutputSummary: String(event.message || "PTY request failed").slice(-90) }
         : item));
       setTasks((items) => settleTaskRecords(items, event.terminalId, "error", event.at, event.message));
     });
@@ -436,9 +481,21 @@ function App() {
     // Agent type is identified by the PTY host from the CLI's own banner; the
     // UI only stores it so the sidebar can show which agent is running.
     const disposeAgent = window.termbeacon.onAgent((event) => {
+      agentTypeByTerminal.current.set(event.terminalId, event.agentType);
       setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, agentType: event.agentType }
+        ? { ...item, agentType: event.agentType, resumeAvailable: event.agentType !== "generic", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState }
         : item));
+      setTasks((items) => items.map((task) => task.terminalId === event.terminalId && task.recoveryState === "recovering"
+        ? { ...task, recoveryState: "recovered" }
+        : task));
+    });
+    const disposeSession = window.termbeacon.onSession((event) => {
+      setTerminals((items) => items.map((item) => item.id === event.terminalId
+        ? { ...item, lastSessionId: event.sessionId, resumeAvailable: true, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState, resumeError: undefined }
+        : item));
+      setTasks((items) => items.map((task) => task.terminalId === event.terminalId && (task.recoveryState === "resumable" || task.recoveryState === "recovering")
+        ? { ...task, recoveryState: "recovered" }
+        : task));
     });
     const disposeUpdate = window.termbeacon.onUpdate((event) => setUpdateState(event));
     // The automatic check runs before this renderer mounts, so read the last
@@ -448,11 +505,12 @@ function App() {
       setAppPackaged(info.packaged);
       if (info.status.type !== "idle") setUpdateState(info.status);
     }).catch(() => undefined);
+    void window.termbeacon.getIntegrationStatus().then(setIntegration).catch(() => undefined);
     const flushOnVisibilityChange = () => { if (document.visibilityState === "hidden") flushPendingHistory(); };
     document.addEventListener("visibilitychange", flushOnVisibilityChange);
     window.addEventListener("beforeunload", flushPendingHistory);
     return () => {
-      disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); disposeUpdate();
+      disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); disposeSession(); disposeUpdate();
       document.removeEventListener("visibilitychange", flushOnVisibilityChange);
       window.removeEventListener("beforeunload", flushPendingHistory);
       flushPendingHistory();
@@ -471,6 +529,22 @@ function App() {
     document.documentElement.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
   }, [sidebarWidth]);
 
+  // The workspace list scrolls vertically, so a workspace that was just created
+  // or selected can sit outside the visible area. Keep the active one in view
+  // without letting the browser scroll the window itself.
+  useEffect(() => {
+    const strip = workspaceStrip.current;
+    const item = strip?.querySelector<HTMLElement>(".workspace-item.active");
+    if (!strip || !item) return;
+    const itemBox = item.getBoundingClientRect();
+    const stripBox = strip.getBoundingClientRect();
+    if (itemBox.top < stripBox.top) {
+      strip.scrollTop -= stripBox.top - itemBox.top;
+    } else if (itemBox.bottom > stripBox.bottom) {
+      strip.scrollTop += itemBox.bottom - stripBox.bottom;
+    }
+  }, [activeWorkspaceId, workspaces.length, sidebarWidth]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("termbeacon-theme", theme);
@@ -481,6 +555,7 @@ function App() {
     if (!hydrated) return;
     terminals.forEach((terminal) => {
       if (terminalViews.current.has(terminal.id)) return;
+      agentTypeByTerminal.current.set(terminal.id, terminal.agentType);
       const term = new Terminal({
         convertEol: true,
         cursorBlink: true,
@@ -494,9 +569,9 @@ function App() {
       term.onData((data) => {
         const buffer = inputBuffers.current.get(terminal.id) || "";
         const submitted = data.includes("\r") || data.includes("\n");
+        let candidate: string | undefined;
         if (submitted) {
-          const prompt = cleanTaskPrompt(`${buffer}${data.replace(/[\r\n].*$/, "")}`);
-          if (prompt) lastInput.current.set(terminal.id, prompt);
+          candidate = cleanTaskPrompt(`${buffer}${data.replace(/[\r\n].*$/, "")}`);
           inputBuffers.current.delete(terminal.id);
         } else {
           if (/^\x1b/.test(data)) {
@@ -511,29 +586,48 @@ function App() {
             nextBuffer = `${buffer}${cleanTaskPrompt(data) || ""}`;
           }
           if (nextBuffer) inputBuffers.current.set(terminal.id, nextBuffer.slice(-500));
+          candidate = nextBuffer;
         }
-        window.termbeacon.write({ terminalId: terminal.id, data });
+        const launch = isAgentLaunchInput(candidate, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType);
+        if (submitted && candidate && !launch) lastInput.current.set(terminal.id, candidate);
+        const request = { terminalId: terminal.id, data };
+        if (launch) window.termbeacon.launch(request);
+        else window.termbeacon.write(request);
       });
       terminalViews.current.set(terminal.id, term);
       fitAddons.current.set(terminal.id, fit);
       const node = terminalNodes.current.get(terminal.id);
       if (node) term.open(node);
+      // Fit before creating the PTY so the shell and any TUI app launched in
+      // it starts with the real cols/rows. A hardcoded 120x32 leaves a window
+      // where the app paints with wrong coordinates until the first resize.
+      try { fit.fit(); } catch { /* container may not be visible yet */ }
+      const cols = term.cols > 1 ? term.cols : 120;
+      const rows = term.rows > 1 ? term.rows : 32;
+      sentSizes.current.set(terminal.id, `${cols}x${rows}`);
       void (async () => {
         try {
           const history = await window.termbeacon.loadHistory(terminal.id);
           if (history && terminalViews.current.get(terminal.id) === term) term.write(history);
-          await window.termbeacon.createTerminal({
+          const result = await window.termbeacon.createTerminal({
             terminalId: terminal.id,
             title: terminal.title,
             cwd: terminal.cwd,
             shell: terminal.shell || defaultShell,
             args: [],
-            cols: 120,
-            rows: 32,
+            cols,
+            rows,
             agentType: terminal.agentType,
           });
-          setTerminals((items) => items.map((item) => item.id === terminal.id ? { ...item, alive: true, state: "ready" } : item));
-          requestAnimationFrame(() => fitTerminal(terminal.id));
+          const existing = Boolean((result as { existing?: boolean } | undefined)?.existing);
+          setTerminals((items) => items.map((item) => item.id === terminal.id
+            ? { ...item, alive: true, state: existing ? item.state === "stopped" ? "ready" : item.state : "ready", recoveryState: existing ? "recovered" : item.recoveryState, resumeError: undefined }
+            : item));
+          if (existing) {
+            setTasks((items) => items.map((task) => task.terminalId === terminal.id && task.state === "interrupted"
+              ? { ...task, state: "working", finishedAt: undefined, recoveryState: "recovered", error: undefined, summary: undefined }
+              : task));
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           setTerminals((items) => items.map((item) => item.id === terminal.id
@@ -554,9 +648,13 @@ function App() {
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
         agentType: terminal.agentType,
-        state: "stopped" as AgentState,
+        state: terminal.state,
         alive: false,
-        lastActivityAt: 0,
+        lastActivityAt: terminal.lastActivityAt || 0,
+        ...(terminal.lastSessionId ? { lastSessionId: terminal.lastSessionId } : {}),
+        ...(terminal.resumeAvailable !== undefined ? { resumeAvailable: terminal.resumeAvailable } : {}),
+        ...(terminal.recoveryState ? { recoveryState: terminal.recoveryState } : {}),
+        ...(terminal.resumeError ? { resumeError: terminal.resumeError } : {}),
       }));
       const state: PersistedState = {
         schemaVersion: 1,
@@ -581,7 +679,9 @@ function App() {
       const node = terminalNodes.current.get(id);
       if (node) node.style.display = id === activeId ? "block" : "none";
     });
-    requestAnimationFrame(() => fitTerminal(activeId));
+    // Re-fit the freshly shown terminal: the container may have changed size
+    // while it was hidden (display:none skips ResizeObserver events).
+    requestAnimationFrame(() => schedulePtyFit(activeId, 0));
   }, [activeId]);
 
   useEffect(() => {
@@ -591,7 +691,7 @@ function App() {
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
-        fitTerminal(activeId);
+        schedulePtyFit(activeId);
       });
     };
     window.addEventListener("resize", schedule);
@@ -631,14 +731,47 @@ function App() {
     return () => window.removeEventListener("keydown", handler, true);
   }, [activeId, workspaceTerminals, terminals, workspaces, activeWorkspaceId]);
 
+  // Last cols/rows actually sent to the PTY per terminal. xterm's local size
+  // changes instantly on fit(), but the pty-side resize travels an async IPC
+  // chain; sending only real changes keeps the TUI app's coordinate system in
+  // sync with what xterm is rendering and avoids resize storms (sidebar drag
+  // fires ResizeObserver every frame).
+  const sentSizes = useRef(new Map<string, string>());
+  // Pending debounced resize per terminal, so a burst of container resizes
+  // collapses into one pty resize that lands after the final size is known.
+  const resizeTimers = useRef(new Map<string, number>());
+
+  function applyPtySize(id: string, cols: number, rows: number) {
+    if (cols < 2 || rows < 2) return;
+    const key = `${cols}x${rows}`;
+    if (sentSizes.current.get(id) === key) return;
+    sentSizes.current.set(id, key);
+    window.termbeacon.resize({ terminalId: id, cols, rows });
+  }
+
   function fitTerminal(id: string) {
     const fit = fitAddons.current.get(id);
     if (!fit) return;
     try {
       fit.fit();
       const term = terminalViews.current.get(id);
-      if (term) window.termbeacon.resize({ terminalId: id, cols: term.cols, rows: term.rows });
+      if (term) applyPtySize(id, term.cols, term.rows);
     } catch { /* container may not be visible yet */ }
+  }
+
+  // Fit locally right away (so xterm's canvas matches the container) but
+  // debounce the pty notification: during a window/sidebar resize the size
+  // settles over several frames and only the final one should reach the app.
+  function schedulePtyFit(id: string, delayMs = 50) {
+    const term = terminalViews.current.get(id);
+    if (!term) return;
+    const existing = resizeTimers.current.get(id);
+    if (existing) window.clearTimeout(existing);
+    const handle = window.setTimeout(() => {
+      resizeTimers.current.delete(id);
+      fitTerminal(id);
+    }, delayMs);
+    resizeTimers.current.set(id, handle);
   }
 
   function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -683,30 +816,86 @@ function App() {
     }
   }
 
+  async function installOpencodePlugin() {
+    setIntegrationBusy("opencode");
+    setIntegrationMessage("");
+    try {
+      const result = await window.termbeacon.installOpencodePlugin();
+      setIntegration(await window.termbeacon.getIntegrationStatus());
+      setIntegrationMessage(`opencode 插件已${result.existed ? "更新" : "安装"}，请重启或 reload opencode`);
+    } catch (error) {
+      setIntegrationMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIntegrationBusy(null);
+    }
+  }
+
+  async function configureClaudeHook() {
+    setIntegrationBusy("claude");
+    setIntegrationMessage("");
+    try {
+      const result = await window.termbeacon.configureClaudeHook();
+      setIntegration(await window.termbeacon.getIntegrationStatus());
+      setIntegrationMessage(`Claude Hook 已配置${result.backupPath ? "，原配置已备份" : ""}`);
+    } catch (error) {
+      setIntegrationMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIntegrationBusy(null);
+    }
+  }
+
   const updateHint = describeUpdate(updateState, appPackaged);
 
   function restartTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
     if (!terminal || terminal.alive) return;
+    agentTypeByTerminal.current.set(id, terminal.agentType);
     const term = terminalViews.current.get(id);
     try { term?.reset(); } catch { /* view may already be gone */ }
+    const cols = term && term.cols > 1 ? term.cols : 120;
+    const rows = term && term.rows > 1 ? term.rows : 32;
+    sentSizes.current.set(id, `${cols}x${rows}`);
     void window.termbeacon.createTerminal({
       terminalId: terminal.id,
       title: terminal.title,
       cwd: terminal.cwd,
       shell: terminal.shell || defaultShell,
       args: [],
-      cols: term?.cols ?? 120,
-      rows: term?.rows ?? 32,
+      cols,
+      rows,
       agentType: terminal.agentType,
     }).then(() => {
-      setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready" } : item));
+      setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready", resumeError: undefined } : item));
       requestAnimationFrame(() => fitTerminal(id));
     }).catch((error: Error) => {
       setTerminals((items) => items.map((item) => item.id === id
         ? { ...item, alive: false, state: "error", lastOutputSummary: error.message.slice(-90) }
         : item));
     });
+  }
+
+  async function resumeTerminal(id: string) {
+    const terminal = terminals.find((item) => item.id === id);
+    if (!terminal || !terminal.alive || terminal.recoveryState === "recovering") return;
+    const spec = await window.termbeacon.getResumeSpec({
+      agentType: terminal.agentType,
+      sessionId: terminal.lastSessionId,
+      cwd: terminal.cwd,
+      shell: terminal.shell || defaultShell,
+    });
+    if (!spec.supported || !spec.command) {
+      setTerminals((items) => items.map((item) => item.id === id
+        ? { ...item, recoveryState: "unsupported", resumeAvailable: false, resumeError: spec.reason || "该 CLI 不支持会话恢复" }
+        : item));
+      return;
+    }
+    setTerminals((items) => items.map((item) => item.id === id
+      ? { ...item, recoveryState: "recovering", resumeError: undefined }
+      : item));
+    setTasks((items) => items.map((task) => task.terminalId === id && task.state === "interrupted"
+      ? { ...task, recoveryState: "recovering" }
+      : task));
+    window.termbeacon.launch({ terminalId: id, data: `${spec.command}\r` });
   }
 
   // The rename inputs are rendered inside the chip/terminal <button>, so the
@@ -736,8 +925,10 @@ function App() {
     if (next) setSettingsOpen(false);
   }
 
+  // Terminals created inside a workspace start in the workspace's folder.
   function addTerminal() {
-    const terminal = newTerminal(terminals.length + 1, defaultShell);
+    const workspaceCwd = activeWorkspace?.cwd;
+    const terminal = newTerminal(terminals.length + 1, defaultShell, workspaceCwd && isValidCwd(workspaceCwd) ? workspaceCwd : DEFAULT_CWD);
     setTerminals((items) => [...items, terminal]);
     setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
     setActiveId(terminal.id);
@@ -757,14 +948,20 @@ function App() {
     consumedLocal.current.delete(id);
     terminalNodes.current.delete(id);
     pendingHistory.current.delete(id);
+    agentTypeByTerminal.current.delete(id);
     lastInput.current.delete(id);
     inputBuffers.current.delete(id);
+    sentSizes.current.delete(id);
+    const pendingResize = resizeTimers.current.get(id);
+    if (pendingResize) window.clearTimeout(pendingResize);
+    resizeTimers.current.delete(id);
     setTasks((items) => items.filter((task) => task.terminalId !== id));
     void window.termbeacon.removeHistory(id);
     const owner = workspaces.find((workspace) => workspace.terminalIds.includes(id));
     const remaining = owner ? owner.terminalIds.filter((terminalId) => terminalId !== id) : [];
     if (id === activeId && remaining.length === 0) {
-      const replacement = newTerminal(terminals.length, defaultShell);
+      const replacementCwd = owner?.cwd && isValidCwd(owner.cwd) ? owner.cwd : DEFAULT_CWD;
+      const replacement = newTerminal(terminals.length, defaultShell, replacementCwd);
       setTerminals((items) => [...items.filter((item) => item.id !== id), replacement]);
       setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
       setActiveId(replacement.id);
@@ -785,9 +982,19 @@ function App() {
     }
   }
 
-  function addWorkspace() {
-    const terminal = newTerminal(terminals.length + 1, defaultShell);
-    const workspace: Workspace = { id: crypto.randomUUID(), name: `工作区 ${workspaces.length + 1}`, terminalIds: [terminal.id] };
+  // New workspaces are anchored to a local folder: the folder name becomes the
+  // default title (until the user renames it) and new terminals start in it.
+  async function addWorkspace() {
+    const picked = await window.termbeacon.pickCwd();
+    if (!isValidCwd(picked)) return;
+    const folderName = folderNameFromPath(picked);
+    const terminal = newTerminal(terminals.length + 1, defaultShell, picked);
+    const workspace: Workspace = {
+      id: crypto.randomUUID(),
+      name: folderName || `工作区 ${workspaces.length + 1}`,
+      cwd: picked,
+      terminalIds: [terminal.id],
+    };
     setTerminals((items) => [...items, terminal]);
     setWorkspaces((items) => [...items, workspace]);
     setActiveWorkspaceId(workspace.id);
@@ -795,14 +1002,14 @@ function App() {
   }
 
   function renameWorkspace(id: string, name: string) {
-    setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, name } : workspace));
+    setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, name, namePinned: true } : workspace));
   }
 
   function removeWorkspace(id: string) {
     if (workspaces.length < 2) return;
     const target = workspaces.find((workspace) => workspace.id === id);
     if (!target) return;
-    if (!window.confirm(`删除工作区「${target.name}」及其中的 ${target.terminalIds.length} 个终端？`)) return;
+    if (!window.confirm(`删除工作区「${target.name}」及其中的 ${target.terminalIds.length} 个终端？${target.cwd ? `\n（目录：${target.cwd}）` : ""}`)) return;
     target.terminalIds.forEach((terminalId) => {
       const terminal = terminals.find((item) => item.id === terminalId);
       if (terminal?.alive) window.termbeacon.kill({ terminalId, reason: "user-kill" });
@@ -816,8 +1023,13 @@ function App() {
       consumedLocal.current.delete(terminalId);
       terminalNodes.current.delete(terminalId);
       pendingHistory.current.delete(terminalId);
+      agentTypeByTerminal.current.delete(terminalId);
       lastInput.current.delete(terminalId);
       inputBuffers.current.delete(terminalId);
+      sentSizes.current.delete(terminalId);
+      const pendingResize = resizeTimers.current.get(terminalId);
+      if (pendingResize) window.clearTimeout(pendingResize);
+      resizeTimers.current.delete(terminalId);
       void window.termbeacon.removeHistory(terminalId);
     });
     setTasks((items) => items.filter((task) => !removedIds.has(task.terminalId)));
@@ -840,37 +1052,49 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title, titlePinned: true } : item));
   }
 
-  async function pickCwd() {
-    if (!active) return;
-    const picked = await window.termbeacon.pickCwd();
-    if (!isValidCwd(picked)) return;
-    setTerminals((items) => items.map((item) => item.id === active.id ? { ...item, cwd: picked } : item));
-  }
-
   return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
     <aside className="sidebar">
       {!sidebarCollapsed && <>
-      <div className="brand-row"><div><div className="brand">TermBeacon</div><div className="subtitle">CLI Agent 工作台</div></div><div className="brand-actions"><button className="sidebar-toggle" onClick={toggleSidebar} title="隐藏工作栏" aria-label="隐藏工作栏"><SidebarToggleIcon collapsed={false} /></button><button className="add-button" onClick={addTerminal} title="新建终端" aria-label="新建终端"><PlusIcon /></button></div></div>
-      <div className="workspace-chips">
-        {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-chip ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.name}>
-          <EditableTitle title={workspace.name} onCommit={(next) => renameWorkspace(workspace.id, next)} />
-          {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title={`删除工作区「${workspace.name}」`} role="button" aria-label={`删除工作区「${workspace.name}」`}>×</span>}
-        </button>)}
-        <button className="workspace-chip add-chip" onClick={addWorkspace} title="新建工作区" aria-label="新建工作区"><PlusIcon /><span>新建工作区</span></button>
-      </div>
-      <div className="terminal-list">
+      <div className="brand-row"><div className="brand-lockup"><BrandMark /><div className="brand">TermBeacon</div></div></div>
+      <section className="sidebar-section workspaces-section">
+        <div className="sidebar-section-header">
+          <span className="sidebar-section-title">工作区</span>
+          <button className="workspace-add" onClick={addWorkspace} title="添加工作区（选择本地文件夹）" aria-label="添加工作区（选择本地文件夹）"><PlusIcon /></button>
+        </div>
+        <div className="workspace-list" ref={workspaceStrip}>
+          {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.cwd ? `${workspace.name}（${workspace.cwd}）` : workspace.name}>
+            <span className="workspace-glyph" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+            </span>
+            <span className="workspace-copy">
+              <EditableTitle title={workspace.name} onCommit={(next) => renameWorkspace(workspace.id, next)} />
+              <small>{workspace.cwd || "未设置目录"}</small>
+            </span>
+            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title={`删除工作区「${workspace.name}」`} role="button" aria-label={`删除工作区「${workspace.name}」`}>×</span>}
+          </button>)}
+        </div>
+      </section>
+      <section className="sidebar-section terminals-section">
+        <div className="sidebar-section-header">
+          <span className="sidebar-section-title">终端</span>
+          <button className="workspace-add" onClick={addTerminal} title="新建终端" aria-label="新建终端"><PlusIcon /></button>
+        </div>
+        <div className="terminal-list">
         {workspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
           <span className={`status-dot ${stateClass[terminal.state]}`} />
-          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal)} · {stateLabel[terminal.state]}</small></span>
+          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal)} · {terminalStateLabel(terminal)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
+          {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title="恢复 CLI 会话">恢复</span>}
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title="删除终端">×</span>
         </button>)}
-      </div>
+        </div>
+      </section>
       {hostDown && <div className="host-alert">
         <span>{hostMessage || "PTY Host 已断开"}</span>
         <button onClick={restartHost}>重启 PTY Host</button>
       </div>}
       <div className="sidebar-footer">
+        <button className="sidebar-tool sidebar-toggle" onClick={toggleSidebar} title="隐藏工作栏" aria-label="隐藏工作栏"><SidebarToggleIcon collapsed={false} /></button>
         <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title="打开设置" aria-label="打开设置"><SettingsIcon /></button>
         <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}><ThemeIcon theme={theme} /></button>
       </div>
@@ -894,23 +1118,23 @@ function App() {
       </div>
       {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
       {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
+      <div className="settings-caption">CLI 集成</div>
+      <div className="settings-hint">可选。用于更准确识别 opencode 和 Claude Code 的工作状态。</div>
+      <div className="integration-row">
+        <span>opencode 插件</span>
+        <button onClick={() => void installOpencodePlugin()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "opencode" ? "处理中…" : integration?.opencodePluginInstalled ? "更新" : "安装"}</button>
+      </div>
+      <div className="integration-row">
+        <span>Claude Hook</span>
+        <button onClick={() => void configureClaudeHook()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "claude" ? "处理中…" : integration?.claudeHookConfigured ? "重新配置" : "配置"}</button>
+      </div>
+      {integrationMessage && <div className={`settings-hint ${integrationMessage.includes("失败") || integrationMessage.includes("不存在") ? "error" : ""}`}>{integrationMessage}</div>}
     </div>}
     <section className="workspace">
       {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title="展开工作栏" aria-label="展开工作栏"><SidebarToggleIcon collapsed /></button>}
-      <header className="workspace-header">
-        <div><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div>
-        {active && <div className="header-actions"><button className={taskHistoryOpen ? "active" : ""} onClick={() => setTaskHistoryOpen((open) => !open)}>任务历史</button>{!active.alive && <button onClick={() => restartTerminal(active.id)}>重启终端</button>}</div>}
-      </header>
+      {active && !active.alive && <button className="terminal-restart" onClick={() => restartTerminal(active.id)} title="终端已停止，点击重启">重启终端</button>}
       {updateState?.type === "downloaded" && <div className="update-banner">新版本 {updateState.version || "已下载"} 已准备好。<button onClick={() => void window.termbeacon.installUpdate()}>重启并安装</button></div>}
       {updateState?.type === "downloading" && <div className="update-progress">正在下载更新 {Math.round(updateState.percent || 0)}%</div>}
-      {taskHistoryOpen && <aside className="task-history-panel">
-        <div className="task-history-heading"><strong>最近任务</strong><span>{activeTasks.length}</span></div>
-        {activeTasks.length === 0 && <div className="task-history-empty">当前终端还没有任务记录</div>}
-        {activeTasks.map((task) => <div className="task-history-item" key={task.id}>
-          <span className={`status-dot ${taskStateClass[task.state]}`} />
-          <div><strong>{task.prompt || task.summary || "未命名任务"}</strong><small>{taskStateLabel[task.state]} · {formatTaskTime(task.startedAt)}{task.finishedAt ? ` · ${Math.max(0, Math.round((task.finishedAt - task.startedAt) / 1000))}s` : ""}</small>{task.error && <em>{task.error}</em>}</div>
-        </div>)}
-      </aside>}
       <div className="terminal-stage" ref={terminalStage}>{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;

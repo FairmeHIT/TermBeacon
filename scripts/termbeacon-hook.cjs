@@ -55,6 +55,12 @@ function readStdin() {
   }
 }
 
+function sessionIdFromInput(input) {
+  const value = input?.session_id ?? input?.sessionId ?? input?.sessionID;
+  if (typeof value === "string" && value.trim() && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value)) return value.trim();
+  return undefined;
+}
+
 async function post(payload) {
   const port = process.env.TERMBEACON_HOOK_PORT;
   const token = process.env.TERMBEACON_HOOK_TOKEN;
@@ -87,7 +93,8 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const ok = await post({ event, status });
+  const sessionId = args.session_id || args.sessionId || sessionIdFromInput(input);
+  const ok = await post({ event, status, ...(sessionId ? { sessionId: String(sessionId).slice(0, 256) } : {}) });
   if (!ok && process.env.TERMBEACON_HOOK_PORT) {
     console.error("[termbeacon-hook] could not reach the TermBeacon hook bridge");
   }

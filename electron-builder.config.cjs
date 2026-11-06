@@ -1,4 +1,17 @@
 /** electron-builder configuration for TermBeacon. */
+const fs = require("node:fs");
+const path = require("node:path");
+
+// A developer may point the builder at an already extracted Electron runtime
+// to work around a local file-lock issue. The path is optional: a clean clone
+// must be able to use electron-builder's normal download/cache flow.
+function resolveElectronDist() {
+  const configured = process.env.TERMBEACON_ELECTRON_DIST;
+  if (!configured) return undefined;
+  const candidate = path.resolve(configured);
+  return fs.existsSync(path.join(candidate, "electron.exe")) ? candidate : undefined;
+}
+
 module.exports = {
   appId: "com.fairmhit.termbeacon",
   productName: "TermBeacon",
@@ -10,13 +23,10 @@ module.exports = {
   // point output at a project-external path for the build run.
   directories: { output: "release", buildResources: "build" },
   publish: [{ provider: "github", owner: "FairmeHIT", repo: "TermBeacon", releaseType: "release" }],
-  // Point the builder at a pre-extracted Electron distribution so it never
-  // performs the extract-then-atomic-move step that trips the local filter
-  // driver's EBUSY (HANDOFF 6.8). Extract once via:
-  //   tar -xf %LOCALAPPDATA%\electron\Cache\<hash>\electron-v<ver>-win32-x64.zip -C <cache>\electron-dist-<ver>-win32-x64
-  electronDist: process.platform === "win32"
-    ? `${process.env.LOCALAPPDATA}/electron-builder/Cache/electron-dist-36.9.5-win32-x64`
-    : undefined,
+  // Set TERMBEACON_ELECTRON_DIST to an extracted Electron directory only when
+  // the local machine needs the file-lock workaround. Normal clones do not
+  // depend on a machine-specific cache path.
+  electronDist: resolveElectronDist(),
   npmRebuild: false,
   buildDependenciesFromSource: false,
   files: [
@@ -33,6 +43,10 @@ module.exports = {
   ],
   asarUnpack: [
     "node_modules/node-pty/**/*",
+  ],
+  extraResources: [
+    { from: "hooks/opencode/termbeacon.js", to: "termbeacon-hooks/opencode/termbeacon.js" },
+    { from: "scripts/termbeacon-hook.cjs", to: "termbeacon-hooks/termbeacon-hook.cjs" },
   ],
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],

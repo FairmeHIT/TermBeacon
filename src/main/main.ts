@@ -1,4 +1,7 @@
-import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen, utilityProcess } from "electron";
+import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen } from "electron";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendFile, copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
@@ -40,10 +43,28 @@ const { planRestart } = require("./host-restart.cjs") as {
     attempts: number; delayMs: number; giveUp: boolean;
   };
 };
+const { getResumeSpec } = require("./session-resume.cjs") as {
+  getResumeSpec: (request: { agentType?: string; sessionId?: string; cwd?: string; shell?: string }) => Record<string, unknown>;
+};
+const {
+  resolveAssets,
+  installOpencodePlugin,
+  configureClaude,
+  integrationStatus,
+} = require("./integration-config.cjs") as {
+  resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null };
+  installOpencodePlugin: (options: { assets: { opencodePlugin: string; hookScript: string } }) => { target: string; existed: boolean; bytes: number };
+  configureClaude: (options: { assets: { opencodePlugin: string; hookScript: string } }) => { target: string; backupPath?: string; hookScript: string };
+  integrationStatus: (options: { assets: { opencodePlugin: string; hookScript: string } }) => Record<string, unknown>;
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
-let ptyHost: Electron.UtilityProcess | null = null;
+let ptyHostProcess: ChildProcess | null = null;
+let hostSocket: Socket | null = null;
+let rendererPort: Electron.MessagePortMain | null = null;
+let hostSocketName: string | null = null;
+const hostMessageQueue: unknown[] = [];
 let rendererReady = false;
 let isQuitting = false;
 let hostRestartTimer: NodeJS.Timeout | undefined;
@@ -78,6 +99,10 @@ function historyDir() { return path.join(app.getPath("userData"), "terminal-hist
 function historyPath(terminalId: string) {
   if (!/^[a-zA-Z0-9_-]{1,100}$/.test(terminalId)) return null;
   return path.join(historyDir(), `${terminalId}.log`);
+}
+
+function integrationAssets() {
+  return resolveAssets({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), executablePath: process.execPath });
 }
 
 async function readState(): Promise<PersistedState> {
@@ -206,7 +231,7 @@ async function removeTerminalHistory(terminalId: string) {
 }
 
 function notifyHostEvent(
-  type: "pty:host-exit" | "pty:host-stopped",
+  type: "pty:host-exit" | "pty:host-disconnected" | "pty:host-stopped",
   code?: number,
   signal?: string,
   message?: string,
@@ -226,7 +251,7 @@ function notifyHostExit(code?: number, signal?: string, message?: string) {
 }
 
 function schedulePtyHostRestart() {
-  if (isQuitting || hostRestartTimer) return;
+  if (isQuitting || hostRestartTimer || hostSocket) return;
   const plan = planRestart({
     attempts: hostRestartAttempts,
     uptimeMs: hostStartedAt ? Date.now() - hostStartedAt : 0,
@@ -239,40 +264,156 @@ function schedulePtyHostRestart() {
   hostRestartTimer = setTimeout(() => {
     hostRestartTimer = undefined;
     startPtyHost();
-    if (rendererReady) connectDataPlane();
   }, plan.delayMs);
 }
 
-function startPtyHost() {
-  if (ptyHost || isQuitting) return;
-  const hostPath = path.join(__dirname, "pty-host.cjs");
+function getHostSocketName() {
+  if (hostSocketName) return hostSocketName;
+  const profile = createHash("sha256").update(app.getPath("userData")).digest("hex").slice(0, 16);
+  hostSocketName = process.platform === "win32"
+    ? `\\\\.\\pipe\\termbeacon-host-${profile}`
+    : path.join(app.getPath("userData"), "termbeacon-host.sock");
+  return hostSocketName;
+}
+
+function queueHostMessage(message: unknown) {
+  hostMessageQueue.push(message);
+  if (hostMessageQueue.length > 2000) hostMessageQueue.splice(0, hostMessageQueue.length - 2000);
+}
+
+function sendHostMessage(message: unknown) {
+  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable) {
+    queueHostMessage(message);
+    return;
+  }
   try {
-    const host = utilityProcess.fork(hostPath, [], { serviceName: "TermBeacon PTY Host" });
-    ptyHost = host;
+    hostSocket.write(`${JSON.stringify(message)}\n`);
+  } catch {
+    queueHostMessage(message);
+  }
+}
+
+function flushHostMessages() {
+  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable) return;
+  const pending = hostMessageQueue.splice(0);
+  for (const message of pending) sendHostMessage(message);
+}
+
+function attachHostSocket(socket: Socket) {
+  if (hostSocket && hostSocket !== socket) {
+    try { hostSocket.destroy(); } catch { /* stale connection */ }
+  }
+  hostSocket = socket;
+  hostStartedAt = hostStartedAt || Date.now();
+  let pending = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    pending += chunk;
+    while (true) {
+      const newline = pending.indexOf("\n");
+      if (newline < 0) break;
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      if (!line.trim()) continue;
+      try {
+        const payload = JSON.parse(line);
+        if (payload?.type === "pty:host-ready") {
+          hostRestartAttempts = 0;
+          hostStartedAt = Date.now();
+        }
+        rendererPort?.postMessage(payload);
+      } catch (error) {
+        console.error("[pty-host] invalid socket message", error);
+      }
+    }
+  });
+  socket.on("error", (error) => {
+    if (hostSocket === socket) console.error("[pty-host] socket error", error.message);
+  });
+  socket.on("close", () => {
+    if (hostSocket !== socket) return;
+    hostSocket = null;
+    if (isQuitting) return;
+    notifyHostEvent("pty:host-disconnected", undefined, undefined, "PTY Host 连接已断开");
+    schedulePtyHostRestart();
+  });
+  flushHostMessages();
+}
+
+function connectToPtyHost() {
+  if (isQuitting || hostSocket) return;
+  const socket = createConnection(getHostSocketName());
+  let connected = false;
+  socket.once("connect", () => {
+    connected = true;
+    attachHostSocket(socket);
+  });
+  socket.once("error", () => {
+    if (!connected) {
+      try { socket.destroy(); } catch { /* connection failed */ }
+    }
+  });
+}
+
+function spawnPtyHost() {
+  if (isQuitting || (ptyHostProcess && ptyHostProcess.exitCode === null)) return;
+  const hostPath = path.join(__dirname, "../host-app");
+  try {
+    const child = spawn(process.execPath, [hostPath, "--server", getHostSocketName()], {
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    ptyHostProcess = child;
     hostStartedAt = Date.now();
-    // Surface host crashes in the dev console; without this a host exception
-    // is completely silent and only manifests as dead terminals in the UI.
-    host.stdout?.on("data", (chunk: Buffer) => console.log(`[pty-host:${host.pid}]`, chunk.toString().trimEnd()));
-    host.stderr?.on("data", (chunk: Buffer) => console.error(`[pty-host:${host.pid}]`, chunk.toString().trimEnd()));
-    host.on("exit", (code: number) => {
-      if (ptyHost !== host) return;
-      ptyHost = null;
-      console.error(`[pty-host] exited with code ${code}`);
+    child.unref();
+    child.on("exit", (code, signal) => {
+      if (ptyHostProcess !== child) return;
+      ptyHostProcess = null;
       if (isQuitting) return;
-      notifyHostExit(code);
-      schedulePtyHostRestart();
+      console.error(`[pty-host] detached process exited with code ${code ?? "?"}${signal ? ` (${signal})` : ""}`);
+      if (!hostSocket) {
+        notifyHostExit(code ?? undefined, signal ?? undefined);
+        schedulePtyHostRestart();
+      }
+    });
+    child.on("error", (error) => {
+      if (ptyHostProcess !== child) return;
+      ptyHostProcess = null;
+      if (!isQuitting) {
+        notifyHostExit(undefined, undefined, error.message);
+        schedulePtyHostRestart();
+      }
     });
   } catch (error) {
-    ptyHost = null;
+    ptyHostProcess = null;
     notifyHostExit(undefined, undefined, error instanceof Error ? error.message : String(error));
     schedulePtyHostRestart();
   }
 }
 
+function startPtyHost() {
+  if (isQuitting || hostSocket) return;
+  connectToPtyHost();
+  setTimeout(() => {
+    if (!isQuitting && !hostSocket) {
+      spawnPtyHost();
+      setTimeout(() => {
+        if (!isQuitting && !hostSocket) connectToPtyHost();
+      }, 150);
+    }
+  }, 100);
+}
+
 function connectDataPlane() {
-  if (!mainWindow || !ptyHost) return;
+  if (!mainWindow) return;
+  try { rendererPort?.close(); } catch { /* old renderer port */ }
   const channel = new MessageChannelMain();
-  ptyHost.postMessage({ type: "connect" }, [channel.port1]);
+  rendererPort = channel.port1;
+  rendererPort.on("message", (event) => {
+    try { sendHostMessage(event.data); } catch (error) { console.error("[pty-host] renderer bridge failed", error); }
+  });
+  rendererPort.start();
   mainWindow.webContents.postMessage("pty:connect", null, [channel.port2]);
 }
 
@@ -360,6 +501,55 @@ function createWindow(savedState: PersistedState = stateCache || defaultState())
   else void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
+async function runHookMode() {
+  const port = process.env.TERMBEACON_HOOK_PORT;
+  const token = process.env.TERMBEACON_HOOK_TOKEN;
+  const terminalId = process.env.TERMBEACON_TERMINAL_ID;
+  let raw = "";
+  if (!process.stdin.isTTY) {
+    for await (const chunk of process.stdin) raw += String(chunk);
+  }
+  let input: Record<string, unknown> = {};
+  try { input = raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { input = {}; }
+  const args = process.argv.slice(2);
+  const positional = args.filter((value) => !value.startsWith("--"));
+  const option = (name: string) => {
+    const index = args.indexOf(`--${name}`);
+    return index >= 0 ? args[index + 1] : undefined;
+  };
+  const event = String(option("event") || positional[1] || input.hook_event_name || input.event || "hook");
+  const statusByEvent: Record<string, string> = {
+    SessionStart: "started", UserPromptSubmit: "running", PreToolUse: "running", PostToolUse: "running",
+    PreCompact: "running", Notification: "waiting", Stop: "completed", SubagentStop: "completed", SessionEnd: "completed",
+  };
+  const status = String(option("status") || positional[0] || statusByEvent[event] || "running");
+  const validStatuses = new Set(["started", "running", "waiting", "completed", "failed"]);
+  if (!validStatuses.has(status)) {
+    console.error(`[termbeacon-hook] unknown status: ${status}`);
+    process.exitCode = 1;
+  } else if (port && token && terminalId) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hook`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-termbeacon-token": token },
+        body: JSON.stringify({ terminalId, event, status }),
+        signal: controller.signal,
+      });
+      if (!response.ok) console.error(`[termbeacon-hook] bridge returned HTTP ${response.status}`);
+    } catch {
+      console.error("[termbeacon-hook] could not reach the TermBeacon hook bridge");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  app.quit();
+}
+
+if (process.argv.includes("--hook")) {
+  void runHookMode();
+} else {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
@@ -392,8 +582,14 @@ app.on("before-quit", (event) => {
   isQuitting = true;
   if (hostRestartTimer) clearTimeout(hostRestartTimer);
   if (windowSaveTimer) clearTimeout(windowSaveTimer);
-  ptyHost?.postMessage({ type: "shutdown" });
-  ptyHost?.kill();
+  // The detached host owns the PTYs. Closing the UI only detaches the client;
+  // an explicit terminal stop still sends pty:kill through the data plane.
+  try { hostSocket?.write(`${JSON.stringify({ type: "detach" })}\n`); } catch { /* host may already be gone */ }
+  try { hostSocket?.end(); } catch { /* already closed */ }
+  hostSocket = null;
+  try { rendererPort?.close(); } catch { /* renderer is closing */ }
+  rendererPort = null;
+  ptyHostProcess?.unref();
 });
 
 ipcMain.handle("state:load", async () => {
@@ -402,6 +598,7 @@ ipcMain.handle("state:load", async () => {
 });
 ipcMain.handle("cli:discover", () => discoverAll());
 ipcMain.handle("platform:info", () => platformInfo());
+ipcMain.handle("session:resume-spec", (_event, request) => getResumeSpec(request || {}));
 ipcMain.handle("cwd:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -432,6 +629,9 @@ ipcMain.handle("update:state", () => ({
   configured: updateConfigured,
 }));
 ipcMain.handle("update:check", () => checkForUpdatesNow());
+ipcMain.handle("integration:status", () => integrationStatus({ assets: integrationAssets() }));
+ipcMain.handle("integration:install-opencode", () => installOpencodePlugin({ assets: integrationAssets() }));
+ipcMain.handle("integration:configure-claude", () => configureClaude({ assets: integrationAssets() }));
 ipcMain.handle("pty:restart-host", () => {
   if (isQuitting) return false;
   if (hostRestartTimer) {
@@ -439,7 +639,7 @@ ipcMain.handle("pty:restart-host", () => {
     hostRestartTimer = undefined;
   }
   hostRestartAttempts = 0;
-  if (ptyHost) {
+  if (hostSocket) {
     if (rendererReady) connectDataPlane();
     return true;
   }
@@ -463,4 +663,5 @@ ipcMain.handle("pty:create", (_event, request) => {
   terminals.set(terminal.id, terminal);
   return { terminalId: terminal.id };
 });
+}
 

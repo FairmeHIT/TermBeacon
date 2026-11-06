@@ -148,12 +148,23 @@ test("PTY host rejects replay requests with invalid sequence or unknown terminal
   assert.ok(errors.some((error) => error.code === "INVALID_REQUEST"));
 });
 
-test("PTY host rejects duplicate terminal creation", () => {
+test("PTY host reattaches an existing terminal after client reconnect", () => {
   const { dataPort, messages } = createHarness();
   dataPort.emit("message", { data: createMessage("t1") });
   dataPort.emit("message", { data: createMessage("t1", "another-shell.exe") });
-  assert.equal(messages.find((message) => message.type === "pty:create-result")?.terminalId, "t1");
-  assert.equal(messages.find((message) => message.type === "pty:error")?.code, "ALREADY_EXISTS");
+  const results = messages.filter((message) => message.type === "pty:create-result");
+  assert.equal(results.length, 2);
+  assert.equal(results[1].terminalId, "t1");
+  assert.equal(results[1].existing, true);
+  assert.equal(messages.some((message) => message.type === "pty:error"), false);
+});
+
+test("PTY host detaches the client without killing sessions", () => {
+  const { dataPort, spawned, messages } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "detach" } });
+  assert.equal(spawned.length, 1);
+  assert.equal(messages.some((message) => message.type === "pty:exit"), false);
 });
 
 test("PTY host returns spawn failures as structured errors", () => {
@@ -212,6 +223,40 @@ test("PTY host treats agent launch writes as launch, not task input", () => {
   assert.equal(inputs, 0);
 });
 
+test("PTY host switches output to the detected agent and clears generic launch state", () => {
+  const outputCalls = [];
+  const instances = [];
+  const detection = {
+    createDetector(agentType, emit) {
+      const runtime = { state: "ready" };
+      const detector = {
+        runtime,
+        output(data) { outputCalls.push({ agentType, data }); },
+        tick() {},
+        input() {
+          runtime.state = "working";
+          emit({ previous: "ready", current: "working", confidence: 0.55, source: "user", at: Date.now() });
+        },
+        exit() {},
+        viewed() {},
+        hook() {},
+      };
+      instances.push({ agentType, detector });
+      return detector;
+    },
+  };
+  const { dataPort, messages, spawned } = createHarness({ detection });
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "claude\r" } });
+  spawned[0].dataCallback("Claude Code\r\n");
+
+  const stateUpdates = messages.filter((message) => message.type === "state:update");
+  assert.equal(instances.map((entry) => entry.agentType).join(","), "generic,claude");
+  assert.equal(outputCalls.at(-1).agentType, "claude");
+  assert.equal(stateUpdates.at(-1).current, "ready");
+  assert.equal(stateUpdates.at(-1).source, "agent");
+});
+
 test("PTY host injects the hook bridge env into each session", () => {
   const { dataPort, spawnedOptions } = createHarness();
   dataPort.emit("message", { data: createMessage("t1") });
@@ -223,7 +268,7 @@ test("PTY host injects the hook bridge env into each session", () => {
 
 test("PTY host routes bridge events to the terminal detector", () => {
   const hooks = [];
-  const { dataPort, emitHook } = createHarness({
+  const { dataPort, messages, emitHook } = createHarness({
     detection: {
       createDetector: () => ({
         output() {}, tick() {}, input() {}, exit() {}, viewed() {},
@@ -232,7 +277,10 @@ test("PTY host routes bridge events to the terminal detector", () => {
     },
   });
   dataPort.emit("message", { data: createMessage("t1") });
-  emitHook({ terminalId: "t1", event: "session.status", status: "completed" });
+  emitHook({ terminalId: "t1", event: "session.status", status: "completed", sessionId: "session-1" });
   emitHook({ terminalId: "missing", event: "session.status", status: "completed" });
   assert.deepEqual(hooks, [["session.status", "completed"]]);
+  const sessionUpdate = messages.find((message) => message.type === "session:update");
+  assert.equal(sessionUpdate?.terminalId, "t1");
+  assert.equal(sessionUpdate?.sessionId, "session-1");
 });

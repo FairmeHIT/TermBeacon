@@ -34,6 +34,22 @@ test("preserves the manual terminal title pin", () => {
   assert.equal(result.terminals[0].titlePinned, true);
 });
 
+test("preserves workspace folder paths and manual name pins", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [
+      { id: "w1", name: "my-project", cwd: "D:\\work\\my-project", namePinned: true, terminalIds: ["t1"] },
+      { id: "w2", name: "B", cwd: "   ", terminalIds: [] },
+    ],
+    terminals: [validTerminal],
+  });
+  assert.equal(result.workspaces[0].cwd, "D:\\work\\my-project");
+  assert.equal(result.workspaces[0].namePinned, true);
+  // Blank folder paths are dropped so the UI shows "未设置目录" instead.
+  assert.equal(result.workspaces[1].cwd, undefined);
+  assert.equal(result.workspaces[1].namePinned, undefined);
+});
+
 test("drops malformed terminals and invalid agent types instead of failing", () => {
   const input = {
     schemaVersion: 1,
@@ -102,4 +118,24 @@ test("keeps bounded task history only for known terminals", () => {
     ],
   });
   assert.deepEqual(result.tasks, [{ id: "task-1", terminalId: "t1", startedAt: 10, state: "working", prompt: "run tests" }]);
+});
+
+test("preserves bounded recovery metadata without accepting malformed session ids", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1"] }],
+    terminals: [{ ...validTerminal, state: "stopped", lastSessionId: "session-1", resumeAvailable: true, recoveryState: "resumable", resumeError: "  interrupted  " }],
+    tasks: [{ id: "task-1", terminalId: "t1", startedAt: 1, state: "interrupted", recoveryState: "resumable" }],
+  });
+  assert.equal(result.terminals[0].lastSessionId, "session-1");
+  assert.equal(result.terminals[0].recoveryState, "resumable");
+  assert.equal(result.terminals[0].resumeError, "interrupted");
+  assert.equal(result.tasks[0].state, "interrupted");
+  assert.equal(result.tasks[0].recoveryState, "resumable");
+  const malformed = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [{ ...validTerminal, lastSessionId: "bad\nvalue" }],
+  });
+  assert.equal(malformed.terminals.length, 0);
 });

@@ -18,7 +18,7 @@ TermBeacon 将多个本地终端聚合到一个窗口中。左侧显示工作区
 
 ### 1.2 v1 非目标
 
-- 应用重启后保持原 PTY 进程继续运行。
+- Windows 系统重启后保持原 PTY 进程继续运行；系统重启后的 CLI 会话通过显式恢复适配器接续。
 - 远程 SSH、容器终端和 WSL 专用管理。
 - 云端同步。
 - 自动修改用户 CLI 配置。
@@ -65,7 +65,7 @@ WinUI 3 适合以下情况时切换：
 | PTY | 直接调用 ConPTY API | 可控性最高，但需要自行维护 C++ 绑定和生命周期 |
 | IPC | 所有输出经过主进程 | 实现简单，但高吞吐下主进程容易成为瓶颈 |
 | 持久化 | SQLite | v1 数据量小，JSON 更易迁移和排查 |
-| 进程常驻 | daemon 跨重启 | 会引入孤儿进程、权限、版本兼容和恢复复杂度 |
+| 进程常驻 | 独立 host + Named Pipe | 增加 host 清理、版本兼容和孤儿进程处理，但可以让应用重启后继续持有 PTY |
 
 ## 3. 系统架构
 
@@ -121,6 +121,10 @@ Renderer TerminalStore
         ├── DetectionWorker
         └── 左侧状态灯更新
 ```
+
+### 3.3 Windows 重启后的 CLI 会话恢复
+
+系统重启会终止原 PTY、Shell 和 CLI 进程，TermBeacon 不尝试恢复进程内存或自动重放最后一条 prompt。启动时会把上次仍处于 `working` / `awaiting-input` 的终端标记为 `interrupted` / `resumable`，重新创建一个 Shell PTY，等待用户点击“恢复”。恢复适配器使用 CLI 自己持久化的会话：Claude 使用 `claude --resume <id>` 或 `--continue`，OpenCode 使用 `opencode --standalone --session <id>` 或 `--continue`，Codex 使用 `codex resume <id>` 或 `resume --last`。session ID 只保存受限长度的标识，不保存 token、完整环境变量或 prompt。
 
 主进程只处理应用生命周期、PTY 控制请求、元数据持久化、窗口和 MessagePort 初始化。
 
@@ -384,7 +388,7 @@ Agent 差异只写入配置，不复制检测代码。配置必须包含：
 - 检测文本尾部：64 KB。
 - 最新摘要：160 个 Unicode 字符。
 
-输出默认只保存在内存。可选磁盘序列化最多保存每终端 1 MB、最近 10,000 行，每 30 秒或切换时异步保存。v1 不要求应用重启后原 PTY 继续运行。
+输出默认只保存在内存。可选磁盘序列化最多保存每终端 1 MB、最近 10,000 行，每 30 秒或切换时异步保存。独立 host 存活时，应用重启后重新绑定原 PTY；Windows 系统重启或 host 崩溃后的原进程恢复仍不承诺。
 
 ## 11. 性能目标
 
@@ -425,7 +429,7 @@ Agent 差异只写入配置，不复制检测代码。配置必须包含：
 
 ### v2
 
-候选范围：daemon 跨重启保留 PTY、WSL/SSH/容器终端、用户自定义 Agent Registry、远程状态聚合、工作区模板、多窗口分屏、任务历史和 WinUI 3 原生版本。
+候选范围：Windows 系统重启后的 CLI session resume、WSL/SSH/容器终端、用户自定义 Agent Registry、远程状态聚合、工作区模板、多窗口分屏和 WinUI 3 原生版本。
 
 ## 13. 风险与开放问题
 

@@ -1,0 +1,5 @@
+{
+  "name": "termbeacon-host",
+  "private": true,
+  "main": "main.cjs"
+}

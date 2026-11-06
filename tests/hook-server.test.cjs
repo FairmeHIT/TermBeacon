@@ -28,6 +28,15 @@ test("hook server forwards a valid event", async (t) => {
   assert.equal(events[0].status, "completed");
 });
 
+test("hook server forwards an optional bounded session id", async (t) => {
+  const { server, port, events } = await withServer(t);
+  const response = await post(port, { terminalId: "t1", event: "session.status", status: "running", sessionId: "session-1" }, server.token);
+  assert.equal(response.status, 204);
+  assert.equal(events[0].sessionId, "session-1");
+  const tooLong = await post(port, { terminalId: "t1", event: "session.status", status: "running", sessionId: "x".repeat(257) }, server.token);
+  assert.equal(tooLong.status, 400);
+});
+
 test("hook server rejects a missing or wrong token", async (t) => {
   const { server, port, events } = await withServer(t);
   const wrong = await post(port, { terminalId: "t1", event: "x", status: "running" }, "wrong");

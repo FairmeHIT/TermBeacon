@@ -1,6 +1,16 @@
 // Utility processes expose the parent channel on process.parentPort. Keep the
-// Electron export as a fallback for older runtimes.
-const parentPort = process.parentPort || require("electron").parentPort;
+// Electron export as a fallback for older runtimes. In detached mode there is
+// no Electron parent; the host accepts a local socket instead.
+const standaloneSocketPath = Array.isArray(process.argv)
+  ? (() => {
+    const index = process.argv.indexOf("--server");
+    return index >= 0 && typeof process.argv[index + 1] === "string" ? process.argv[index + 1] : null;
+  })()
+  : null;
+let parentPort = process.parentPort;
+if (!parentPort && !standaloneSocketPath) {
+  try { parentPort = require("electron").parentPort; } catch { /* running under plain Node */ }
+}
 const fs = require("node:fs");
 const pty = require("node-pty");
 const { isWindows } = require("./platform.cjs");
@@ -23,17 +33,24 @@ const sequence = new Map();
 const detectors = new Map();
 const oscParsers = new Map();
 const agentTypes = new Map();
+const sessionIds = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
 let dataPort = null;
 let tickTimer = null;
+let standaloneServer = null;
+let activeStandaloneSocket = null;
 
 // External CLI hooks/plugins post status events to this loopback server. The
 // port/token are injected into each PTY environment so a hook process can find
 // the bridge without any global config. See hook-server.cjs for the protocol.
 const hookServer = createHookServer({
-  onEvent: ({ terminalId, event, status }) => {
+  onEvent: ({ terminalId, event, status, sessionId }) => {
+    if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(sessionId)) {
+      sessionIds.set(terminalId, sessionId);
+      send({ type: "session:update", terminalId, sessionId, at: Date.now() });
+    }
     const detector = detectors.get(terminalId);
     if (detector && typeof event === "string" && typeof status === "string") {
       detector.hook(event, status);
@@ -143,7 +160,23 @@ function makeDetector(terminalId, agentType) {
 function makeAgentSniffer(terminalId) {
   return createAgentSniffer((agent) => {
     if (agentTypes.get(terminalId) === agent) return;
+    const previous = detectors.get(terminalId);
     makeDetector(terminalId, agent);
+    // The shell echoes the launch command before the CLI banner identifies the
+    // agent. That can briefly arm the generic detector, so publish the new
+    // agent's idle baseline explicitly.
+    if (previous && previous.runtime?.state !== "ready") {
+      send({
+        type: "state:update",
+        terminalId,
+        previous: previous.runtime.state,
+        current: "ready",
+        confidence: 1,
+        source: "agent",
+        summary: `detector switched to ${agent}`,
+        at: Date.now(),
+      });
+    }
     send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
   });
 }
@@ -190,6 +223,15 @@ function createSession(message, hookWaited = false) {
     return;
   }
   if (sessions.has(request.terminalId) || creating.has(request.terminalId)) {
+    if (sessions.has(request.terminalId)) {
+      const existing = sessions.get(request.terminalId);
+      send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: existing.pid, ok: true, existing: true, at: Date.now() });
+      const knownAgent = agentTypes.get(request.terminalId);
+      if (knownAgent) send({ type: "pty:agent", terminalId: request.terminalId, agentType: knownAgent, at: Date.now() });
+      const knownSessionId = sessionIds.get(request.terminalId);
+      if (knownSessionId) send({ type: "session:update", terminalId: request.terminalId, sessionId: knownSessionId, at: Date.now() });
+      return;
+    }
     sendError("pty:create", protocolError("ALREADY_EXISTS", `terminal already exists: ${request.terminalId}`), requestId, request.terminalId);
     return;
   }
@@ -224,7 +266,7 @@ function createSession(message, hookWaited = false) {
   bufferRelease(request.terminalId);
   // Start detection with the generic pattern set: a fresh shell is not yet an
   // agent. The sniffer upgrades the detector when a CLI banner appears.
-  const detector = makeDetector(request.terminalId, "generic");
+  const initialDetector = makeDetector(request.terminalId, "generic");
   const oscParser = makeOscParser(request.terminalId);
   const sniffer = makeAgentSniffer(request.terminalId);
   send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: session.pid, ok: true, at: Date.now() });
@@ -239,11 +281,15 @@ function createSession(message, hookWaited = false) {
     send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, summary, at: Date.now() });
     try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
     try { sniffer.feed(data); } catch { /* agent sniffing must never break output delivery */ }
+    // Agent sniffing can replace the detector while processing this same
+    // output chunk. Route output and ticks through the current detector.
+    const detector = detectors.get(request.terminalId) || initialDetector;
     detector.output(data);
     detector.tick();
   });
   session.onExit(({ exitCode }) => {
     const reason = killRequests.delete(request.terminalId) ? "user-kill" : "natural";
+    const detector = detectors.get(request.terminalId) || initialDetector;
     detector.exit(reason === "user-kill" ? 0 : exitCode);
     send({ type: "pty:exit", terminalId: request.terminalId, exitCode, reason, at: Date.now() });
     sessions.delete(request.terminalId);
@@ -251,6 +297,7 @@ function createSession(message, hookWaited = false) {
     detectors.delete(request.terminalId);
     oscParsers.delete(request.terminalId);
     agentTypes.delete(request.terminalId);
+    sessionIds.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
     // the tail of the final output; it is released on explicit recreate.
   });
@@ -258,6 +305,15 @@ function createSession(message, hookWaited = false) {
 
 function handleMessage(message) {
   if (!message || typeof message !== "object") return;
+  if (message.type === "detach") {
+    // A detached client is expected during an Electron restart. Keep all PTY
+    // sessions and their detectors alive; the next client will attach again.
+    if (standaloneSocketPath && dataPort) {
+      try { dataPort.close?.(); } catch { /* socket already closed */ }
+      dataPort = null;
+    }
+    return;
+  }
   if (message.type === "shutdown") {
     if (tickTimer) {
       clearInterval(tickTimer);
@@ -357,17 +413,21 @@ function handleMessage(message) {
     try {
       const request = normalizeTerminalRequest(message, "state:hook");
       const detector = detectors.get(request.terminalId);
-      if (detector && typeof message.event === "string" && typeof message.status === "string") detector.hook(message.event, message.status);
+      if (detector && typeof message.event === "string" && typeof message.status === "string") {
+        if (typeof message.sessionId === "string" && message.sessionId.length > 0 && message.sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(message.sessionId)) {
+          sessionIds.set(request.terminalId, message.sessionId);
+          send({ type: "session:update", terminalId: request.terminalId, sessionId: message.sessionId, at: Date.now() });
+        }
+        detector.hook(message.event, message.status);
+      }
     } catch (error) {
       sendError("state:hook", error, message.requestId, message?.terminalId);
     }
   }
 }
 
-parentPort.on("message", (event) => {
-  const message = event?.data || event;
-  if (message?.type !== "connect") return;
-  dataPort = event?.ports?.[0] || message?.ports?.[0];
+function attachElectronPort(port) {
+  dataPort = port;
   if (!dataPort) return;
   dataPort.on("message", (portEvent) => {
     try { handleMessage(portEvent.data); } catch (error) { sendError("message", error); }
@@ -375,7 +435,67 @@ parentPort.on("message", (event) => {
   dataPort.on("messageerror", (error) => sendError("data-port", error));
   dataPort.start();
   send({ type: "pty:host-ready", at: Date.now() });
-});
+}
+
+function startStandaloneServer(socketPath) {
+  const net = require("node:net");
+  const server = net.createServer((socket) => {
+    // TermBeacon is a single-instance UI. A new client replaces a stale one,
+    // while the PTY sessions remain owned by this detached host.
+    if (dataPort && typeof dataPort.close === "function") {
+      try { dataPort.close(); } catch { /* stale client */ }
+    }
+    activeStandaloneSocket = socket;
+    dataPort = {
+      postMessage(message) {
+        if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
+      },
+      close() {
+        try { socket.destroy(); } catch { /* already closed */ }
+      },
+    };
+    let pending = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      pending += chunk;
+      while (true) {
+        const newline = pending.indexOf("\n");
+        if (newline < 0) break;
+        const line = pending.slice(0, newline);
+        pending = pending.slice(newline + 1);
+        if (!line.trim()) continue;
+        try { handleMessage(JSON.parse(line)); } catch (error) { sendError("message", error); }
+      }
+    });
+    socket.on("close", () => {
+      if (activeStandaloneSocket === socket) {
+        activeStandaloneSocket = null;
+        dataPort = null;
+      }
+    });
+    send({ type: "pty:host-ready", at: Date.now() });
+  });
+  server.on("error", (error) => {
+    try { console.error(`[pty-host] standalone server error: ${error.message}`); } catch { /* no console */ }
+    // A second host racing the existing Named Pipe must exit instead of
+    // lingering with PTYs that no client can reach.
+    try { process.exit(1); } catch { /* test harness */ }
+  });
+  server.listen(socketPath);
+  standaloneServer = server;
+}
+
+if (parentPort) {
+  parentPort.on("message", (event) => {
+    const message = event?.data || event;
+    if (message?.type !== "connect") return;
+    attachElectronPort(event?.ports?.[0] || message?.ports?.[0]);
+  });
+} else if (standaloneSocketPath) {
+  startStandaloneServer(standaloneSocketPath);
+} else {
+  throw new Error("PTY host requires an Electron parent port or --server socket path");
+}
 
 // Start the detector clock as soon as the host module loads. It is independent
 // of the data port so detection keeps advancing across renderer reconnects.
