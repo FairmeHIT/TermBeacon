@@ -25,6 +25,16 @@ const { sanitizeState, defaultState } = require("./state-sanitize.cjs") as {
   sanitizeState: (parsed: unknown) => PersistedState;
   defaultState: () => PersistedState;
 };
+const { fitWindowToWorkArea, centeredWindowBounds } = require("./window-bounds.cjs") as {
+  fitWindowToWorkArea: (
+    bounds: { width: number; height: number; x: number; y: number },
+    workArea: { width: number; height: number; x: number; y: number },
+  ) => { x: number; y: number; width: number; height: number };
+  centeredWindowBounds: (
+    size: { width: number; height: number },
+    workArea: { width: number; height: number; x: number; y: number },
+  ) => { x: number; y: number; width: number; height: number };
+};
 const { planRestart } = require("./host-restart.cjs") as {
   planRestart: (state: { attempts: number; uptimeMs: number }) => {
     attempts: number; delayMs: number; giveUp: boolean;
@@ -285,25 +295,30 @@ function registerMenu() {
 
 function createWindow(savedState: PersistedState = stateCache || defaultState()) {
   const savedBounds = savedState.windowBounds;
-  const display = screen.getPrimaryDisplay();
-  const workArea = display.workArea;
-  const width = savedBounds?.width ?? 1280;
-  const height = savedBounds?.height ?? 820;
-  const proposedX = savedBounds?.x ?? Math.round(workArea.x + (workArea.width - width) / 2);
-  const proposedY = savedBounds?.y ?? Math.round(workArea.y + (workArea.height - height) / 2);
-  const visible = screen.getAllDisplays().some((item) => {
-    const area = item.workArea;
-    return proposedX < area.x + area.width && proposedX + width > area.x && proposedY < area.y + area.height && proposedY + height > area.y;
-  });
-  const x = visible ? proposedX : Math.round(workArea.x + (workArea.width - width) / 2);
-  const y = visible ? proposedY : Math.round(workArea.y + (workArea.height - height) / 2);
+  // Restore onto the display the window was last on (not always the primary
+  // one), then shrink/clamp it into that work area: a first launch on a small
+  // screen, a display-scaling change or a removed monitor must never leave the
+  // window partly off-screen.
+  const display = savedBounds
+    ? screen.getDisplayMatching({
+      x: savedBounds.x ?? 0,
+      y: savedBounds.y ?? 0,
+      width: savedBounds.width ?? 1280,
+      height: savedBounds.height ?? 820,
+    })
+    : screen.getPrimaryDisplay();
+  const bounds = savedBounds
+    ? fitWindowToWorkArea({
+      x: savedBounds.x ?? display.workArea.x,
+      y: savedBounds.y ?? display.workArea.y,
+      width: savedBounds.width ?? 1280,
+      height: savedBounds.height ?? 820,
+    }, display.workArea)
+    : centeredWindowBounds({ width: 1280, height: 820 }, display.workArea);
   mainWindow = new BrowserWindow({
-    x,
-    y,
-    width,
-    height,
-    minWidth: 900,
-    minHeight: 560,
+    ...bounds,
+    minWidth: Math.min(900, bounds.width),
+    minHeight: Math.min(560, bounds.height),
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
