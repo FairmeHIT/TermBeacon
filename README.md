@@ -6,7 +6,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/FairmeHIT/TermBeacon/releases"><img src="https://img.shields.io/badge/version-0.1.9-2f80ed?style=flat-square" alt="Version 0.1.9" /></a>
+    <a href="https://github.com/FairmeHIT/TermBeacon/releases"><img src="https://img.shields.io/badge/version-0.1.10-2f80ed?style=flat-square" alt="Version 0.1.10" /></a>
     <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-36-3b4856?style=flat-square" alt="Electron 36" /></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-3b4856?style=flat-square" alt="React 19" /></a>
     <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-20%2B-3b4856?style=flat-square" alt="Node.js 20 or newer" /></a>
@@ -114,10 +114,7 @@ The host process owns PTYs independently from the window, so closing and reopeni
 ## Project docs
 
 - [`hooks/README.md`](hooks/README.md) - install and troubleshoot CLI status bridges.
-- [`docs/termbeacon-engineering-spec.md`](docs/termbeacon-engineering-spec.md) - architecture and behavior contract.
-- [`docs/development-handbook.md`](docs/development-handbook.md) - development conventions and verification steps.
-- [`docs/development-plan-2026-11.md`](docs/development-plan-2026-11.md) - current delivery plan.
-- [`HANDOFF.md`](HANDOFF.md) - detailed project handoff notes for continuing development.
+- `src/` and `tests/` are the source of truth for the implementation and regression behavior.
 
 ## Useful commands
 
@@ -170,7 +167,7 @@ npm run hooks:configure:claude
 npm run preflight:cli
 ```
 
-详细配置、事件映射、排查方法和协议说明见 [`hooks/README.md`](hooks/README.md)。完整工程说明见 [`docs/termbeacon-engineering-spec.md`](docs/termbeacon-engineering-spec.md)。
+详细配置、事件映射、排查方法和协议说明见 [`hooks/README.md`](hooks/README.md)。
 
 ### 项目状态
 
