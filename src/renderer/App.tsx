@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtyTitleEvent, ShellType, StateUpdateEvent, TerminalInstance, Workspace } from "../shared/types";
 import "./styles.css";
 
 declare global {
@@ -20,6 +21,11 @@ declare global {
       saveState(state: PersistedState): Promise<boolean>;
       discoverCli(): Promise<Record<string, CliInfo>>;
       pickCwd(): Promise<string | null>;
+      loadHistory(terminalId: string): Promise<string>;
+      appendHistory(terminalId: string, data: string): Promise<boolean>;
+      removeHistory(terminalId: string): Promise<boolean>;
+      installUpdate(): Promise<boolean>;
+      restartHost(): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
       launch(request: unknown): void;
@@ -36,6 +42,7 @@ declare global {
       onTitle(listener: (event: PtyTitleEvent) => void): () => void;
       onCwd(listener: (event: PtyCwdEvent) => void): () => void;
       onAgent(listener: (event: PtyAgentEvent) => void): () => void;
+      onUpdate(listener: (event: { type: string; version?: string; percent?: number; message?: string }) => void): () => void;
     };
   }
 }
@@ -65,7 +72,12 @@ const agentLabel: Record<AgentType, string> = {
   claude: "Claude Code",
 };
 
-const agents: AgentType[] = ["generic", "opencode", "codex", "claude"];
+type Theme = "dark" | "light";
+
+const terminalThemes: Record<Theme, { background: string; foreground: string; cursor: string }> = {
+  dark: { background: "#111827", foreground: "#e5e7eb", cursor: "#93c5fd" },
+  light: { background: "#f8fafc", foreground: "#1e293b", cursor: "#2563eb" },
+};
 
 declare global {
   interface Navigator {
@@ -75,8 +87,15 @@ declare global {
 
 const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
 
-const DEFAULT_SHELL = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
+const DEFAULT_SHELL: ShellType = IS_WINDOWS ? "cmd.exe" : "/bin/bash";
+const SHELL_OPTIONS: Array<{ value: ShellType; label: string }> = IS_WINDOWS
+  ? [{ value: "cmd.exe", label: "命令提示符" }, { value: "powershell.exe", label: "Windows PowerShell" }, { value: "pwsh.exe", label: "PowerShell 7" }]
+  : [{ value: "/bin/bash", label: "Bash" }];
 const DEFAULT_CWD = IS_WINDOWS ? "C:" + String.fromCharCode(92, 92) : "/";
+
+function isSupportedShell(value: unknown): value is ShellType {
+  return SHELL_OPTIONS.some((option) => option.value === value) || value === DEFAULT_SHELL;
+}
 
 function isValidCwd(path: unknown): path is string {
   return typeof path === "string" && path.length > 0 && (IS_WINDOWS
@@ -84,11 +103,12 @@ function isValidCwd(path: unknown): path is string {
     : path.startsWith("/"));
 }
 
-function newTerminal(index: number): TerminalInstance {
+function newTerminal(index: number, shell: ShellType = DEFAULT_SHELL): TerminalInstance {
   return {
     id: crypto.randomUUID(),
     title: `终端 ${index}`,
     cwd: DEFAULT_CWD,
+    shell,
     agentType: "generic",
     state: "ready",
     alive: false,
@@ -100,6 +120,16 @@ const MAX_TITLE_LENGTH = 60;
 
 function normalizeTitleInput(value: string): string {
   return value.trim().slice(0, MAX_TITLE_LENGTH);
+}
+
+function ThemeIcon({ theme }: { theme: Theme }) {
+  return theme === "dark"
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 15.7A8.8 8.8 0 0 1 8.3 3.6a8.8 8.8 0 1 0 12.1 12.1Z" /></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>;
+}
+
+function SettingsIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" /><path d="m19.4 15 .1.1a1.8 1.8 0 0 1-2.5 2.5l-.1-.1a1.8 1.8 0 0 0-3 .9v.2a1.8 1.8 0 0 1-3.6 0v-.2a1.8 1.8 0 0 0-3-.9l-.1.1a1.8 1.8 0 1 1-2.5-2.5l.1-.1a1.8 1.8 0 0 0-.9-3H4a1.8 1.8 0 0 1 0-3.6h.2a1.8 1.8 0 0 0 .9-3L5 5.3A1.8 1.8 0 1 1 7.5 2.8l.1.1a1.8 1.8 0 0 0 3-.9v-.2a1.8 1.8 0 0 1 3.6 0V2a1.8 1.8 0 0 0 3 .9l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1.8 1.8 0 0 0 .9 3h.2a1.8 1.8 0 0 1 0 3.6h-.2a1.8 1.8 0 0 0-.9 3Z" /></svg>;
 }
 
 // Mirrors src/main/title-utils.cjs (kept inline here because the renderer
@@ -131,11 +161,27 @@ function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default");
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [hydrated, setHydrated] = useState(false);
-  const [cliStatus, setCliStatus] = useState<Record<string, CliInfo>>({});
+  const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = window.localStorage.getItem("termbeacon-theme");
+    if (saved === "light" || saved === "dark") return saved;
+    return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hostDown, setHostDown] = useState(false);
+  const [hostMessage, setHostMessage] = useState("");
+  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [updateState, setUpdateState] = useState<{ type: string; version?: string; percent?: number; message?: string } | null>(null);
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
   const consumedLocal = useRef(new Map<string, number>());
+  const terminalStage = useRef<HTMLDivElement | null>(null);
+  const pendingOutput = useRef(new Map<string, { at: number; summary?: string }>());
+  const pendingHistory = useRef(new Map<string, string[]>());
+  const historyFlushTimer = useRef<number | null>(null);
+  const lastSavedState = useRef("");
+  const outputFlushTimer = useRef<number | null>(null);
   // Terminal titles the user renamed by hand. OSC 0/2 title reports from the
   // shell/agent must not overwrite a name the user chose on purpose.
   const pinnedTitles = useRef(new Set<string>());
@@ -144,11 +190,21 @@ function App() {
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
   const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
 
+  function flushPendingHistory() {
+    const pending = new Map(pendingHistory.current);
+    pendingHistory.current.clear();
+    pending.forEach((chunks, terminalId) => {
+      if (chunks.length > 0) void window.termbeacon.appendHistory(terminalId, chunks.join(""));
+    });
+  }
+
   useEffect(() => {
-    void window.termbeacon.discoverCli().then(setCliStatus);
     void window.termbeacon.loadState().then((state) => {
+      const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : DEFAULT_SHELL;
+      setDefaultShell(restoredDefaultShell);
+      if (typeof state.sidebarWidth === "number") setSidebarWidth(state.sidebarWidth);
       if (state.terminals.length > 0) {
-        setTerminals(state.terminals.map((terminal) => ({ ...terminal, alive: false, state: "stopped" as AgentState })));
+        setTerminals(state.terminals.map((terminal) => ({ ...terminal, shell: isSupportedShell(terminal.shell) ? terminal.shell : restoredDefaultShell, alive: false, state: "stopped" as AgentState })));
       }
       const restored = state.workspaces.length > 0
         ? state.workspaces
@@ -180,11 +236,32 @@ function App() {
         consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
       }
       view?.write(event.data);
-      // summary is sanitized in the PTY host; fall back to the previous value
-      // when a chunk carries only decoration (spinners, redraws).
-      setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, lastActivityAt: event.at, lastOutputSummary: event.summary ?? item.lastOutputSummary }
-        : item));
+      if (!event.replay) {
+        const chunks = pendingHistory.current.get(event.terminalId) || [];
+        chunks.push(event.data);
+        pendingHistory.current.set(event.terminalId, chunks);
+        if (historyFlushTimer.current === null) {
+          historyFlushTimer.current = window.setTimeout(() => {
+            historyFlushTimer.current = null;
+            flushPendingHistory();
+          }, 750);
+        }
+      }
+      // Sidebar summaries are cosmetic; coalesce them so a fast PTY stream does
+      // not re-render the whole app on every chunk. xterm writes stay immediate.
+      pendingOutput.current.set(event.terminalId, { at: event.at, summary: event.summary });
+      if (outputFlushTimer.current === null) {
+        outputFlushTimer.current = window.setTimeout(() => {
+          outputFlushTimer.current = null;
+          const pending = new Map(pendingOutput.current);
+          pendingOutput.current.clear();
+          if (pending.size === 0) return;
+          setTerminals((items) => items.map((item) => {
+            const update = pending.get(item.id);
+            return update ? { ...item, lastActivityAt: update.at, lastOutputSummary: update.summary ?? item.lastOutputSummary } : item;
+          }));
+        }, 100);
+      }
     });
     const disposeState = window.termbeacon.onState((event) => {
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped" } : item));
@@ -199,7 +276,14 @@ function App() {
         : item));
     });
     const disposeHost = window.termbeacon.onHost((event) => {
-      if (event.type !== "pty:host-exit" && event.type !== "pty:host-disconnected") return;
+      if (event.type === "pty:host-ready") {
+        setHostDown(false);
+        setHostMessage("");
+        return;
+      }
+      if (event.type !== "pty:host-exit" && event.type !== "pty:host-disconnected" && event.type !== "pty:host-stopped") return;
+      setHostDown(true);
+      setHostMessage(event.message || "PTY Host 已断开");
       setTerminals((items) => items.map((item) => item.alive
         ? { ...item, alive: false, state: "error", lastOutputSummary: event.message || "PTY host 已断开" }
         : item));
@@ -222,8 +306,35 @@ function App() {
         ? { ...item, agentType: event.agentType }
         : item));
     });
-    return () => { disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); };
+    const disposeUpdate = window.termbeacon.onUpdate((event) => setUpdateState(event));
+    const flushOnVisibilityChange = () => { if (document.visibilityState === "hidden") flushPendingHistory(); };
+    document.addEventListener("visibilitychange", flushOnVisibilityChange);
+    window.addEventListener("beforeunload", flushPendingHistory);
+    return () => {
+      disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); disposeUpdate();
+      document.removeEventListener("visibilitychange", flushOnVisibilityChange);
+      window.removeEventListener("beforeunload", flushPendingHistory);
+      flushPendingHistory();
+      if (outputFlushTimer.current !== null) {
+        window.clearTimeout(outputFlushTimer.current);
+        outputFlushTimer.current = null;
+      }
+      if (historyFlushTimer.current !== null) {
+        window.clearTimeout(historyFlushTimer.current);
+        historyFlushTimer.current = null;
+      }
+    };
   }, []);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("termbeacon-theme", theme);
+    terminalViews.current.forEach((term) => { term.options.theme = terminalThemes[theme]; });
+  }, [theme]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -235,7 +346,7 @@ function App() {
         fontFamily: "Cascadia Mono, Consolas, monospace",
         fontSize: 14,
         scrollback: 20000,
-        theme: { background: "#111827", foreground: "#e5e7eb", cursor: "#93c5fd" },
+        theme: terminalThemes[theme],
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
@@ -244,40 +355,61 @@ function App() {
       fitAddons.current.set(terminal.id, fit);
       const node = terminalNodes.current.get(terminal.id);
       if (node) term.open(node);
-      void window.termbeacon.createTerminal({
-        terminalId: terminal.id,
-        title: terminal.title,
-        cwd: terminal.cwd,
-        shell: DEFAULT_SHELL,
-        args: [],
-        cols: 120,
-        rows: 32,
-        agentType: terminal.agentType,
-      }).then(() => {
-        setTerminals((items) => items.map((item) => item.id === terminal.id ? { ...item, alive: true, state: "ready" } : item));
-        requestAnimationFrame(() => fitTerminal(terminal.id));
-      }).catch((error: Error) => {
-        setTerminals((items) => items.map((item) => item.id === terminal.id
-          ? { ...item, alive: false, state: "error", lastOutputSummary: error.message.slice(-90) }
-          : item));
-      });
+      void (async () => {
+        try {
+          const history = await window.termbeacon.loadHistory(terminal.id);
+          if (history && terminalViews.current.get(terminal.id) === term) term.write(history);
+          await window.termbeacon.createTerminal({
+            terminalId: terminal.id,
+            title: terminal.title,
+            cwd: terminal.cwd,
+            shell: terminal.shell || defaultShell,
+            args: [],
+            cols: 120,
+            rows: 32,
+            agentType: terminal.agentType,
+          });
+          setTerminals((items) => items.map((item) => item.id === terminal.id ? { ...item, alive: true, state: "ready" } : item));
+          requestAnimationFrame(() => fitTerminal(terminal.id));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setTerminals((items) => items.map((item) => item.id === terminal.id
+            ? { ...item, alive: false, state: "error", lastOutputSummary: message.slice(-90) }
+            : item));
+        }
+      })();
     });
   }, [terminals, hydrated]);
 
   useEffect(() => {
     if (!hydrated) return;
     const handle = window.setTimeout(() => {
+      const stableTerminals = terminals.map((terminal) => ({
+        id: terminal.id,
+        title: terminal.title,
+        cwd: terminal.cwd,
+        shell: terminal.shell || defaultShell,
+        agentType: terminal.agentType,
+        state: "stopped" as AgentState,
+        alive: false,
+        lastActivityAt: 0,
+      }));
       const state: PersistedState = {
         schemaVersion: 1,
         workspaces,
-        terminals,
+        terminals: stableTerminals,
         activeTerminalId: activeId,
         activeWorkspaceId,
+        defaultShell,
+        sidebarWidth,
       };
+      const serialized = JSON.stringify(state);
+      if (serialized === lastSavedState.current) return;
+      lastSavedState.current = serialized;
       void window.termbeacon.saveState(state);
-    }, 500);
+    }, 1000);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, defaultShell, sidebarWidth, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -286,6 +418,53 @@ function App() {
     });
     requestAnimationFrame(() => fitTerminal(activeId));
   }, [activeId]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        fitTerminal(activeId);
+      });
+    };
+    window.addEventListener("resize", schedule);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    if (observer && terminalStage.current) observer.observe(terminalStage.current);
+    return () => {
+      window.removeEventListener("resize", schedule);
+      if (frame) cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [activeId, hydrated]);
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return;
+      const key = event.key.toLowerCase();
+      if (key === "t") {
+        event.preventDefault();
+        addTerminal();
+        return;
+      }
+      if (key === "w") {
+        event.preventDefault();
+        if (activeId) removeTerminal(activeId);
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (workspaceTerminals.length === 0) return;
+        const index = workspaceTerminals.findIndex((terminal) => terminal.id === activeId);
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const next = workspaceTerminals[(index + delta + workspaceTerminals.length) % workspaceTerminals.length];
+        if (next) selectTerminal(next.id);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [activeId, workspaceTerminals, terminals, workspaces, activeWorkspaceId]);
 
   function fitTerminal(id: string) {
     const fit = fitAddons.current.get(id);
@@ -297,6 +476,57 @@ function App() {
     } catch { /* container may not be visible yet */ }
   }
 
+  function beginSidebarResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const move = (moveEvent: PointerEvent) => {
+      const next = Math.min(460, Math.max(220, startWidth + moveEvent.clientX - startX));
+      setSidebarWidth(next);
+    };
+    const stop = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  }
+
+  function restartHost() {
+    setHostMessage("正在重启 PTY Host…");
+    void window.termbeacon.restartHost().then((ok) => {
+      if (!ok) setHostMessage("PTY Host 重启失败");
+    });
+  }
+
+  function restartTerminal(id: string) {
+    const terminal = terminals.find((item) => item.id === id);
+    if (!terminal || terminal.alive) return;
+    const term = terminalViews.current.get(id);
+    try { term?.reset(); } catch { /* view may already be gone */ }
+    void window.termbeacon.createTerminal({
+      terminalId: terminal.id,
+      title: terminal.title,
+      cwd: terminal.cwd,
+      shell: terminal.shell || defaultShell,
+      args: [],
+      cols: term?.cols ?? 120,
+      rows: term?.rows ?? 32,
+      agentType: terminal.agentType,
+    }).then(() => {
+      setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready" } : item));
+      requestAnimationFrame(() => fitTerminal(id));
+    }).catch((error: Error) => {
+      setTerminals((items) => items.map((item) => item.id === id
+        ? { ...item, alive: false, state: "error", lastOutputSummary: error.message.slice(-90) }
+        : item));
+    });
+  }
+
   function selectTerminal(id: string) {
     setActiveId(id);
     window.termbeacon.viewed(id);
@@ -305,7 +535,7 @@ function App() {
   }
 
   function addTerminal() {
-    const terminal = newTerminal(terminals.length + 1);
+    const terminal = newTerminal(terminals.length + 1, defaultShell);
     setTerminals((items) => [...items, terminal]);
     setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
     setActiveId(terminal.id);
@@ -313,11 +543,23 @@ function App() {
 
   function removeTerminal(id: string) {
     const target = terminals.find((item) => item.id === id);
-    if (target?.alive) window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
+    if (!target) return;
+    if (!window.confirm(`删除终端「${target.title}」？正在运行的进程会被停止。`)) return;
+    if (target.alive) window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
+    const view = terminalViews.current.get(id);
+    if (view) {
+      try { view.dispose(); } catch { /* view may already be disposed */ }
+    }
+    terminalViews.current.delete(id);
+    fitAddons.current.delete(id);
+    consumedLocal.current.delete(id);
+    terminalNodes.current.delete(id);
+    pendingHistory.current.delete(id);
+    void window.termbeacon.removeHistory(id);
     const owner = workspaces.find((workspace) => workspace.terminalIds.includes(id));
     const remaining = owner ? owner.terminalIds.filter((terminalId) => terminalId !== id) : [];
     if (id === activeId && remaining.length === 0) {
-      const replacement = newTerminal(terminals.length);
+      const replacement = newTerminal(terminals.length, defaultShell);
       setTerminals((items) => [...items.filter((item) => item.id !== id), replacement]);
       setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
       setActiveId(replacement.id);
@@ -339,7 +581,7 @@ function App() {
   }
 
   function addWorkspace() {
-    const terminal = newTerminal(terminals.length + 1);
+    const terminal = newTerminal(terminals.length + 1, defaultShell);
     const workspace: Workspace = { id: crypto.randomUUID(), name: `工作区 ${workspaces.length + 1}`, terminalIds: [terminal.id] };
     setTerminals((items) => [...items, terminal]);
     setWorkspaces((items) => [...items, workspace]);
@@ -355,6 +597,7 @@ function App() {
     if (workspaces.length < 2) return;
     const target = workspaces.find((workspace) => workspace.id === id);
     if (!target) return;
+    if (!window.confirm(`删除工作区「${target.name}」及其中的 ${target.terminalIds.length} 个终端？`)) return;
     target.terminalIds.forEach((terminalId) => {
       const terminal = terminals.find((item) => item.id === terminalId);
       if (terminal?.alive) window.termbeacon.kill({ terminalId, reason: "user-kill" });
@@ -405,17 +648,37 @@ function App() {
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title="删除终端">×</span>
         </button>)}
       </div>
-      <div className="cli-health">
-        <div className="section-label">CLI 检测</div>
-        {agents.filter((agent) => agent !== "generic").map((agent) => {
-          const info = cliStatus[agent];
-          return <div className="cli-row" key={agent}><span className={`cli-led ${info?.installed ? "online" : "offline"}`} /><span>{agent}</span><small>{info?.installed ? (info.version || "已安装") : "未找到"}</small></div>;
-        })}
+      {hostDown && <div className="host-alert">
+        <span>{hostMessage || "PTY Host 已断开"}</span>
+        <button onClick={restartHost}>重启 PTY Host</button>
+      </div>}
+      <div className="sidebar-footer">
+        <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title="打开设置" aria-label="打开设置"><SettingsIcon /></button>
+        <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}><ThemeIcon theme={theme} /></button>
+        {settingsOpen && <div className="settings-popover">
+          <div className="settings-title">外观</div>
+          <div className="settings-caption">主题</div>
+          <div className="theme-options" role="group" aria-label="主题">
+            {(["dark", "light"] as Theme[]).map((option) => <button key={option} className={`theme-option ${theme === option ? "selected" : ""}`} onClick={() => setTheme(option)}><ThemeIcon theme={option} />{option === "dark" ? "深色" : "浅色"}</button>)}
+          </div>
+          <div className="settings-caption">默认 Shell（新建终端）</div>
+          <select className="shell-select" value={defaultShell} onChange={(event) => setDefaultShell(event.target.value as ShellType)} aria-label="默认 Shell">
+            {SHELL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          <div className="settings-caption">快捷键</div>
+          <div className="settings-note">Ctrl+Shift+T 新建终端 · Ctrl+Shift+W 关闭当前终端 · Ctrl+Shift+↑/↓ 切换终端</div>
+        </div>}
       </div>
+      <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title="拖动调整侧栏宽度" />
     </aside>
     <section className="workspace">
-      <header className="workspace-header"><div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div></header>
-      <div className="terminal-stage">{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
+      <header className="workspace-header">
+        <div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div>
+        {active && !active.alive && <div className="header-actions"><button onClick={() => restartTerminal(active.id)}>重启终端</button></div>}
+      </header>
+      {updateState?.type === "downloaded" && <div className="update-banner">新版本 {updateState.version || "已下载"} 已准备好。<button onClick={() => void window.termbeacon.installUpdate()}>重启并安装</button></div>}
+      {updateState?.type === "downloading" && <div className="update-progress">正在下载更新 {Math.round(updateState.percent || 0)}%</div>}
+      <div className="terminal-stage" ref={terminalStage}>{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;
 }

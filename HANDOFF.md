@@ -24,7 +24,7 @@ CLI 探测：`src/main/cli-discovery.cjs` 使用 `where.exe` 查找 CLI 并运�
 
 持久化与发布：工作区、终端、标题、CWD、Agent 类型、激活终端保存到 Electron `userData/state.json`，加载时有结构校验和损坏文件备份；electron-builder 的 Windows NSIS 与 macOS DMG 配置已加入，Windows 安装包已在 `D:/temp-termbeacon-release` 产出并验证可启动。
 
-测试基线：当前 `npm test` 为 86 项全部通过；`npm run build` 通过。由于本会话运行在 Linux 沙箱，构建前临时安装了 Linux 版 Rollup/esbuild 二进制，Windows 侧的 `npm start` 仍需在 PowerShell 中人工验证。
+测试基线：当前 `npm test` 为 111 项全部通过；`npm run build` 通过。由于本会话运行在 Linux 沙箱，构建前临时安装了 Linux 版 Rollup/esbuild 二进制，Windows 侧的 `npm start` 仍需在 PowerShell 中人工验证。
 
 ## 3. 关键文件
 
@@ -324,6 +324,30 @@ npm run record:cli -- --cli opencode --name opencode-task --task "列出当前�
 
 验证：`npm test` 86 passed, 0 failed；`npm run build` 通过。剩余工作是 opencode 插件桥接、Claude/Codex Hook 兜底，以及一次真正出现权限对话框的录制；本次 Claude 的 auto mode 自动批准了工具，没有产生权限询问。
 
+## 6.15 CLI Hook 桥接与 opencode 插件（2026-11-05）
+
+新增 `src/main/hook-server.cjs`：在 `pty-host` 内启动只监听 `127.0.0.1` 的 HTTP 桥，随机端口、随机 token，校验 `x-termbeacon-token` 和 `{terminalId,event,status}`，只接受 `started`/`running`/`waiting`/`completed`/`failed`。`pty-host` 启动时创建桥，并在每个 PTY 的环境变量里注入 `TERMBEACON_TERMINAL_ID`、`TERMBEACON_HOOK_PORT`、`TERMBEACON_HOOK_TOKEN`；桥收到事件后直接调用对应 detector 的 `hook()`。创建终端时如果桥还没监听完成，会等一次 `hookReady` 再继续，避免 env 缺端口；shutdown 时关闭桥。
+
+新增 `scripts/termbeacon-hook.cjs` 通用 hook 客户端：从环境变量读取桥地址，支持命令行 `--status/--event`，也支持从 stdin 读取 Claude Code 的 hook payload；映射 `UserPromptSubmit`/`PreToolUse`/`PostToolUse` → `running`，`Notification` → `waiting`，`Stop`/`SubagentStop` → `completed`。不在 TermBeacon 终端里运行时静默退出，不破坏 CLI。
+
+新增 `hooks/opencode/termbeacon.js` 插件示例：订阅 opencode 的 `event` 流，处理 `session.status`（`busy`/`idle`/`error`）、`session.idle`、`session.error`、`tool.execute.*` 和权限事件，POST 到桥；复制到 `~/.config/opencode/plugin/` 或项目的 `.opencode/plugin/` 即生效，不修改 opencode 配置。另提供 `hooks/claude/settings.example.json`（Stop/SubagentStop/Notification/PreToolUse/PostToolUse 示例）和 `hooks/README.md` 安装说明。`scripts/copy-runtime.mjs` 已加入 `hook-server.cjs`。
+
+验证：`npm test` 107 passed, 0 failed（新增 hook server、hook client、pty-host env/路由、opencode 插件映射测试）；`npm run build` 通过，`dist/main/hook-server.cjs` 存在。剩余工作是 Windows 侧实际安装 opencode 插件/Claude 设置并跑真实任务，确认 opencode 事件字段与版本一致；`session.idle` 已弃用，插件同时处理 `session.status`。
+
+## 6.16 稳定性与恢复批次（2026-11-06）
+
+新增 `src/main/host-restart.cjs`，把 host 重启策略从固定 250ms 改成指数退避：250、500、1000、2000、4000、8000ms，最多 6 次；host 稳定运行超过 10 秒后重置重试预算；连续失败后给渲染器发 `pty:host-stopped`，由用户手动重启。`main.ts` 新增 `pty:restart-host` IPC、单实例锁（第二个实例聚焦已有窗口）、`state:save` 在落盘前统一 `sanitizeState()`；`hooks/README` 之外的 runtime 复制清单加入 `host-restart.cjs`。
+
+渲染器新增 host 断开提示和“重启 PTY Host”按钮、终端级“重启终端”按钮；删除终端时显式 `dispose()` xterm 实例并清理 `terminalViews`/`fitAddons`/`consumedLocal` 引用；增加窗口 resize 和 `ResizeObserver` 的 fit 调度；PTY 输出的侧栏摘要改为 100ms 合并更新，xterm 写入仍然即时。
+
+验证：`npm test` 111 passed, 0 failed（新增 host-restart 策略测试）；`npm run build` 通过；`dist/main/host-restart.cjs` 存在。Windows 侧仍需人工验证 host 崩溃恢复、窗口 resize 和长时间输出下的界面流畅度。
+
+## 6.17 工作区体验与恢复入口（2026-11-06）
+
+终端的 × 和工作区的 × 现在会先弹确认框，避免误点直接杀掉进程；设置面板补充了快捷键说明。新增 `Ctrl+Shift+T` 新建终端、`Ctrl+Shift+W` 关闭当前终端（走确认框）、`Ctrl+Shift+↑/↓` 在当前工作区内切换终端。窗口 resize 和 `ResizeObserver` 会触发当前终端的 `fit()`；PTY 输出摘要改为 100ms 合并更新，xterm 写入保持即时；删除终端时显式释放 xterm 实例和相关引用。host 断开时会显示失败原因和“重启 PTY Host”按钮，终端死后可在标题栏点“重启终端”用同一个 ID 重建 PTY。
+
+验证：`npm test` 111 passed；`npm run build` 通过。Windows 侧需要人工检查：删除确认、三组快捷键、窗口缩放后的行列数、host 被任务管理器杀掉后的提示和重启、终端重建。
+
 ## 7. 新会话启动命令
 
 ```powershell
@@ -339,3 +363,11 @@ npm start
 ## 8. 当前交接结论
 
 MVP 的核心架构、终端链路、持久化和打包已经落地。当前最重要的不是继续加功能，而是把状态检测从“单元测试正确”变成“真实终端可用”：先用定时 tick 和输入/证据过滤修好基础误判（本批次），再用三个真实 CLI 的录制样本校准 Registry 和 Hook，之后补 host 恢复、渲染资源管理和发布工程化。
+
+## 6.18 布局、磁盘快照与发布更新（2026-11-06）
+
+窗口大小、位置、最大化状态和侧栏宽度已经纳入 `state.json`，启动时恢复；侧栏边缘支持拖动调整，范围为 220–460px。终端输出以低频批次写入 `userData/terminal-history/<terminalId>.log`，单终端保留约 250KB，启动时恢复到 xterm，写入队列按终端串行化以避免并发截断。
+
+正式包已接入 `electron-updater` 和 GitHub Releases 发布源。打包时可用 `GH_TOKEN` 发布，Windows 代码签名使用 `CSC_LINK`/`CSC_KEY_PASSWORD`，设置 `TERMBEACON_FORCE_SIGNING=1` 可强制缺证书时失败。已下载更新会在界面提示“重启并安装”；开发模式不会检查更新。
+
+验证：`npm run build` 通过；`npm test` 112 passed, 0 failed。尚未执行真实签名或 GitHub 发布，需要在具备证书和发布 token 的环境运行 `npm run dist:publish`。

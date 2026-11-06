@@ -123,6 +123,11 @@ contextBridge.exposeInMainWorld("termbeacon", {
   loadState: () => ipcRenderer.invoke("state:load"),
   discoverCli: () => ipcRenderer.invoke("cli:discover"),
   pickCwd: () => ipcRenderer.invoke("cwd:pick"),
+  loadHistory: (terminalId) => ipcRenderer.invoke("history:load", terminalId),
+  appendHistory: (terminalId, data) => ipcRenderer.invoke("history:append", terminalId, data),
+  removeHistory: (terminalId) => ipcRenderer.invoke("history:remove", terminalId),
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  restartHost: () => ipcRenderer.invoke("pty:restart-host"),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {
     const requestId = crypto.randomUUID();
@@ -161,4 +166,9 @@ contextBridge.exposeInMainWorld("termbeacon", {
   onTitle: (listener) => { titleListeners.add(listener); return () => titleListeners.delete(listener); },
   onCwd: (listener) => { cwdListeners.add(listener); return () => cwdListeners.delete(listener); },
   onAgent: (listener) => { agentListeners.add(listener); return () => agentListeners.delete(listener); },
+  onUpdate: (listener) => {
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on("update:event", handler);
+    return () => ipcRenderer.removeListener("update:event", handler);
+  },
 });

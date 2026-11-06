@@ -1,10 +1,20 @@
 export type AgentType = "generic" | "opencode" | "codex" | "claude";
 export type AgentState = "working" | "completed-unseen" | "ready" | "awaiting-input" | "error" | "stopped";
+export type ShellType = "cmd.exe" | "powershell.exe" | "pwsh.exe" | "/bin/bash";
+
+export interface WindowBounds {
+  width: number;
+  height: number;
+  x?: number;
+  y?: number;
+  isMaximized?: boolean;
+}
 
 export interface TerminalInstance {
   id: string;
   title: string;
   cwd: string;
+  shell?: ShellType;
   agentType: AgentType;
   state: AgentState;
   alive: boolean;
@@ -80,12 +90,12 @@ export interface PtyErrorEvent {
 }
 
 export interface PtyHostExitEvent {
-  type: "pty:host-exit" | "pty:host-disconnected";
+  type: "pty:host-exit" | "pty:host-disconnected" | "pty:host-stopped";
   code?: number;
   signal?: string;
   message?: string;
   at: number;
 }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; activeTerminalId?: string; activeWorkspaceId?: string; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; sidebarWidth?: number; windowBounds?: WindowBounds; }
 

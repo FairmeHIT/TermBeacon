@@ -67,3 +67,15 @@ test("preserves a valid activeWorkspaceId and falls back when invalid", () => {
   const invalidInput = { schemaVersion: 1, workspaces: [{ id: "w1", name: "A", terminalIds: [] }], terminals: [], activeWorkspaceId: "ghost" };
   assert.equal(sanitizeState(invalidInput).activeWorkspaceId, "w1");
 });
+
+test("clamps persisted layout and window bounds", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    sidebarWidth: 9999,
+    windowBounds: { width: 1, height: 99999, x: 40.7, y: -12.4, isMaximized: true },
+  });
+  assert.equal(result.sidebarWidth, 460);
+  assert.deepEqual(result.windowBounds, { width: 900, height: 2160, x: 41, y: -12, isMaximized: true });
+});

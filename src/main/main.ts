@@ -1,9 +1,10 @@
-import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, utilityProcess } from "electron";
+import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen, utilityProcess } from "electron";
+import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFile, readFile, writeFile, rename } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
-import type { TerminalInstance, Workspace } from "../shared/types";
+import type { ShellType, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 
 const require = createRequire(import.meta.url);
 const { discoverAll } = require("./cli-discovery.cjs") as {
@@ -19,6 +20,11 @@ const { sanitizeState, defaultState } = require("./state-sanitize.cjs") as {
   sanitizeState: (parsed: unknown) => PersistedState;
   defaultState: () => PersistedState;
 };
+const { planRestart } = require("./host-restart.cjs") as {
+  planRestart: (state: { attempts: number; uptimeMs: number }) => {
+    attempts: number; delayMs: number; giveUp: boolean;
+  };
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
@@ -26,7 +32,14 @@ let ptyHost: Electron.UtilityProcess | null = null;
 let rendererReady = false;
 let isQuitting = false;
 let hostRestartTimer: NodeJS.Timeout | undefined;
+let hostRestartAttempts = 0;
+let hostStartedAt = 0;
 const terminals = new Map<string, TerminalInstance>();
+let stateCache: PersistedState | null = null;
+let windowSaveTimer: NodeJS.Timeout | undefined;
+let updateConfigured = false;
+let quitPersisting = false;
+const historyWrites = new Map<string, Promise<boolean>>();
 
 interface PersistedState {
   schemaVersion: 1;
@@ -34,9 +47,17 @@ interface PersistedState {
   terminals: TerminalInstance[];
   activeTerminalId?: string;
   activeWorkspaceId?: string;
+  defaultShell?: ShellType;
+  sidebarWidth?: number;
+  windowBounds?: WindowBounds;
 }
 
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }
+function historyDir() { return path.join(app.getPath("userData"), "terminal-history"); }
+function historyPath(terminalId: string) {
+  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(terminalId)) return null;
+  return path.join(historyDir(), `${terminalId}.log`);
+}
 
 async function readState(): Promise<PersistedState> {
   const target = statePath();
@@ -60,10 +81,99 @@ async function writeState(state: PersistedState) {
   await rename(temp, target);
 }
 
-function notifyHostExit(code?: number, signal?: string, message?: string) {
+function currentWindowBounds(): WindowBounds | undefined {
+  if (!mainWindow || mainWindow.isDestroyed()) return undefined;
+  const bounds = mainWindow.isMaximized() ? mainWindow.getNormalBounds() : mainWindow.getBounds();
+  return { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y, isMaximized: mainWindow.isMaximized() };
+}
+
+function scheduleWindowStateSave() {
+  if (windowSaveTimer) clearTimeout(windowSaveTimer);
+  windowSaveTimer = setTimeout(() => {
+    windowSaveTimer = undefined;
+    const bounds = currentWindowBounds();
+    if (!bounds || !stateCache) return;
+    stateCache = { ...stateCache, windowBounds: bounds };
+    void writeState(stateCache);
+  }, 400);
+}
+
+function sendUpdateEvent(type: string, payload: Record<string, unknown> = {}) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("update:event", { type, ...payload });
+}
+
+function configureAutoUpdater() {
+  if (updateConfigured || !app.isPackaged || process.env.TERMBEACON_DISABLE_UPDATES === "1") return;
+  updateConfigured = true;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("checking-for-update", () => sendUpdateEvent("checking"));
+  autoUpdater.on("update-available", (info) => sendUpdateEvent("available", { version: info.version }));
+  autoUpdater.on("update-not-available", () => sendUpdateEvent("not-available"));
+  autoUpdater.on("download-progress", (progress) => sendUpdateEvent("downloading", { percent: progress.percent }));
+  autoUpdater.on("update-downloaded", (info) => sendUpdateEvent("downloaded", { version: info.version }));
+  autoUpdater.on("error", (error) => sendUpdateEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+  void autoUpdater.checkForUpdates().catch(() => undefined);
+}
+
+async function loadTerminalHistory(terminalId: string) {
+  const target = historyPath(terminalId);
+  if (!target) return "";
+  try {
+    const raw = await readFile(target, "utf8");
+    return raw.length > 250_000 ? raw.slice(-250_000) : raw;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  }
+}
+
+async function appendTerminalHistory(terminalId: string, data: string) {
+  if (typeof data !== "string" || data.length === 0) return true;
+  const target = historyPath(terminalId);
+  if (!target) return true;
+  const previous = historyWrites.get(terminalId) || Promise.resolve(true);
+  const next = previous.catch(() => true).then(async () => {
+    await mkdir(historyDir(), { recursive: true });
+    await appendFile(target, data, "utf8");
+    try {
+      const details = await stat(target);
+      if (details.size > 400_000) {
+        const raw = await readFile(target, "utf8");
+        await writeFile(target, raw.slice(-250_000), "utf8");
+      }
+    } catch { /* history is a convenience; a failed trim must not affect PTY */ }
+    return true;
+  });
+  historyWrites.set(terminalId, next);
+  void next.then(() => {
+    if (historyWrites.get(terminalId) === next) historyWrites.delete(terminalId);
+  }, () => {
+    if (historyWrites.get(terminalId) === next) historyWrites.delete(terminalId);
+  });
+  return next;
+}
+
+async function removeTerminalHistory(terminalId: string) {
+  const target = historyPath(terminalId);
+  if (!target) return true;
+  await (historyWrites.get(terminalId) || Promise.resolve(true)).catch(() => true);
+  try { await unlink(target); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return true;
+}
+
+function notifyHostEvent(
+  type: "pty:host-exit" | "pty:host-stopped",
+  code?: number,
+  signal?: string,
+  message?: string,
+) {
   if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
   mainWindow.webContents.send("pty:host-exit", {
-    type: "pty:host-exit",
+    type,
     code,
     signal,
     message: message || "PTY host exited",
@@ -71,13 +181,26 @@ function notifyHostExit(code?: number, signal?: string, message?: string) {
   });
 }
 
+function notifyHostExit(code?: number, signal?: string, message?: string) {
+  notifyHostEvent("pty:host-exit", code, signal, message);
+}
+
 function schedulePtyHostRestart() {
   if (isQuitting || hostRestartTimer) return;
+  const plan = planRestart({
+    attempts: hostRestartAttempts,
+    uptimeMs: hostStartedAt ? Date.now() - hostStartedAt : 0,
+  });
+  hostRestartAttempts = plan.attempts;
+  if (plan.giveUp) {
+    notifyHostEvent("pty:host-stopped", undefined, undefined, "PTY host 连续重启失败，请点击“重启 PTY Host”");
+    return;
+  }
   hostRestartTimer = setTimeout(() => {
     hostRestartTimer = undefined;
     startPtyHost();
     if (rendererReady) connectDataPlane();
-  }, 250);
+  }, plan.delayMs);
 }
 
 function startPtyHost() {
@@ -86,6 +209,7 @@ function startPtyHost() {
   try {
     const host = utilityProcess.fork(hostPath, [], { serviceName: "TermBeacon PTY Host" });
     ptyHost = host;
+    hostStartedAt = Date.now();
     // Surface host crashes in the dev console; without this a host exception
     // is completely silent and only manifests as dead terminals in the UI.
     host.stdout?.on("data", (chunk: Buffer) => console.log(`[pty-host:${host.pid}]`, chunk.toString().trimEnd()));
@@ -154,15 +278,35 @@ function registerMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function createWindow() {
+function createWindow(savedState: PersistedState = stateCache || defaultState()) {
+  const savedBounds = savedState.windowBounds;
+  const display = screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  const width = savedBounds?.width ?? 1280;
+  const height = savedBounds?.height ?? 820;
+  const proposedX = savedBounds?.x ?? Math.round(workArea.x + (workArea.width - width) / 2);
+  const proposedY = savedBounds?.y ?? Math.round(workArea.y + (workArea.height - height) / 2);
+  const visible = screen.getAllDisplays().some((item) => {
+    const area = item.workArea;
+    return proposedX < area.x + area.width && proposedX + width > area.x && proposedY < area.y + area.height && proposedY + height > area.y;
+  });
+  const x = visible ? proposedX : Math.round(workArea.x + (workArea.width - width) / 2);
+  const y = visible ? proposedY : Math.round(workArea.y + (workArea.height - height) / 2);
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    x,
+    y,
+    width,
+    height,
     minWidth: 900,
     minHeight: 560,
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
   });
+  if (savedBounds?.isMaximized) mainWindow.maximize();
+  mainWindow.on("resize", scheduleWindowStateSave);
+  mainWindow.on("move", scheduleWindowStateSave);
+  mainWindow.on("maximize", scheduleWindowStateSave);
+  mainWindow.on("unmaximize", scheduleWindowStateSave);
   mainWindow.webContents.on("did-finish-load", () => {
     rendererReady = true;
     connectDataPlane();
@@ -171,28 +315,85 @@ function createWindow() {
   else void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
-app.whenReady().then(() => {
-  registerMenu();
-  startPtyHost();
-  createWindow();
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-});
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  app.whenReady().then(async () => {
+    stateCache = await readState();
+    registerMenu();
+    startPtyHost();
+    createWindow(stateCache);
+    configureAutoUpdater();
+    app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(stateCache || defaultState()); });
+  });
+}
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
+  if (!quitPersisting && stateCache) {
+    event.preventDefault();
+    quitPersisting = true;
+    const bounds = currentWindowBounds();
+    if (bounds) stateCache = { ...stateCache, windowBounds: bounds };
+    void writeState(stateCache).catch(() => undefined).finally(() => app.quit());
+    return;
+  }
   isQuitting = true;
   if (hostRestartTimer) clearTimeout(hostRestartTimer);
+  if (windowSaveTimer) clearTimeout(windowSaveTimer);
   ptyHost?.postMessage({ type: "shutdown" });
   ptyHost?.kill();
 });
 
-ipcMain.handle("state:load", async () => readState());
+ipcMain.handle("state:load", async () => {
+  if (!stateCache) stateCache = await readState();
+  return stateCache;
+});
 ipcMain.handle("cli:discover", () => discoverAll());
 ipcMain.handle("cwd:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
 });
-ipcMain.handle("state:save", async (_event, state: PersistedState) => { await writeState(state); return true; });
+ipcMain.handle("state:save", async (_event, state: PersistedState) => {
+  // The renderer is the only writer, but validating here keeps a corrupt or
+  // hand-edited payload from replacing a good state.json.
+  const sanitized = sanitizeState(state);
+  const bounds = currentWindowBounds();
+  stateCache = bounds ? { ...sanitized, windowBounds: bounds } : sanitized;
+  await writeState(stateCache);
+  return true;
+});
+
+ipcMain.handle("history:load", async (_event, terminalId: string) => loadTerminalHistory(terminalId));
+ipcMain.handle("history:append", async (_event, terminalId: string, data: string) => appendTerminalHistory(terminalId, data));
+ipcMain.handle("history:remove", async (_event, terminalId: string) => removeTerminalHistory(terminalId));
+ipcMain.handle("update:install", () => {
+  if (!updateConfigured) return false;
+  autoUpdater.quitAndInstall(false, true);
+  return true;
+});
+ipcMain.handle("pty:restart-host", () => {
+  if (isQuitting) return false;
+  if (hostRestartTimer) {
+    clearTimeout(hostRestartTimer);
+    hostRestartTimer = undefined;
+  }
+  hostRestartAttempts = 0;
+  if (ptyHost) {
+    if (rendererReady) connectDataPlane();
+    return true;
+  }
+  startPtyHost();
+  if (rendererReady) connectDataPlane();
+  return true;
+});
 ipcMain.handle("pty:create", (_event, request) => {
   let normalized;
   try {

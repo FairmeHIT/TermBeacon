@@ -175,7 +175,9 @@ function createSession(message, hookWaited = false) {
   // The hook port is assigned asynchronously; a create that arrives before the
   // listener is ready waits once, then proceeds with or without hook env.
   if (!hookServer.port && !hookWaited) {
-    hookReady.then(() => createSession(message, true));
+    hookReady.then(() => createSession(message, true)).catch((error) => {
+      sendError("pty:create", error, typeof message.requestId === "string" ? message.requestId : undefined, message?.terminalId);
+    });
     return;
   }
   const requestId = typeof message.requestId === "string" ? message.requestId : undefined;

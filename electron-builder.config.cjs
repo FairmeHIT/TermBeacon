@@ -9,6 +9,7 @@ module.exports = {
   // into an in-project path (HANDOFF 6.8). If that recurs, either retry or
   // point output at a project-external path for the build run.
   directories: { output: "release", buildResources: "build" },
+  publish: [{ provider: "github", owner: "FairmeHIT", repo: "TermBeacon", releaseType: "release" }],
   // Point the builder at a pre-extracted Electron distribution so it never
   // performs the extract-then-atomic-move step that trips the local filter
   // driver's EBUSY (HANDOFF 6.8). Extract once via:
@@ -35,6 +36,8 @@ module.exports = {
   ],
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
+    signAndEditExecutable: true,
+    forceCodeSigning: process.env.TERMBEACON_FORCE_SIGNING === "1",
   },
   mac: {
     // Built from a macOS machine via `npm run dist:mac`. node-pty ships
@@ -43,6 +46,8 @@ module.exports = {
     // only for this Windows machine; macOS can use the default in-tree path.
     target: [{ target: "dmg", arch: ["x64", "arm64"] }],
     category: "public.app-category.developer-tools",
+    hardenedRuntime: true,
+    gatekeeperAssess: false,
   },
   nsis: {
     oneClick: true,

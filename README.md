@@ -16,6 +16,23 @@ npm run build
 npm start
 ```
 
+## 发布、签名与自动更新
+
+窗口大小、位置、最大化状态和侧栏宽度会保存到 Electron `userData/state.json`。每个终端的最近滚动内容会以磁盘快照保存到 `userData/terminal-history/`，单终端上限约 250 KB，低频批量写入，重启后自动恢复。
+
+正式发布使用 GitHub Releases。先设置 `GH_TOKEN`，Windows 代码签名使用 electron-builder 的 `CSC_LINK` 和 `CSC_KEY_PASSWORD` 环境变量，然后运行：
+
+```powershell
+$env:GH_TOKEN = "..."
+$env:CSC_LINK = "C:\certs\termbeacon.pfx"
+$env:CSC_KEY_PASSWORD = "..."
+npm run dist:publish
+```
+
+如果没有签名证书，可以运行 `npm run dist` 生成未签名测试包。设置 `TERMBEACON_FORCE_SIGNING=1` 后，缺少证书会直接使发布构建失败。正式安装包启动后会从 `FairmeHIT/TermBeacon` 的 GitHub Releases 检查更新，下载完成后在界面提示重启安装；开发模式不会检查更新。
+
+macOS 发布还需要 Apple 公证相关环境变量（`APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`）以及可用的 Developer ID 证书。
+
 ## 录制真实 CLI 样本
 
 ```powershell
@@ -23,6 +40,10 @@ npm run record:cli -- --cli claude --name claude-task --task "列出当前目录
 ```
 
 录制时正常操作 CLI；也可以在延迟后自动提交 `--task` 指定的任务。完成后退出即可，原始捕获写入 `captures/`（已 gitignore），脱敏后再转成 `tests/fixtures/agents/` 下的 fixture。
+
+## CLI 状态 Hook
+
+`pty-host` 会在本机回环地址启动一个带随机 token 的 hook 桥，并把地址注入每个 PTY 的环境变量。opencode 插件示例在 `hooks/opencode/termbeacon.js`，Claude Code 设置示例在 `hooks/claude/settings.example.json`，安装说明见 `hooks/README.md`。
 
 MVP 当前包含：
 

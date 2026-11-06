@@ -5,7 +5,7 @@
 
 ## 一、现状判断
 
-TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、xterm.js、node-pty/ConPTY、独立 utility process 的 `pty-host`、MessagePort 数据面、六状态机、Agent Registry、JSONL fixture、多工作区、持久化、NSIS 打包都已落地。交接记录显示上一轮基线为 45 项测试通过；当前基线为 86 项全部通过，构建通过，并已在本机验证过三个 CLI 的 `--version` 与 `--help` 启动链路。
+TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、xterm.js、node-pty/ConPTY、独立 utility process 的 `pty-host`、MessagePort 数据面、六状态机、Agent Registry、JSONL fixture、多工作区、持久化、NSIS 打包都已落地。交接记录显示上一轮基线为 45 项测试通过；当前基线为 111 项全部通过，构建通过，并已在本机验证过三个 CLI 的 `--version` 与 `--help` 启动链路。
 
 但从源码看，产品最核心的卖点——“Agent 完成后左侧状态灯高亮”——目前并不可靠。主要问题不是规则细节，而是检测链路缺少运行时驱动，以及输入与证据窗口的处理方式会把大量非任务操作当成任务。这些问题不解决，继续增加 Agent、调模式或做发布，用户看到的仍然是一个不会亮、或者乱亮的灯。
 
@@ -65,15 +65,19 @@ TermBeacon 的工程骨架已经完整：Electron + React + TypeScript + Vite、
 
 验收是三个 CLI 各完成一次真实任务，状态序列可解释；权限询问进入 `awaiting-input`；Hook 关闭或超时后仍能靠回退路径完成；TUI 空闲界面不会误报完成；从启动按钮进入 CLI 后停在就绪，提交任务后才进入工作态。
 
-进展（2026-11-05）：Claude Code 和 Codex 已用真实录制确认 OSC 标题信号并接入检测器，真实任务回放中 Claude 能完成、Codex 能正确进入 `error`；opencode 尚无稳定标题，下一步是用它的插件 API（`session.status` / `session.idle`）把事件桥接到 `pty-host` 的 `state:hook` 入口。
+进展（2026-11-05）：Claude Code 和 Codex 已用真实录制确认 OSC 标题信号并接入检测器，真实任务回放中 Claude 能完成、Codex 能正确进入 `error`；opencode 通过 `hooks/opencode/termbeacon.js` 插件接到 `pty-host` 的本地 hook 桥，`session.status`/`session.idle` 已映射并有用例覆盖。剩余是在 Windows 侧实际安装插件、跑一次真实 opencode 任务确认事件字段，以及给 Claude 接入 `hooks/claude/settings.example.json` 作为标题之外的兜底。
 
 ### 批次 C：稳定性与恢复
 
 目标是 host 或视图出问题后用户能恢复，而不是删终端。工作项包括 host 重启的指数退避与次数上限、手动“重启 host”、终端级重建入口、窗口 resize 的 `ResizeObserver` 与 xterm `dispose()`、单实例锁、状态保存前的结构校验，以及 PTY 输出到 React 的批处理与 100–250 ms 节流。验收是手动杀掉 host 后应用能恢复并可重建终端；8 个终端同时输出时界面仍可交互；改变窗口大小后行列数与 PTY 一致。
 
+进展（2026-11-06）：上述后端与渲染器项已落地——`host-restart.cjs` 的指数退避和上限、`pty:restart-host`、单实例锁、`state:save` 清洗、host/终端重启按钮、xterm dispose、resize 监听和输出摘要 100ms 合并；测试 111 项通过。仍需 Windows 侧手工验收 host 崩溃恢复和 8 终端并发输出。
+
 ### 批次 D：工作区体验与持久化
 
 目标是让多终端日常使用顺手。工作项包括删除终端/工作区的确认、快捷键与焦点管理、侧栏宽度与窗口尺寸持久化、最近活动时间与摘要持久化、可选的磁盘 scrollback 快照（设上限、低频写入）。验收是重启后布局、激活终端和工作区恢复；误点删除不会直接杀进程。
+
+进展（2026-11-06）：删除确认、`Ctrl+Shift+T/W/↑↓` 快捷键、设置面板说明、窗口 resize 适配、输出摘要 100ms 合并、xterm 释放已完成；侧栏宽度/窗口尺寸持久化和磁盘 scrollback 快照仍未做。
 
 ### 批次 E：发布工程化
 
