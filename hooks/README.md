@@ -35,11 +35,26 @@ TermBeacon CLI preflight
 - `--json`：机器可读（适合脚本）
 - `--strict`：任一关键项未配置时返回退出码 1（适合新机器验收 / CI）
 
-装完 **重启 opencode**（插件在启动时加载）。Claude Code 需要手写一次 settings（见第 3 节）。
+装完让 opencode 重新加载插件：`opencode reload`（或重启 opencode）。Claude Code 需要手写一次 settings（见第 3 节）。
 
 ---
 
 ## 2. opencode 插件
+
+opencode **V2** 的插件 API 与 V1 不兼容：默认导出必须是带 `id` 和 `setup(ctx)` 的定义，V1 的 `event` 钩子已被移除。仓库里的 `hooks/opencode/termbeacon.js` 已按 V2 重写，安装后执行：
+
+```powershell
+opencode plugin list
+```
+
+应看到 ID 为 `termbeacon` 的行：
+
+```text
+ID                  VERSION  SOURCE
+termbeacon          local    C:\Users\<you>\.config\opencode\plugin\termbeacon.js
+```
+
+ID 显示为 `-` 表示插件加载失败（用 `opencode reload` 重新加载；仍失败时看 `opencode --print-logs` 的输出）。
 
 ### 自动安装
 
@@ -66,17 +81,29 @@ cp hooks/opencode/termbeacon.js ~/.config/opencode/plugin/termbeacon.js
 
 ### 它上报什么
 
-插件订阅 opencode 的 `event` 流，映射如下：
+插件通过 V2 的 `ctx.event.subscribe()`（公有事件流）和两个钩子（`session.prompt`、`tool.execute.before`）获取状态，映射如下：
 
-| opencode 事件 | TermBeacon 状态 |
+| opencode 信号 | TermBeacon 状态 |
 | --- | --- |
-| `session.status`（busy / running / retry） | `running` → 工作中 |
-| `session.idle`、`session.status`（idle / completed） | `completed` → 已完成 |
-| `session.error`、`session.status`（error / failed） | `failed` → 异常 |
-| `tool.execute.before` / `tool.execute.after` | `running` → 工作中 |
-| `permission.asked` / `permission.updated`（pending / ask） | `waiting` → 等待输入 |
+| `session.prompt` 钩子（提交提示）、`tool.execute.before` 钩子 | `running` → 工作中 |
+| `session.status`（busy / retry）、`session.execution.started` | `running` → 工作中 |
+| `session.idle`、`session.status`（idle）、`session.execution.succeeded` / `interrupted` | `completed` → 已完成 |
+| `session.execution.failed` | `failed` → 异常 |
+| `permission.asked` | `waiting` → 等待输入 |
+| `permission.replied` | `running` → 工作中 |
 
 同一状态 1 秒内只发一次（去重）。插件不修改 opencode 配置，也不依赖额外 npm 包。
+
+> **V2 架构注意（重要）**：opencode V2 默认把插件加载到**后台共享 server**（`opencode service status` 可以看到它的地址）。这个进程的环境变量来自它第一次启动时的客户端，而不是当前终端，所以通常读不到 `TERMBEACON_*`，插件会自动变成空操作——不报错，也不上报。
+>
+> 想让状态桥接生效，请让 opencode 使用独立 server：
+>
+> ```powershell
+> opencode --standalone            # 交互式 TUI
+> opencode run --standalone "..."  # 非交互
+> ```
+>
+> 独立 server 由当前 CLI 进程派生，会继承 TermBeacon 注入的 PTY 环境变量，多个终端之间互不干扰。
 
 ### 为什么不需要配置端口
 
@@ -88,7 +115,7 @@ TERMBEACON_HOOK_PORT
 TERMBEACON_HOOK_TOKEN
 ```
 
-插件每次事件都从 `process.env` 读取，因此应用重启、端口或 token 变化都不需要改插件。**在普通终端里手动运行 opencode 时这些变量不存在，插件自动变成空操作**，不会报错、不会上报。
+插件每次上报都从 `process.env` 读取，因此应用重启、端口或 token 变化都不需要改插件。**在普通终端里手动运行 opencode 时这些变量不存在，插件自动变成空操作**；共享后台 server 模式下插件进程也读不到它们，同样保持沉默，不会报错、不会上报。
 
 ---
 
@@ -157,11 +184,11 @@ echo $env:TERMBEACON_TERMINAL_ID
 
 ### 5.2 真实 opencode
 
-1. 在 TermBeacon 里新建终端，运行 `opencode`
+1. 在 TermBeacon 里新建终端，运行 `opencode --standalone`（共享后台 server 读不到终端环境，见第 2 节）
 2. 发一条会执行工具的消息
-3. 观察侧栏：工作中 →（收到 `session.idle`）已完成
+3. 观察侧栏：工作中 →（收到 `session.idle` / `session.execution.succeeded`）已完成
 
-如果状态不动，先确认 `npm run preflight:cli` 里 `opencode plugin: installed`，并确认 opencode 是在装插件**之后**重启的。
+如果状态不动，先确认 `npm run preflight:cli` 里 `opencode plugin: installed`、`opencode plugin list` 中 `termbeacon` 的 ID 不是 `-`，并确认 opencode 是在装插件**之后**重启（或 `opencode reload`）的。
 
 ### 5.3 真实 Claude Code
 
@@ -174,7 +201,8 @@ echo $env:TERMBEACON_TERMINAL_ID
 
 | 现象 | 常见原因 | 处理 |
 | --- | --- | --- |
-| opencode 一直"工作中" | 插件未安装 / 装完没重启 opencode | `npm run hooks:install` + 重启 opencode；`npm run preflight:cli` 确认 |
+| opencode 一直"工作中" | 插件未安装 / 装完没重新加载 / 用的是共享后台 server | `npm run hooks:install` + `opencode reload`；用 `opencode --standalone` 启动；`opencode plugin list` 确认 ID 不是 `-` |
+| opencode 启动时报 `Plugin failed` | 插件仍是 V1 写法，或文件导出有语法错误 | 重新执行 `npm run hooks:install`；`opencode plugin list` 确认 ID 为 `termbeacon`；`opencode --print-logs` 看具体错误 |
 | opencode 一直"工作中"但插件已装 | 终端里的 opencode 不是由 TermBeacon 启动（环境变量缺失） | 从 TermBeacon 新建终端再启动 |
 | Claude 一直"工作中" | settings 未合并或路径写错 | `--print-claude` 重新生成，确认 `termbeacon-hook.cjs` 路径存在 |
 | 手动 `termbeacon-hook.cjs` 无反应且无报错 | 不在 TermBeacon 终端内（脚本静默降级） | 检查两个环境变量 |
@@ -201,6 +229,7 @@ echo $env:TERMBEACON_TERMINAL_ID
 **已知局限**：
 
 - 没有 Hook 时，全屏 TUI 的持续重绘会不断刷新"最后输出时间"，静默窗口永远不成立，状态可能卡在"工作中"；
+- opencode V2 默认把插件加载到共享后台 server，该进程读不到当前终端的 `TERMBEACON_*`；要用 `opencode --standalone` 才能让插件上报；
 - 文本启发式依赖终端画面里出现提示符或 `Done` 类字样，TUI 通常不满足；
 - 任务历史（`state.json.tasks`）复用同一套检测结果，所以任务状态与终端状态同步不准。
 
@@ -238,7 +267,8 @@ Get-Content payload.json | node scripts/termbeacon-hook.cjs   # 读取 Claude �
 
 - [ ] 安装 TermBeacon 与 Node（opencode / Claude / Codex 按需）
 - [ ] `npm run hooks:install`（或手动复制插件到 `~/.config/opencode/plugin/`）
-- [ ] 重启 opencode
+- [ ] `opencode reload`（或重启 opencode），`opencode plugin list` 中 `termbeacon` 的 ID 不是 `-`
+- [ ] 用 `opencode --standalone` 启动（共享后台 server 读不到终端环境）
 - [ ] Claude Code：`node scripts/hooks-install.cjs --print-claude`，合并进 `~/.claude/settings.json`
 - [ ] `npm run preflight:cli`，确认 `hook client: ready`、目标 CLI 的插件/Hook 为已配置
 - [ ] 在 TermBeacon 终端里 `node scripts/termbeacon-hook.cjs completed Stop` 做一次端到端自测
