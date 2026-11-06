@@ -64,6 +64,7 @@ const hookReady = hookServer.start().catch((error) => {
 
 // Per-terminal bounded output ring buffer for replay after renderer reconnect.
 const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+const MAX_SOCKET_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 // Detection is time-driven: quiet windows only advance when tick() is called.
 // PTY output is bursty and can stop entirely at a prompt, so the host must
@@ -88,20 +89,26 @@ function startTickLoop() {
 function bufferAppend(terminalId, data) {
   let entry = buffers.get(terminalId);
   if (!entry) {
-    entry = { parts: [], bytes: 0 };
+    entry = { parts: [], start: 0, bytes: 0 };
     buffers.set(terminalId, entry);
   }
   entry.parts.push(data);
   entry.bytes += Buffer.byteLength(data);
-  while (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length > 1) {
-    entry.bytes -= Buffer.byteLength(entry.parts[0]);
-    entry.parts.shift();
+  while (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length - entry.start > 1) {
+    entry.bytes -= Buffer.byteLength(entry.parts[entry.start]);
+    entry.start += 1;
   }
-  if (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length === 1) {
+  if (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length - entry.start === 1) {
     // Single oversized chunk: keep only the most recent limit bytes.
-    const kept = entry.parts[0].slice(-OUTPUT_BUFFER_LIMIT_BYTES);
-    entry.parts[0] = kept;
+    const kept = entry.parts[entry.start].slice(-OUTPUT_BUFFER_LIMIT_BYTES);
+    entry.parts[entry.start] = kept;
     entry.bytes = Buffer.byteLength(kept);
+  }
+  // Avoid O(n) Array#shift on every high-volume PTY chunk while still
+  // periodically reclaiming discarded entries.
+  if (entry.start > 64 && entry.start * 2 >= entry.parts.length) {
+    entry.parts = entry.parts.slice(entry.start);
+    entry.start = 0;
   }
 }
 
@@ -112,8 +119,9 @@ function bufferRelease(terminalId) {
 function replay(terminalId, fromSequence) {
   const entry = buffers.get(terminalId);
   if (!entry) return;
-  const base = (sequence.get(terminalId) || 0) - entry.parts.length;
-  entry.parts.forEach((data, index) => {
+  const retained = entry.parts.length - entry.start;
+  const base = (sequence.get(terminalId) || 0) - retained;
+  entry.parts.slice(entry.start).forEach((data, index) => {
     const seq = base + index + 1;
     if (seq <= fromSequence) return;
     send({ type: "pty:output", terminalId, data, sequence: seq, replay: true, at: Date.now() });
@@ -320,6 +328,10 @@ function handleMessage(message) {
       tickTimer = null;
     }
     void hookServer.close();
+    try { standaloneServer?.close(); } catch { /* already closed */ }
+    if (!isWindows && standaloneSocketPath) {
+      try { fs.unlinkSync(standaloneSocketPath); } catch { /* best effort */ }
+    }
     for (const [terminalId, session] of sessions) {
       killRequests.add(terminalId);
       try { session.kill(); } catch { /* process is shutting down */ }
@@ -427,6 +439,9 @@ function handleMessage(message) {
 }
 
 function attachElectronPort(port) {
+  if (dataPort && dataPort !== port && typeof dataPort.close === "function") {
+    try { dataPort.close(); } catch { /* stale port */ }
+  }
   dataPort = port;
   if (!dataPort) return;
   dataPort.on("message", (portEvent) => {
@@ -458,6 +473,11 @@ function startStandaloneServer(socketPath) {
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
       pending += chunk;
+      if (Buffer.byteLength(pending, "utf8") > MAX_SOCKET_MESSAGE_BYTES) {
+        pending = "";
+        socket.destroy();
+        return;
+      }
       while (true) {
         const newline = pending.indexOf("\n");
         if (newline < 0) break;
@@ -481,8 +501,40 @@ function startStandaloneServer(socketPath) {
     // lingering with PTYs that no client can reach.
     try { process.exit(1); } catch { /* test harness */ }
   });
-  server.listen(socketPath);
-  standaloneServer = server;
+  const listen = () => {
+    server.listen(socketPath);
+    standaloneServer = server;
+  };
+  if (isWindows || !fs.existsSync(socketPath)) {
+    listen();
+    return;
+  }
+  // A crashed host can leave a Unix-domain socket path behind. Probe it before
+  // removing the path so a second live host is never allowed to take over.
+  const probe = net.createConnection(socketPath);
+  let settled = false;
+  const cleanupProbe = () => {
+    if (settled) return false;
+    settled = true;
+    probe.removeAllListeners();
+    try { probe.destroy(); } catch { /* already closed */ }
+    return true;
+  };
+  probe.setTimeout(500, () => {
+    if (!cleanupProbe()) return;
+    try { fs.unlinkSync(socketPath); } catch { /* another process may have removed it */ }
+    listen();
+  });
+  probe.once("connect", () => {
+    cleanupProbe();
+    console.error("[pty-host] another host is already listening on the socket");
+    try { process.exit(1); } catch { /* test harness */ }
+  });
+  probe.once("error", () => {
+    if (!cleanupProbe()) return;
+    try { fs.unlinkSync(socketPath); } catch { /* another process may have removed it */ }
+    listen();
+  });
 }
 
 if (parentPort) {

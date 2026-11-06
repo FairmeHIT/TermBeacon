@@ -139,3 +139,24 @@ test("preserves bounded recovery metadata without accepting malformed session id
   });
   assert.equal(malformed.terminals.length, 0);
 });
+
+test("normalizes legacy terminal fields and keeps the active terminal inside its workspace", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [
+      { id: "w1", name: "A", terminalIds: ["t1"] },
+      { id: "w2", name: "B", terminalIds: ["t2"] },
+    ],
+    terminals: [
+      { id: "t1", title: "  shell  ", cwd: "C:\\", agentType: "generic" },
+      { id: "t2", title: "agent", cwd: "C:\\", agentType: "codex", state: "stopped", alive: true, lastActivityAt: -10 },
+    ],
+    activeWorkspaceId: "w1",
+    activeTerminalId: "t2",
+  });
+  assert.equal(result.terminals[0].state, "ready");
+  assert.equal(result.terminals[0].alive, false);
+  assert.equal(result.terminals[0].title, "shell");
+  assert.equal(result.terminals[1].lastActivityAt, 0);
+  assert.equal(result.activeTerminalId, "t1");
+});

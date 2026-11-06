@@ -16,6 +16,7 @@
 const fs = require("node:fs");
 
 const STATUSES = new Set(["started", "running", "waiting", "completed", "failed"]);
+const MAX_STDIN_BYTES = 128 * 1024;
 
 const EVENT_STATUS = {
   SessionStart: "started",
@@ -48,7 +49,17 @@ function parseArgs(argv) {
 function readStdin() {
   if (process.stdin.isTTY) return {};
   try {
-    const raw = fs.readFileSync(0, "utf8").trim();
+    const chunks = [];
+    let total = 0;
+    const buffer = Buffer.allocUnsafe(16 * 1024);
+    while (true) {
+      const count = fs.readSync(0, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      total += count;
+      if (total > MAX_STDIN_BYTES) return {};
+      chunks.push(Buffer.from(buffer.subarray(0, count)));
+    }
+    const raw = Buffer.concat(chunks, total).toString("utf8").trim();
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};

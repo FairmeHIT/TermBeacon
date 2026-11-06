@@ -33,6 +33,7 @@ if (existsSync(appAsar)) {
     "dist/main/preload.cjs",
     "dist/main/pty-host.cjs",
     "dist/main/detection-engine.cjs",
+    "dist/host-app/main.cjs",
     "dist/renderer/index.html",
     "package.json",
   ]) {
@@ -40,6 +41,10 @@ if (existsSync(appAsar)) {
   }
 
   try {
+    const packagedMain = extractFile(appAsar, "dist\\main\\main.js").toString("utf8");
+    if (!packagedMain.includes("--termbeacon-pty-host")) {
+      errors.push("packaged main is missing the packaged PTY host entry point");
+    }
     const packaged = JSON.parse(extractFile(appAsar, "package.json").toString("utf8"));
     const latestPath = join(releaseDir, "latest.yml");
     if (existsSync(latestPath)) {

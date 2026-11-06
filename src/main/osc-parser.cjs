@@ -35,7 +35,8 @@ function sanitizeValue(value) {
 function decodeFileUri(uri, platform = process.platform) {
   const match = uri.match(/^file:\/\/([^/]*)(\/.*)$/);
   if (!match) return undefined;
-  let path = decodeURIComponent(match[2]);
+  let path;
+  try { path = decodeURIComponent(match[2]); } catch { return undefined; }
   // A drive-letter path is a Windows path regardless of the host platform.
   // This keeps captured Windows fixtures runnable on Linux/macOS CI.
   if (/^\/[a-zA-Z]:[\\/]/.test(path)) {

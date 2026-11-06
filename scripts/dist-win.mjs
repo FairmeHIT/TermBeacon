@@ -1,12 +1,10 @@
 /**
  * Build the distributable and make sure artifacts end up in the in-repo
- * release/ directory. On this Windows machine a filter driver intermittently
- * leaves delete-pending EBUSY locks on freshly built files inside the project
- * tree (HANDOFF 6.8/6.11). Strategy: build into a scratch directory outside
- * the project, then COPY (not move) the artifacts into release/, which is not
- * affected by the lock. The locked scratch directory is renamed aside and
- * best-effort cleaned; a later reboot clears the residual delete-pending
- * state.
+ * release/ directory. Some Windows file-locking tools can leave delete-pending
+ * EBUSY locks on freshly built files inside the project tree. Build into a
+ * scratch directory outside the project, then COPY (not move) the artifacts
+ * into release/, which is not affected by the lock. The locked scratch
+ * directory is renamed aside and best-effort cleaned.
  */
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, rmSync, renameSync, existsSync, readdirSync } from "node:fs";
@@ -14,7 +12,7 @@ import { resolve } from "node:path";
 
 const root = resolve(process.cwd());
 const releaseDir = resolve(root, "release");
-const scratch = "D:/temp-termbeacon-build";
+const scratch = process.env.TERMBEACON_BUILD_DIR || resolve(root, "..", "termbeacon-build");
 
 console.log("[dist] building into scratch dir:", scratch);
 const command = process.platform === "win32"

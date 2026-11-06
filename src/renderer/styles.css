@@ -605,6 +605,36 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-install { width: 100%; margin-top: 10px; color: var(--accent); }
 .settings-hint { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .settings-hint.error { color: var(--danger); }
+.settings-section-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 0;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .08em;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-section-toggle:hover { color: var(--text); }
+.settings-section-toggle small { color: var(--muted); font-size: 9px; font-weight: 500; letter-spacing: 0; }
+.settings-section-toggle svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+.integration-panel { margin-top: 1px; }
 .integration-row {
   display: flex;
   gap: 8px;

@@ -52,7 +52,9 @@ function createHookServer({ onEvent } = {}) {
   let handler = onEvent;
 
   const server = http.createServer((request, response) => {
-    if (request.method !== "POST" || !request.url || !request.url.startsWith("/hook")) {
+    let pathname = "";
+    try { pathname = new URL(request.url || "", "http://127.0.0.1").pathname; } catch { /* handled as not found */ }
+    if (request.method !== "POST" || pathname !== "/hook") {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "not found" }));
       return;
@@ -63,10 +65,13 @@ function createHookServer({ onEvent } = {}) {
       return;
     }
     let body = "";
+    let bodyBytes = 0;
     let tooLarge = false;
+    request.setEncoding("utf8");
     request.on("data", (chunk) => {
       body += chunk;
-      if (body.length > MAX_BODY_BYTES && !tooLarge) {
+      bodyBytes += Buffer.byteLength(chunk);
+      if (bodyBytes > MAX_BODY_BYTES && !tooLarge) {
         tooLarge = true;
         response.writeHead(413, { "content-type": "application/json" });
         response.end(JSON.stringify({ error: "payload too large" }));

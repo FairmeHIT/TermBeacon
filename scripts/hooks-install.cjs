@@ -28,7 +28,14 @@ function installPlugin({ project = false, home = os.homedir(), cwd = process.cwd
   const source = fs.readFileSync(pluginSource);
   const existed = fs.existsSync(target);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, source);
+  const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(temp, source);
+    fs.renameSync(temp, target);
+  } catch (error) {
+    try { fs.unlinkSync(temp); } catch { /* best effort */ }
+    throw error;
+  }
   return { target, existed, bytes: source.length };
 }
 

@@ -209,3 +209,16 @@ test("settings popover uses app-level positioning beside the sidebar", () => {
   assert.match(rule, /left:\s*calc\(var\(--sidebar-width\) - 226px\)/);
   assert.match(rule, /bottom:\s*47px/);
 });
+
+test("optional CLI integration is collapsed by default", () => {
+  assert.match(app, /const \[integrationOpen, setIntegrationOpen\] = useState\(false\)/);
+  assert.match(app, /className="settings-section-toggle" aria-expanded=\{integrationOpen\}/);
+  assert.match(app, /\{integrationOpen && <div className="integration-panel">/);
+  assert.match(app, /<span>CLI 集成 <small>可选<\/small><\/span>/);
+  assert.match(styles, /\.settings-section-toggle\s*\{/);
+});
+
+test("generic input only treats a complete CLI command as an agent launch", () => {
+  assert.match(app, /normalized === command\s*\|\|\s*normalized\.startsWith\(`\$\{command\} `\)/);
+  assert.doesNotMatch(app, /command\.startsWith\(normalized\)/);
+});

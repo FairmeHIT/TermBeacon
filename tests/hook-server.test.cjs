@@ -67,10 +67,12 @@ test("hook server rejects malformed payloads", async (t) => {
 
 test("hook server only accepts POST /hook", async (t) => {
   const { server, port } = await withServer(t);
-  const response = await fetch(`http://127.0.0.1:${port}/other`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-termbeacon-token": server.token },
-    body: JSON.stringify({ terminalId: "t1", event: "x", status: "running" }),
-  });
-  assert.equal(response.status, 404);
+  for (const path of ["/other", "/hook-extra"]) {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-termbeacon-token": server.token },
+      body: JSON.stringify({ terminalId: "t1", event: "x", status: "running" }),
+    });
+    assert.equal(response.status, 404);
+  }
 });

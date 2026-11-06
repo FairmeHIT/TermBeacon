@@ -11,5 +11,17 @@ export default defineConfig({
   build: {
     outDir: "../../dist/renderer",
     emptyOutDir: true,
+    // Keep the terminal runtime and React cacheable across application
+    // updates. The entry chunk stays small enough to load quickly while the
+    // relatively stable xterm code can be reused by the browser cache.
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/@xterm/")) return "xterm";
+          if (id.includes("node_modules/react") || id.includes("node_modules/react-dom")) return "react";
+          return undefined;
+        },
+      },
+    },
   },
 });

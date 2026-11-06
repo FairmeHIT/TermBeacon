@@ -7,3 +7,25 @@ release-out/
 captures/
 artifacts/
 .release-notes.md
+
+# Credentials and local signing material.
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+*.crt
+*.cer
+
+# Local-only engineering notes and agent workflows. Keep these files available
+# for maintainers who need them, but do not include them in the public repo.
+HANDOFF.md
+.opencode/
+docs/continuation-prompt.md
+docs/development-handbook.md
+docs/development-plan-*.md
+docs/termbeacon-engineering-spec.md
+docs/superpowers/
+tests/release-skill.test.cjs

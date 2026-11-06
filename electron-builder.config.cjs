@@ -19,8 +19,8 @@ module.exports = {
   // Development-stage convention: build into the in-repo release/ directory
   // (git-ignored). NOTE: this Windows machine previously hit persistent EBUSY
   // from a local filter driver when the builder extracted the Electron dist
-  // into an in-project path (HANDOFF 6.8). If that recurs, either retry or
-  // point output at a project-external path for the build run.
+  // into an in-project path. If that recurs, either retry or point output at
+  // a project-external path for the build run.
   directories: { output: "release", buildResources: "build" },
   publish: [{ provider: "github", owner: "FairmeHIT", repo: "TermBeacon", releaseType: "release" }],
   // Set TERMBEACON_ELECTRON_DIST to an extracted Electron directory only when
@@ -56,8 +56,8 @@ module.exports = {
   mac: {
     // Built from a macOS machine via `npm run dist:mac`. node-pty ships
     // darwin-x64/darwin-arm64 N-API prebuilds, so no toolchain rebuild is
-    // needed there either. Keep the output project-external per HANDOFF 6.8
-    // only for this Windows machine; macOS can use the default in-tree path.
+    // needed there either. Keep the output project-external on hosts that
+    // encounter local file-lock issues; macOS can use the default path.
     target: [{ target: "dmg", arch: ["x64", "arm64"] }],
     category: "public.app-category.developer-tools",
     hardenedRuntime: true,

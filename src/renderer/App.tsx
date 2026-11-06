@@ -126,8 +126,7 @@ function isAgentLaunchInput(value: string | undefined, agentType: AgentType): bo
   const normalized = value.trimStart().toLowerCase();
   if (!normalized) return false;
   return AGENT_COMMANDS.some((command) => normalized === command
-    || normalized.startsWith(`${command} `)
-    || command.startsWith(normalized));
+    || normalized.startsWith(`${command} `));
 }
 
 const shellLabel: Record<string, string> = {
@@ -252,6 +251,10 @@ function SettingsIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" /><circle cx="12" cy="12" r="3" /></svg>;
 }
 
+function ChevronIcon({ open }: { open: boolean }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d={open ? "m6 9 6 6 6-6" : "m9 6 6 6-6 6"} /></svg>;
+}
+
 function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 }
@@ -313,6 +316,7 @@ function App() {
   const [integration, setIntegration] = useState<IntegrationStatus | null>(null);
   const [integrationBusy, setIntegrationBusy] = useState<"opencode" | "claude" | null>(null);
   const [integrationMessage, setIntegrationMessage] = useState("");
+  const [integrationOpen, setIntegrationOpen] = useState(false);
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
@@ -342,7 +346,11 @@ function App() {
     const pending = new Map(pendingHistory.current);
     pendingHistory.current.clear();
     pending.forEach((chunks, terminalId) => {
-      if (chunks.length > 0) void window.termbeacon.appendHistory(terminalId, chunks.join(""));
+      if (chunks.length > 0) {
+        void window.termbeacon.appendHistory(terminalId, chunks.join("")).catch((error) => {
+          console.error(`[history] save failed for ${terminalId}`, error);
+        });
+      }
     });
   }
 
@@ -429,9 +437,23 @@ function App() {
         setWorkspaces(restored);
         const workspaceTerminalIds = restored.find((workspace) => workspace.id === restoredActiveWorkspaceId)?.terminalIds ?? [];
         const fallbackId = workspaceTerminalIds.find((id) => state.terminals.some((terminal) => terminal.id === id));
-        setActiveId(state.activeTerminalId ?? fallbackId ?? state.terminals[0].id);
+        const savedActiveId = state.activeTerminalId && workspaceTerminalIds.includes(state.activeTerminalId)
+          ? state.activeTerminalId
+          : undefined;
+        setActiveId(savedActiveId ?? fallbackId ?? state.terminals[0].id);
       }
       setActiveWorkspaceId(restoredActiveWorkspaceId);
+      setHydrated(true);
+    }).catch((error) => {
+      console.error("[startup] failed to restore state", error);
+      const fallback = newTerminal(1, DEFAULT_SHELL, FALLBACK_PLATFORM.cwd);
+      setPlatformInfo(FALLBACK_PLATFORM);
+      setDefaultShell(DEFAULT_SHELL);
+      setTasks([]);
+      setTerminals([fallback]);
+      setWorkspaces([{ id: "default", name: "默认工作区", terminalIds: [fallback.id] }]);
+      setActiveWorkspaceId("default");
+      setActiveId(fallback.id);
       setHydrated(true);
     });
     const disposeOutput = window.termbeacon.onOutput((event) => {
@@ -733,7 +755,9 @@ function App() {
       const serialized = JSON.stringify(state);
       if (serialized === lastSavedState.current) return;
       lastSavedState.current = serialized;
-      void window.termbeacon.saveState(state);
+      void window.termbeacon.saveState(state).catch((error) => {
+        console.error("[state] save failed", error);
+      });
     }, 150);
     return () => window.clearTimeout(handle);
   }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, sidebarWidth, hydrated]);
@@ -941,12 +965,21 @@ function App() {
   async function resumeTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
     if (!terminal || !terminal.alive || terminal.recoveryState === "recovering") return;
-    const spec = await window.termbeacon.getResumeSpec({
-      agentType: terminal.agentType,
-      sessionId: terminal.lastSessionId,
-      cwd: terminal.cwd,
-      shell: terminal.shell || defaultShell,
-    });
+    let spec: { supported: boolean; command?: string; reason?: string };
+    try {
+      spec = await window.termbeacon.getResumeSpec({
+        agentType: terminal.agentType,
+        sessionId: terminal.lastSessionId,
+        cwd: terminal.cwd,
+        shell: terminal.shell || defaultShell,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setTerminals((items) => items.map((item) => item.id === id
+        ? { ...item, recoveryState: "unsupported", resumeAvailable: false, resumeError: message.slice(-500) }
+        : item));
+      return;
+    }
     if (!spec.supported || !spec.command) {
       setTerminals((items) => items.map((item) => item.id === id
         ? { ...item, recoveryState: "unsupported", resumeAvailable: false, resumeError: spec.reason || "该 CLI 不支持会话恢复" }
@@ -1021,6 +1054,7 @@ function App() {
     lastInput.current.delete(id);
     inputBuffers.current.delete(id);
     sentSizes.current.delete(id);
+    pinnedTitles.current.delete(id);
     const pendingResize = resizeTimers.current.get(id);
     if (pendingResize) window.clearTimeout(pendingResize);
     resizeTimers.current.delete(id);
@@ -1037,7 +1071,6 @@ function App() {
       return;
     }
     if (id === activeId) setActiveId(remaining[0]);
-    pinnedTitles.current.delete(id);
     setTerminals((items) => items.filter((item) => item.id !== id));
     setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: remaining } : workspace));
   }
@@ -1048,13 +1081,21 @@ function App() {
     if (nextTerminalId && terminals.some((terminal) => terminal.id === nextTerminalId)) {
       setActiveId(nextTerminalId);
       focusTerminalView(nextTerminalId);
+    } else {
+      const fallback = terminals.find((terminal) => workspaces.some((workspace) => workspace.id === id && workspace.terminalIds.includes(terminal.id)));
+      if (fallback) setActiveId(fallback.id);
     }
   }
 
   // New workspaces are anchored to a local folder: the folder name becomes the
   // default title (until the user renames it) and new terminals start in it.
   async function addWorkspace() {
-    const picked = await window.termbeacon.pickCwd();
+    let picked: string | null;
+    try {
+      picked = await window.termbeacon.pickCwd();
+    } catch {
+      return;
+    }
     if (!isValidCwd(picked)) return;
     const folderName = folderNameFromPath(picked);
     const terminal = newTerminal(terminals.length + 1, defaultShell, picked);
@@ -1204,17 +1245,22 @@ function App() {
       </div>
       {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
       {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
-      <div className="settings-caption">CLI 集成</div>
-      <div className="settings-hint">可选。用于更准确识别 opencode 和 Claude Code 的工作状态。</div>
-      <div className="integration-row">
-        <span>opencode 插件</span>
-        <button onClick={() => void installOpencodePlugin()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "opencode" ? "处理中…" : integration?.opencodePluginInstalled ? "更新" : "安装"}</button>
-      </div>
-      <div className="integration-row">
-        <span>Claude Hook</span>
-        <button onClick={() => void configureClaudeHook()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "claude" ? "处理中…" : integration?.claudeHookConfigured ? "重新配置" : "配置"}</button>
-      </div>
-      {integrationMessage && <div className={`settings-hint ${integrationMessage.includes("失败") || integrationMessage.includes("不存在") ? "error" : ""}`}>{integrationMessage}</div>}
+      <button type="button" className="settings-section-toggle" aria-expanded={integrationOpen} onClick={() => setIntegrationOpen((open) => !open)}>
+        <span>CLI 集成 <small>可选</small></span>
+        <ChevronIcon open={integrationOpen} />
+      </button>
+      {integrationOpen && <div className="integration-panel">
+        <div className="settings-hint">用于更准确识别 opencode 和 Claude Code 的工作状态。</div>
+        <div className="integration-row">
+          <span>opencode 插件</span>
+          <button onClick={() => void installOpencodePlugin()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "opencode" ? "处理中…" : integration?.opencodePluginInstalled ? "更新" : "安装"}</button>
+        </div>
+        <div className="integration-row">
+          <span>Claude Hook</span>
+          <button onClick={() => void configureClaudeHook()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "claude" ? "处理中…" : integration?.claudeHookConfigured ? "重新配置" : "配置"}</button>
+        </div>
+        {integrationMessage && <div className={`settings-hint ${integrationMessage.includes("失败") || integrationMessage.includes("不存在") ? "error" : ""}`}>{integrationMessage}</div>}
+      </div>}
     </div>}
     <section className="workspace">
       {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title="展开工作栏" aria-label="展开工作栏"><SidebarToggleIcon collapsed /></button>}

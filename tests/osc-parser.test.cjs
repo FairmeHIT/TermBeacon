@@ -93,4 +93,5 @@ test("decodeFileUri handles posix and windows forms", () => {
   assert.strictEqual(decodeFileUri("file:///home/u", "linux"), "/home/u");
   assert.strictEqual(decodeFileUri("file:///D:/a b", "win32"), "D:\\a b");
   assert.strictEqual(decodeFileUri("http://x", "linux"), undefined);
+  assert.strictEqual(decodeFileUri("file:///bad%ZZpath", "linux"), undefined);
 });

@@ -64,6 +64,7 @@ let ptyHostProcess: ChildProcess | null = null;
 let hostSocket: Socket | null = null;
 let rendererPort: Electron.MessagePortMain | null = null;
 let hostSocketName: string | null = null;
+let hostConnectTimer: NodeJS.Timeout | undefined;
 const hostMessageQueue: unknown[] = [];
 let rendererReady = false;
 let isQuitting = false;
@@ -81,6 +82,10 @@ type UpdateStatus = { type: string; version?: string; percent?: number; message?
 let updateStatus: UpdateStatus = { type: "idle" };
 let updateCheckInFlight = false;
 const historyWrites = new Map<string, Promise<boolean>>();
+let stateWriteTail: Promise<void> = Promise.resolve();
+let stateWriteSequence = 0;
+const MAX_HOST_MESSAGE_BYTES = 4 * 1024 * 1024;
+const MAX_HOOK_INPUT_BYTES = 128 * 1024;
 
 interface PersistedState {
   schemaVersion: 1;
@@ -122,9 +127,19 @@ async function readState(): Promise<PersistedState> {
 
 async function writeState(state: PersistedState) {
   const target = statePath();
-  const temp = `${target}.tmp`;
-  await writeFile(temp, JSON.stringify(state, null, 2), "utf8");
-  await rename(temp, target);
+  const temp = `${target}.tmp-${process.pid}-${++stateWriteSequence}`;
+  const serialized = JSON.stringify(state, null, 2);
+  const operation = stateWriteTail.catch(() => undefined).then(async () => {
+    try {
+      await writeFile(temp, serialized, "utf8");
+      await rename(temp, target);
+    } catch (error) {
+      try { await unlink(temp); } catch { /* best effort */ }
+      throw error;
+    }
+  });
+  stateWriteTail = operation.catch(() => undefined);
+  return operation;
 }
 
 function currentWindowBounds(): WindowBounds | undefined {
@@ -140,7 +155,7 @@ function scheduleWindowStateSave() {
     const bounds = currentWindowBounds();
     if (!bounds || !stateCache) return;
     stateCache = { ...stateCache, windowBounds: bounds };
-    void writeState(stateCache);
+    void writeState(stateCache).catch((error) => console.error("[state] save failed", error));
   }, 400);
 }
 
@@ -309,6 +324,12 @@ function attachHostSocket(socket: Socket) {
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
     pending += chunk;
+    if (Buffer.byteLength(pending, "utf8") > MAX_HOST_MESSAGE_BYTES) {
+      console.error("[pty-host] oversized socket message");
+      pending = "";
+      socket.destroy();
+      return;
+    }
     while (true) {
       const newline = pending.indexOf("\n");
       if (newline < 0) break;
@@ -351,15 +372,32 @@ function connectToPtyHost() {
   socket.once("error", () => {
     if (!connected) {
       try { socket.destroy(); } catch { /* connection failed */ }
+      scheduleHostConnect();
     }
   });
+}
+
+function scheduleHostConnect(delayMs = 100) {
+  if (isQuitting || hostSocket || hostConnectTimer) return;
+  hostConnectTimer = setTimeout(() => {
+    hostConnectTimer = undefined;
+    connectToPtyHost();
+  }, delayMs);
 }
 
 function spawnPtyHost() {
   if (isQuitting || (ptyHostProcess && ptyHostProcess.exitCode === null)) return;
   const hostPath = path.join(__dirname, "../host-app");
+  // In development, Electron accepts a second app path after electron.exe.
+  // A packaged executable always boots its bundled main entry, so passing the
+  // host directory there just starts another copy of the UI and the single
+  // instance lock makes it exit immediately. Use an explicit host mode for
+  // packaged launches while keeping the detached dev path unchanged.
+  const hostArgs = app.isPackaged
+    ? ["--termbeacon-pty-host", "--server", getHostSocketName()]
+    : [hostPath, "--server", getHostSocketName()];
   try {
-    const child = spawn(process.execPath, [hostPath, "--server", getHostSocketName()], {
+    const child = spawn(process.execPath, hostArgs, {
       detached: true,
       windowsHide: true,
       stdio: "ignore",
@@ -398,9 +436,7 @@ function startPtyHost() {
   setTimeout(() => {
     if (!isQuitting && !hostSocket) {
       spawnPtyHost();
-      setTimeout(() => {
-        if (!isQuitting && !hostSocket) connectToPtyHost();
-      }, 150);
+      scheduleHostConnect(150);
     }
   }, 100);
 }
@@ -506,11 +542,19 @@ async function runHookMode() {
   const token = process.env.TERMBEACON_HOOK_TOKEN;
   const terminalId = process.env.TERMBEACON_TERMINAL_ID;
   let raw = "";
+  let inputTooLarge = false;
   if (!process.stdin.isTTY) {
-    for await (const chunk of process.stdin) raw += String(chunk);
+    for await (const chunk of process.stdin) {
+      const text = String(chunk);
+      if (Buffer.byteLength(raw, "utf8") + Buffer.byteLength(text, "utf8") > MAX_HOOK_INPUT_BYTES) {
+        inputTooLarge = true;
+        continue;
+      }
+      raw += text;
+    }
   }
   let input: Record<string, unknown> = {};
-  try { input = raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { input = {}; }
+  try { input = !inputTooLarge && raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { input = {}; }
   const args = process.argv.slice(2);
   const positional = args.filter((value) => !value.startsWith("--"));
   const option = (name: string) => {
@@ -547,8 +591,39 @@ async function runHookMode() {
   app.quit();
 }
 
+function runPtyHostMode() {
+  const serverIndex = process.argv.indexOf("--server");
+  const socketPath = serverIndex >= 0 ? process.argv[serverIndex + 1] : undefined;
+  if (typeof socketPath !== "string" || socketPath.length === 0) {
+    console.error("[termbeacon-host] missing --server socket path");
+    app.exit(1);
+    return;
+  }
+
+  // Keep the detached host's Chromium profile separate from the UI process.
+  // This mirrors src/host-app/package.json in development and avoids profile
+  // lock contention when the two Electron processes run concurrently.
+  app.setName("termbeacon-host");
+  app.setPath("userData", path.join(app.getPath("appData"), "termbeacon-host"));
+  app.whenReady().then(() => {
+    const lifetimeWindow = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+    void lifetimeWindow.loadURL("about:blank");
+    require("./pty-host.cjs");
+  }).catch((error) => {
+    console.error("[termbeacon-host] startup failed", error);
+    app.exit(1);
+  });
+  process.on("uncaughtException", (error) => {
+    console.error("[termbeacon-host] uncaught exception", error);
+    app.exit(1);
+  });
+  app.on("window-all-closed", () => {});
+}
+
 if (process.argv.includes("--hook")) {
   void runHookMode();
+} else if (process.argv.includes("--termbeacon-pty-host")) {
+  runPtyHostMode();
 } else {
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -581,6 +656,7 @@ app.on("before-quit", (event) => {
   }
   isQuitting = true;
   if (hostRestartTimer) clearTimeout(hostRestartTimer);
+  if (hostConnectTimer) clearTimeout(hostConnectTimer);
   if (windowSaveTimer) clearTimeout(windowSaveTimer);
   // The detached host owns the PTYs. Closing the UI only detaches the client;
   // an explicit terminal stop still sends pty:kill through the data plane.
@@ -619,8 +695,14 @@ ipcMain.handle("history:append", async (_event, terminalId: string, data: string
 ipcMain.handle("history:remove", async (_event, terminalId: string) => removeTerminalHistory(terminalId));
 ipcMain.handle("update:install", () => {
   if (!updateConfigured) return false;
-  autoUpdater.quitAndInstall(false, true);
-  return true;
+  return writeState(stateCache || defaultState())
+    .catch((error) => {
+      console.error("[state] update install save failed", error);
+    })
+    .then(() => {
+      autoUpdater.quitAndInstall(false, true);
+      return true;
+    });
 });
 ipcMain.handle("update:state", () => ({
   status: updateStatus,

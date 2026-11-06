@@ -25,7 +25,14 @@ function installOpencodePlugin({ assets, home = os.homedir() } = {}) {
   const target = resolvePluginTarget({ home });
   fs.mkdirSync(path.dirname(target), { recursive: true });
   const existed = fs.existsSync(target);
-  fs.copyFileSync(assets.opencodePlugin, target);
+  const temp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.copyFileSync(assets.opencodePlugin, temp);
+    fs.renameSync(temp, target);
+  } catch (error) {
+    try { fs.unlinkSync(temp); } catch { /* best effort */ }
+    throw error;
+  }
   return { target, existed, bytes: fs.statSync(target).size };
 }
 
