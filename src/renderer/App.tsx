@@ -170,7 +170,7 @@ function ThemeIcon({ theme }: { theme: Theme }) {
 }
 
 function SettingsIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" /><path d="m19.4 15 .1.1a1.8 1.8 0 0 1-2.5 2.5l-.1-.1a1.8 1.8 0 0 0-3 .9v.2a1.8 1.8 0 0 1-3.6 0v-.2a1.8 1.8 0 0 0-3-.9l-.1.1a1.8 1.8 0 1 1-2.5-2.5l.1-.1a1.8 1.8 0 0 0-.9-3H4a1.8 1.8 0 0 1 0-3.6h.2a1.8 1.8 0 0 0 .9-3L5 5.3A1.8 1.8 0 1 1 7.5 2.8l.1.1a1.8 1.8 0 0 0 3-.9v-.2a1.8 1.8 0 0 1 3.6 0V2a1.8 1.8 0 0 0 3 .9l.1-.1a1.8 1.8 0 1 1 2.5 2.5l-.1.1a1.8 1.8 0 0 0 .9 3h.2a1.8 1.8 0 0 1 0 3.6h-.2a1.8 1.8 0 0 0-.9 3Z" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16" /><path d="M4 12h16" /><path d="M4 17h16" /><circle cx="9" cy="7" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="8" cy="17" r="2" /></svg>;
 }
 
 // Mirrors src/main/title-utils.cjs (kept inline here because the renderer
@@ -741,29 +741,27 @@ function App() {
       <div className="sidebar-footer">
         <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title="打开设置" aria-label="打开设置"><SettingsIcon /></button>
         <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}><ThemeIcon theme={theme} /></button>
-        {settingsOpen && <div className="settings-popover">
-          <div className="settings-title">设置</div>
-          <div className="settings-caption">主题</div>
-          <div className="theme-options" role="group" aria-label="主题">
-            {(["dark", "light"] as Theme[]).map((option) => <button key={option} className={`theme-option ${theme === option ? "selected" : ""}`} onClick={() => setTheme(option)}><ThemeIcon theme={option} />{option === "dark" ? "深色" : "浅色"}</button>)}
-          </div>
-          <div className="settings-caption">默认 Shell（新建终端）</div>
-          <select className="shell-select" value={defaultShell} onChange={(event) => setDefaultShell(event.target.value as ShellType)} aria-label="默认 Shell">
-            {SHELL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-          <div className="settings-caption">快捷键</div>
-          <div className="settings-note">Ctrl+Shift+T 新建终端 · Ctrl+Shift+W 关闭当前终端 · Ctrl+Shift+↑/↓ 切换终端</div>
-          <div className="settings-caption">更新</div>
-          <div className="settings-update">
-            <span>{appVersion ? `当前版本 ${appVersion}` : "当前版本未知"}</span>
-            <button onClick={() => void checkForUpdates()} disabled={updateBusy || updateState?.type === "downloading"}>{updateBusy ? "检查中…" : "检查更新"}</button>
-          </div>
-          {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
-          {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
-        </div>}
       </div>
       <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title="拖动调整侧栏宽度" />
     </aside>
+    {settingsOpen && <div className="settings-popover">
+      <div className="settings-title">设置</div>
+      <div className="settings-caption">主题</div>
+      <div className="theme-options" role="group" aria-label="主题">
+        {(["dark", "light"] as Theme[]).map((option) => <button key={option} className={`theme-option ${theme === option ? "selected" : ""}`} onClick={() => setTheme(option)}><ThemeIcon theme={option} />{option === "dark" ? "深色" : "浅色"}</button>)}
+      </div>
+      <div className="settings-caption">默认 Shell</div>
+      <select className="shell-select" value={defaultShell} onChange={(event) => setDefaultShell(event.target.value as ShellType)} aria-label="默认 Shell">
+        {SHELL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      <div className="settings-caption">更新</div>
+      <div className="settings-update">
+        <span>{appVersion ? `当前版本 ${appVersion}` : "当前版本未知"}</span>
+        <button onClick={() => void checkForUpdates()} disabled={updateBusy || updateState?.type === "downloading"}>{updateBusy ? "检查中…" : "检查更新"}</button>
+      </div>
+      {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
+      {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
+    </div>}
     <section className="workspace">
       <header className="workspace-header">
         <div><EditableTitle title={active?.title ?? ""} onCommit={(next) => active && renameTerminal(active.id, next)} /><span className="cwd-picker" onClick={pickCwd} title="点击选择工作目录（下次启动生效）">{active?.cwd}</span></div>

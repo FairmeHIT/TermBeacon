@@ -54,6 +54,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 button:disabled { cursor: not-allowed; opacity: .45; }
 
 .app-shell {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   width: 100%;
@@ -370,8 +371,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .settings-popover {
   position: absolute;
-  bottom: calc(100% + 9px);
-  left: 0;
+  bottom: 47px;
+  left: calc(var(--sidebar-width) - 226px);
   z-index: 5;
   width: 240px;
   padding: 14px;
@@ -394,7 +395,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--panel-soft);
 }
 .shell-select:focus { border-color: var(--accent); }
-.settings-note { color: var(--muted); font-size: 10px; line-height: 1.7; }
 .theme-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .theme-option {
   display: flex;
