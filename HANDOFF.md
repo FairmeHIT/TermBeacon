@@ -559,3 +559,13 @@ TUI 乱码修复（症状：agent 输出期间偶发错位乱码，最大化/恢
 - opencode 滚轮上报按动画帧合并，避免滚动风暴。
 
 验证：`npm test` 186 passed, 0 failed；`npm run build` 通过（仅有 Vite chunk 体积警告）。
+
+### 0.1.9 发布记录（2026-11-06）
+
+- 提交：`d193765`（侧栏重构 + TUI resize 修复）、`69ac43c`（TUI 重绘/标题细化）、`f54f830`（文档）。
+- tag `v0.1.9` = `93086a7`，远端 `main` = `f54f83021f195c8b4eb0b400a06b6a1617b197f9`。
+- Release: https://github.com/FairmeHIT/TermBeacon/releases/tag/v0.1.9
+- 资产：`TermBeacon-0.1.9-setup.exe` 95,734,040 B；`TermBeacon-0.1.9-setup.exe.blockmap` 99,576 B；`latest.yml` 348 B。
+- sha512 `2tBbXYfp2Gh7EWxIgrw9VX0FqLEBzs0MNG4Ld2FAxhf3UGlh0FEG91z22ZQmPdDHNYYwjqiLIv+0x9aCCj+UoQ==`，与 `latest.yml` 一致；线上重新下载核对通过，自动更新链路可用。
+- 首次构建时 `release/win-unpacked` 被正在运行的 0.1.8 实例锁住导致 `verify:dist` 失败；关闭该实例后重建，`win-unpacked` 完整更新，校验通过。
+- 安装包未签名（无 `CSC_LINK`），首次运行会触发 SmartScreen 提示。

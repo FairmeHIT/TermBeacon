@@ -6,3 +6,4 @@ release-out/
 .DS_Store
 captures/
 artifacts/
+.release-notes.md
