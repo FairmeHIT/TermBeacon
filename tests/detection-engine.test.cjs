@@ -59,6 +59,15 @@ test("hook failure and completion are high confidence signals", () => {
   assert.equal(updates.at(-1).current, "error");
 });
 
+test("OpenCode transient provider errors do not override a retrying task", () => {
+  const { detector, updates } = makeAgent("opencode");
+  detector.input("run task\r");
+  detector.output("Thinking...\r\n", 1000);
+  detector.output("request failed, retrying...\r\nThinking...\r\n", 2000);
+  assert.equal(detector.runtime.state, "working");
+  assert.equal(updates.some((update) => update.current === "error"), false);
+});
+
 test("completion marker split across PTY output chunks still completes", () => {
   const { detector, updates } = make();
   detector.input("build project\r");

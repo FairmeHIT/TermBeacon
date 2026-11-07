@@ -4,6 +4,7 @@ const path = require("node:path");
 const test = require("node:test");
 
 const app = fs.readFileSync(path.join(__dirname, "../src/renderer/App.tsx"), "utf8");
+const launch = fs.readFileSync(path.join(__dirname, "../src/main/agent-launch.cjs"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "../src/renderer/styles.css"), "utf8");
 
 test("brand header uses a beacon mark and only the product name", () => {
@@ -219,6 +220,7 @@ test("optional CLI integration is collapsed by default", () => {
 });
 
 test("generic input only treats a complete CLI command as an agent launch", () => {
-  assert.match(app, /normalized === command\s*\|\|\s*normalized\.startsWith\(`\$\{command\} `\)/);
-  assert.doesNotMatch(app, /command\.startsWith\(normalized\)/);
+  assert.match(launch, /normalized === command\s*\|\|\s*normalized\.startsWith\(`\$\{command\} `\)/);
+  assert.doesNotMatch(launch, /command\.startsWith\(normalized\)/);
+  assert.match(app, /isAgentLaunchInput\(candidate/);
 });

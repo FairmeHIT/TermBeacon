@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
+import launchUtils from "../main/agent-launch.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
 import { splitScreenOutput } from "./terminal-screen";
 import "./styles.css";
@@ -13,6 +14,10 @@ const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInte
   applyTaskEvent: (items: TaskRecord[], event: StateUpdateEvent, prompt?: string) => TaskRecord[];
   settleTask: (items: TaskRecord[], terminalId: string, state: Extract<TaskState, "completed" | "error" | "cancelled">, at: number, detail?: string) => TaskRecord[];
   markInterrupted: (items: TaskRecord[], at: number, detail?: string) => TaskRecord[];
+};
+const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
+  isAgentLaunchInput: (value: string | undefined, agentType: AgentType) => boolean;
+  withOpenCodeStandalone: (data: string, candidate: string | undefined, agentType: AgentType) => string;
 };
 
 // Mirrors the payload the main process sends on update:event and returns from
@@ -118,16 +123,6 @@ const agentLabel: Record<AgentType, string> = {
   codex: "Codex",
   claude: "Claude Code",
 };
-
-const AGENT_COMMANDS = ["opencode", "claude", "codex"];
-
-function isAgentLaunchInput(value: string | undefined, agentType: AgentType): boolean {
-  if (agentType !== "generic" || !value) return false;
-  const normalized = value.trimStart().toLowerCase();
-  if (!normalized) return false;
-  return AGENT_COMMANDS.some((command) => normalized === command
-    || normalized.startsWith(`${command} `));
-}
 
 const shellLabel: Record<string, string> = {
   "cmd.exe": "命令提示符",
@@ -656,7 +651,10 @@ function App() {
         }
         const launch = isAgentLaunchInput(candidate, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType);
         if (submitted && candidate && !launch) lastInput.current.set(terminal.id, candidate);
-        const request = { terminalId: terminal.id, data };
+        const launchData = launch
+          ? withOpenCodeStandalone(data, candidate, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType)
+          : data;
+        const request = { terminalId: terminal.id, data: launchData };
         if (launch) window.termbeacon.launch(request);
         else window.termbeacon.write(request);
       });

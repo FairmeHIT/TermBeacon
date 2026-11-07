@@ -140,6 +140,7 @@ function createDetector(agentType = "generic", emit = () => {}) {
     const dialog = tailLines(recent, 8);
     const errorLines = tailLines(recent, 4);
     const lastLine = tailLines(recent, 1);
+    const hasWorkingSignal = config.patterns.working.some((pattern) => pattern.test(clean));
 
     if (config.patterns.waitingInput.some((pattern) => pattern.test(dialog))) {
       runtime.pending = null;
@@ -147,9 +148,18 @@ function createDetector(agentType = "generic", emit = () => {}) {
       return;
     }
     if (config.patterns.error.some((pattern) => pattern.test(errorLines))) {
-      runtime.pending = null;
-      transition("error", 0.7, "output", clean.trim().slice(-160));
-      return;
+      // OpenCode can render a provider/tool failure while immediately retrying
+      // the same turn. Keep the sidebar aligned with the still-active TUI when
+      // the same chunk carries an unambiguous working signal.
+      if (config.id === "opencode" && hasWorkingSignal) {
+        runtime.armed = true;
+        runtime.pending = null;
+        transition("working", 0.65, "output", clean.trim().slice(-160));
+      } else {
+        runtime.pending = null;
+        transition("error", 0.7, "output", clean.trim().slice(-160));
+        return;
+      }
     }
     if (config.patterns.toolStart.some((pattern) => pattern.test(clean))) {
       runtime.armed = true;
@@ -160,7 +170,7 @@ function createDetector(agentType = "generic", emit = () => {}) {
       runtime.toolInFlight = false;
       runtime.toolStartedAt = 0;
     }
-    if (runtime.armed && runtime.state !== "error") {
+    if (runtime.armed && (runtime.state !== "error" || (config.id === "opencode" && hasWorkingSignal))) {
       transition("working", 0.6, "output", clean.trim().slice(-160));
     }
     const promptChunk = clean.trim();

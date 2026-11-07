@@ -52,7 +52,7 @@ module.exports = {
     ...common,
     patterns: {
       ...common.patterns,
-      working: [/Thinking|Running tool|Applying patch|正在/i],
+      working: [/Thinking|Running tool|Applying patch|Retry(?:ing)?|正在|重试/i],
       completion: [/Changes applied|Task complete|Done(?!\s+in\b)|完成/i],
     },
   },
