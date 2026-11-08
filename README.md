@@ -2,10 +2,6 @@
   <img src="docs/assets/termbeacon-cover.png" alt="TermBeacon - a clean control plane for every terminal" width="100%" />
 
   <p>
-    <a href="#termbeacon">English</a> · <a href="#简体中文">简体中文</a>
-  </p>
-
-  <p>
     <a href="https://github.com/FairmeHIT/TermBeacon/releases"><img src="https://img.shields.io/badge/version-0.1.13-2f80ed?style=flat-square" alt="Version 0.1.13" /></a>
     <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-36-3b4856?style=flat-square" alt="Electron 36" /></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-3b4856?style=flat-square" alt="React 19" /></a>
@@ -14,6 +10,7 @@
   </p>
 
   <p><strong>Run every terminal in one clean view, and never miss a task finishing.</strong></p>
+  <p>Works with <strong>Codex</strong>, <strong>Claude Code</strong>, and <strong>opencode</strong> — plus generic shells.</p>
 </div>
 
 <a id="termbeacon"></a>
@@ -130,45 +127,3 @@ The host process owns PTYs independently from the window, so closing and reopeni
 ## Project status
 
 TermBeacon is an active MVP. The core desktop workflow is implemented; integrations and status detection continue to improve as more CLI event formats are covered. Contributions, reproducible bug reports, and sanitized CLI fixtures are welcome.
-
-## 简体中文
-
-TermBeacon 是一个本地优先的终端管理器，适合同时运行多个 Shell 和 CLI Agent。它把终端放进工作区，用简洁侧栏展示多个会话，并用状态提醒告诉你任务正在执行、已完成、等待输入或发生异常。
-
-**一句话推广语：在一个简洁界面管理所有终端，任务完成时及时提醒你。**
-
-### 主要能力
-
-- 多工作区、多终端创建、切换、重命名、停止、重启和删除。
-- `工作中`、`已完成`、`就绪`、`等待输入`、`异常`、`已停止` 六类状态灯。
-- 后台任务进入“已完成但未查看”后会持续提醒，打开对应终端后才回到“就绪”。
-- 支持 opencode 插件、Claude Code Hook、Codex 标题信号和通用 Shell 启发式检测。
-- 保存窗口布局、工作区、任务历史和终端滚动内容，重启后恢复。
-- Electron + React + TypeScript + Vite + xterm.js + node-pty，Windows 使用 ConPTY。
-- 深色 / 浅色主题和打包版本自动更新。
-
-### 快速开始
-
-直接使用时，从 [GitHub Releases](https://github.com/FairmeHIT/TermBeacon/releases) 下载安装包。源码开发需要 Node.js 20+、npm 10+ 和 Git：
-
-```powershell
-npm ci
-npm run doctor
-npm test
-npm run build
-npm run dev
-```
-
-配置 CLI 状态桥接：
-
-```powershell
-npm run hooks:install
-npm run hooks:configure:claude
-npm run preflight:cli
-```
-
-详细配置、事件映射、排查方法和协议说明见 [`hooks/README.md`](hooks/README.md)。
-
-### 项目状态
-
-TermBeacon 当前处于持续开发的 MVP 阶段。桌面端核心流程已经可用，后续会继续扩展 CLI 事件适配和状态检测覆盖范围。欢迎提交可复现的问题、脱敏后的 CLI fixture 和改进建议。

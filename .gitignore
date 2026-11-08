@@ -29,3 +29,6 @@ docs/development-plan-*.md
 docs/termbeacon-engineering-spec.md
 docs/superpowers/
 tests/release-skill.test.cjs
+
+# Local design working files (HTML sources, briefs, self-check screenshots).
+.creative-design/
