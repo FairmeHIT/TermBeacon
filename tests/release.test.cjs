@@ -66,7 +66,8 @@ test("a new release stays draft until every asset and the remote updater manifes
   t.mock.method(globalThis, "fetch", async (url, options = {}) => {
     const uri = new URL(url), method = options.method || "GET";
     if (uri.pathname.endsWith(`/git/ref/tags/v${version}`)) return Response.json({ ref: `refs/tags/v${version}` });
-    if (uri.pathname.endsWith(`/releases/tags/v${version}`)) return release ? Response.json(release) : Response.json({}, { status: 404 });
+    if (uri.pathname.endsWith(`/releases/tags/v${version}`)) return release && !release.draft ? Response.json(release) : Response.json({}, { status: 404 });
+    if (uri.pathname.endsWith('/releases') && method === "GET") return Response.json(release ? [release] : []);
     if (uri.pathname.endsWith("/releases") && method === "POST") { const body = JSON.parse(options.body); assert.equal(body.draft, true); release = { ...body, id: 7, assets: [], html_url: "https://github.com/owner/repo/releases/tag/v" + version }; return Response.json(release); }
     if (uri.hostname === "uploads.github.com") {
       assert.equal(release.draft, true); assert.ok(Buffer.isBuffer(options.body));

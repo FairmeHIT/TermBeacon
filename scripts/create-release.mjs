@@ -109,9 +109,18 @@ async function ghFetch(url, options, { attempts = 4 } = {}) {
 
 async function getRelease(headers, repo, tag) {
   const response = await ghFetch(`${API}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`, { headers });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`GET release ${response.status}: ${await response.text()}`);
-  return response.json();
+  if (response.ok) return response.json();
+  if (response.status !== 404) throw new Error(`GET release ${response.status}: ${await response.text()}`);
+  // GitHub's tag endpoint can omit drafts, even for their authenticated author.
+  // Listing releases includes accessible drafts and makes failed runs resumable.
+  for (let page = 1; ; page += 1) {
+    const listing = await ghFetch(`${API}/repos/${repo}/releases?per_page=100&page=${page}`, { headers });
+    if (!listing.ok) throw new Error(`List releases ${listing.status}: ${await listing.text()}`);
+    const releases = await listing.json();
+    const match = releases.find((entry) => entry.tag_name === tag);
+    if (match) return match;
+    if (releases.length < 100) return null;
+  }
 }
 
 async function createRelease(headers, repo, payload) {
