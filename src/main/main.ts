@@ -12,6 +12,11 @@ const require = createRequire(import.meta.url);
 // electron-updater is CommonJS; a named ESM import fails at runtime with
 // "Named export 'autoUpdater' not found". Load it through createRequire.
 const { autoUpdater } = require("electron-updater") as typeof import("electron-updater");
+const { FreshGitHubProvider, checkForUpdatesWithRetry, formatUpdateError } = require("./update-check.cjs") as {
+  FreshGitHubProvider: new (...args: unknown[]) => unknown;
+  checkForUpdatesWithRetry: <T>(check: () => Promise<T>, options?: { onRetry?: (attempt: number, total: number) => void }) => Promise<T>;
+  formatUpdateError: (error: unknown) => string;
+};
 const { discoverAll } = require("./cli-discovery.cjs") as {
   discoverAll: () => Record<string, unknown>;
 };
@@ -168,6 +173,7 @@ function sendUpdateEvent(type: string, payload: Record<string, unknown> = {}) {
 function configureAutoUpdater() {
   if (updateConfigured || !app.isPackaged || process.env.TERMBEACON_DISABLE_UPDATES === "1") return;
   updateConfigured = true;
+  autoUpdater.setFeedURL({ provider: "custom", updateProvider: FreshGitHubProvider, owner: "FairmeHIT", repo: "TermBeacon" });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on("checking-for-update", () => sendUpdateEvent("checking"));
@@ -175,7 +181,12 @@ function configureAutoUpdater() {
   autoUpdater.on("update-not-available", () => sendUpdateEvent("not-available"));
   autoUpdater.on("download-progress", (progress) => sendUpdateEvent("downloading", { percent: progress.percent }));
   autoUpdater.on("update-downloaded", (info) => sendUpdateEvent("downloaded", { version: info.version }));
-  autoUpdater.on("error", (error) => sendUpdateEvent("error", { message: error instanceof Error ? error.message : String(error) }));
+  autoUpdater.on("error", (error) => {
+    console.error("[update]", error);
+    // checkForUpdates emits before rejecting. Let the retry loop decide when
+    // the check has failed; download failures still reach the UI immediately.
+    if (!updateCheckInFlight) sendUpdateEvent("error", { message: formatUpdateError(error) });
+  });
 }
 
 // Both the startup check and the settings button go through here, so a second
@@ -185,12 +196,17 @@ async function checkForUpdatesNow() {
   if (!app.isPackaged) return { ...updateStatus, type: "unsupported", message: "开发模式（未打包）不检查更新" } as UpdateStatus;
   if (process.env.TERMBEACON_DISABLE_UPDATES === "1") return { ...updateStatus, type: "disabled", message: "已通过 TERMBEACON_DISABLE_UPDATES 禁用更新" } as UpdateStatus;
   configureAutoUpdater();
-  if (updateStatus.type === "downloaded" || updateCheckInFlight) return updateStatus;
+  if (updateStatus.type === "downloaded" || updateStatus.type === "downloading" || updateCheckInFlight) return updateStatus;
   updateCheckInFlight = true;
   try {
-    await autoUpdater.checkForUpdates();
+    const result = await checkForUpdatesWithRetry(() => autoUpdater.checkForUpdates(), {
+      onRetry: (attempt, total) => sendUpdateEvent("checking", { message: `连接 GitHub 暂时失败，正在重试（${attempt}/${total}）…` }),
+    });
+    // The updater reports download errors through its error event, but also
+    // rejects this separate promise. Always observe it after a manual check.
+    void result?.downloadPromise?.catch(() => undefined);
   } catch (error) {
-    sendUpdateEvent("error", { message: error instanceof Error ? error.message : String(error) });
+    sendUpdateEvent("error", { message: formatUpdateError(error) });
   } finally {
     updateCheckInFlight = false;
   }

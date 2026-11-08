@@ -90,7 +90,7 @@ function describeUpdate(status: UpdateStatus | null, packaged: boolean) {
   if (!packaged) return "开发模式（未打包），不检查更新";
   if (!status) return "";
   switch (status.type) {
-    case "checking": return "正在检查更新…";
+    case "checking": return status.message || "正在检查更新…";
     case "available": return `发现新版本 ${status.version ?? ""}，正在后台下载…`;
     case "downloading": return `正在下载更新 ${Math.round(status.percent || 0)}%`;
     case "not-available": return "已是最新版本";
