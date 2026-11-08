@@ -6,7 +6,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/FairmeHIT/TermBeacon/releases"><img src="https://img.shields.io/badge/version-0.1.12-2f80ed?style=flat-square" alt="Version 0.1.12" /></a>
+    <a href="https://github.com/FairmeHIT/TermBeacon/releases"><img src="https://img.shields.io/badge/version-0.1.13-2f80ed?style=flat-square" alt="Version 0.1.13" /></a>
     <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-36-3b4856?style=flat-square" alt="Electron 36" /></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-3b4856?style=flat-square" alt="React 19" /></a>
     <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-20%2B-3b4856?style=flat-square" alt="Node.js 20 or newer" /></a>
