@@ -4,9 +4,14 @@ const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createHookServer } = require("../src/main/hook-server.cjs");
 
-test("opencode plugin maps session and tool events to hook statuses", async (t) => {
+test("opencode plugin maps session and tool events to hook statuses", { timeout: 10000 }, async (t) => {
   const events = [];
-  const server = createHookServer({ onEvent: (event) => events.push(event) });
+  let resolveEvents;
+  const receivedEvents = new Promise((resolve) => { resolveEvents = resolve; });
+  const server = createHookServer({ onEvent: (event) => {
+    events.push(event);
+    if (events.length === 4) resolveEvents();
+  } });
   const port = await server.start();
   t.after(() => server.close());
 
@@ -43,14 +48,16 @@ test("opencode plugin maps session and tool events to hook statuses", async (t) 
     tool: { hook: async () => ({ dispose() {} }) },
   };
   const cleanup = await plugin.setup(ctx);
+  t.after(() => {
+    closed = true;
+    if (wake) { const resolve = wake; wake = undefined; resolve(); }
+    cleanup();
+  });
   push({ type: "session.status", data: { sessionId: "opencode-session-1", status: { type: "busy" } } });
   push({ type: "session.idle", data: {} });
   push({ type: "session.execution.failed", data: {} });
   push({ type: "permission.asked", data: { status: "pending" } });
-  await new Promise((resolve) => setTimeout(resolve, 200));
-  closed = true;
-  if (wake) { const resolve = wake; wake = undefined; resolve(); }
-  cleanup();
+  await receivedEvents;
 
   assert.deepEqual(events.map((event) => [event.event, event.status]), [
     ["session.status", "running"],

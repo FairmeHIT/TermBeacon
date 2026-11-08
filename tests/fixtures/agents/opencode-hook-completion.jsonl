@@ -1,0 +1,10 @@
+{"kind":"meta","agent":"opencode","version":"opencode v2.2.1","name":"hook-completion","description":"派生自 captures/opencode-plugin-probe-standalone.jsonl：Task 提交后插件 hook 报告 session.execution.succeeded/completed 即判定完成。真实采集里标题最后停在 OC | OK，从未回到 OpenCode。"}
+{"kind":"output","data":"\u001b]0;OpenCode\u0007","at":300}
+{"kind":"input","data":"只回复 OK，不要调用任何工具\r","at":1000}
+{"kind":"hook","event":"session.prompt","status":"running","at":1300}
+{"kind":"output","data":"\u001b]0;OC | 只回复 OK，不要调用任何工具\u0007","at":1500}
+{"kind":"hook","event":"session.execution.started","status":"running","at":1600}
+{"kind":"hook","event":"session.execution.succeeded","status":"completed","at":3500}
+{"kind":"output","data":"\u001b]0;OC | OK\u0007","at":5600}
+{"kind":"tick","at":60000}
+{"kind":"assert","state":"completed-unseen"}

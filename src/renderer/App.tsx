@@ -3,17 +3,19 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateSnapshotEvent, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
 import { splitScreenOutput } from "./terminal-screen";
 import "./styles.css";
 
-const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInterrupted } = taskHistoryUtils as {
+const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInterrupted, restoreAttachedTasks, restoredTerminalRecovery } = taskHistoryUtils as {
   cleanTaskPrompt: (value: string) => string | undefined;
   applyTaskEvent: (items: TaskRecord[], event: StateUpdateEvent, prompt?: string) => TaskRecord[];
   settleTask: (items: TaskRecord[], terminalId: string, state: Extract<TaskState, "completed" | "error" | "cancelled">, at: number, detail?: string) => TaskRecord[];
   markInterrupted: (items: TaskRecord[], at: number, detail?: string) => TaskRecord[];
+  restoreAttachedTasks: (items: TaskRecord[], terminalId: string, previouslyActive: Map<string, TaskRecord>) => TaskRecord[];
+  restoredTerminalRecovery: (terminal: TerminalInstance, existing: boolean) => RecoveryState;
 };
 const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
   isAgentLaunchInput: (value: string | undefined, agentType: AgentType) => boolean;
@@ -69,6 +71,7 @@ declare global {
       rebuildDetector(request: unknown): void;
       onOutput(listener: (event: PtyOutputEvent) => void): () => void;
       onState(listener: (event: StateUpdateEvent) => void): () => void;
+      onSnapshot(listener: (event: StateSnapshotEvent) => void): () => void;
       onExit(listener: (event: PtyExitEvent) => void): () => void;
       onError(listener: (event: PtyErrorEvent) => void): () => void;
       onHost(listener: (event: PtyHostExitEvent) => void): () => void;
@@ -325,6 +328,8 @@ function App() {
   const taskTitles = useRef(new Map<string, string>());
   const historyFlushTimer = useRef<number | null>(null);
   const lastSavedState = useRef("");
+  const restoredTerminalIds = useRef(new Set<string>());
+  const previouslyActiveTasks = useRef(new Map<string, TaskRecord>());
   const outputFlushTimer = useRef<number | null>(null);
   const agentTypeByTerminal = useRef(new Map<string, AgentType>());
   const lastInput = useRef(new Map<string, string>());
@@ -332,6 +337,33 @@ function App() {
   // Terminal titles the user renamed by hand. OSC 0/2 title reports from the
   // shell/agent must not overwrite a name the user chose on purpose.
   const pinnedTitles = useRef(new Set<string>());
+  // Live detector state published by the PTY host on every (re)attach. The host
+  // owns the PTY, so its state survives renderer reloads; without it the sidebar
+  // can only guess, and it used to guess "就绪" forever.
+  const hostStates = useRef(new Map<string, { state: AgentState; summary?: string; at: number }>());
+  // Timestamp of the last state this renderer applied per terminal, so an older
+  // snapshot can never overwrite a newer transition that already arrived.
+  const lastStateAt = useRef(new Map<string, number>());
+
+  // The PTY host owns task detection and keeps running across renderer reloads,
+  // so its snapshot is the authority for terminals the UI has not observed
+  // itself. Anything newer that this renderer already applied wins.
+  function applyHostStates() {
+    if (hostStates.current.size === 0) return;
+    setTerminals((items) => {
+      let changed = false;
+      const next = items.map((item) => {
+        const snapshot = hostStates.current.get(item.id);
+        if (!snapshot) return item;
+        if (snapshot.at < (lastStateAt.current.get(item.id) ?? 0)) return item;
+        if (item.state === snapshot.state && snapshot.summary === undefined) return item;
+        changed = true;
+        lastStateAt.current.set(item.id, Math.max(snapshot.at, lastStateAt.current.get(item.id) ?? 0));
+        return { ...item, state: snapshot.state, lastOutputSummary: snapshot.summary ?? item.lastOutputSummary };
+      });
+      return changed ? next : items;
+    });
+  }
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
@@ -382,6 +414,10 @@ function App() {
       const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : runtimeDefaultShell;
       setDefaultShell(restoredDefaultShell);
       const restoredAt = Date.now();
+      restoredTerminalIds.current = new Set(state.terminals.map((terminal) => terminal.id));
+      previouslyActiveTasks.current = new Map((state.tasks ?? [])
+        .filter((task) => task.state === "working" || task.state === "awaiting-input")
+        .map((task) => [task.id, task]));
       setTasks(markInterrupted(state.tasks ?? [], restoredAt));
       if (typeof state.sidebarWidth === "number") setSidebarWidth(state.sidebarWidth);
       const freshTerminal = state.terminals.length === 0 ? newTerminal(1, restoredDefaultShell, info.cwd) : null;
@@ -489,8 +525,25 @@ function App() {
         }, 100);
       }
     });
+    const disposeSnapshot = window.termbeacon.onSnapshot((event) => {
+      const receivedAt = typeof event.at === "number" ? event.at : Date.now();
+      // The snapshot is the complete list of terminals the host still owns, so
+      // it replaces the map: a terminal missing from it has no live PTY and its
+      // old entry must not be replayed over local state later.
+      const next = new Map<string, { state: AgentState; summary?: string; at: number }>();
+      for (const entry of event.entries ?? []) {
+        next.set(entry.terminalId, {
+          state: entry.state,
+          summary: entry.summary,
+          at: typeof entry.at === "number" ? entry.at : receivedAt,
+        });
+      }
+      hostStates.current = next;
+      applyHostStates();
+    });
     const disposeState = window.termbeacon.onState((event) => {
       const prompt = lastInput.current.get(event.terminalId);
+      lastStateAt.current.set(event.terminalId, typeof event.at === "number" ? event.at : Date.now());
       if (event.current === "working" && prompt) syncClaudeTaskTitle(event.terminalId, prompt);
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState } : item));
       setTasks((items) => applyTaskEvent(items, event, prompt));
@@ -569,7 +622,7 @@ function App() {
     document.addEventListener("visibilitychange", flushOnVisibilityChange);
     window.addEventListener("beforeunload", flushPendingHistory);
     return () => {
-      disposeOutput(); disposeState(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); disposeSession(); disposeUpdate();
+      disposeOutput(); disposeState(); disposeSnapshot(); disposeExit(); disposeError(); disposeHost(); disposeTitle(); disposeCwd(); disposeAgent(); disposeSession(); disposeUpdate();
       document.removeEventListener("visibilitychange", flushOnVisibilityChange);
       window.removeEventListener("beforeunload", flushPendingHistory);
       flushPendingHistory();
@@ -672,11 +725,9 @@ function App() {
       void (async () => {
         try {
           const history = await window.termbeacon.loadHistory(terminal.id);
-          let historyEndsInAlternateScreen = false;
           if (history && terminalViews.current.get(terminal.id) === term) {
             const replay = splitScreenOutput(history);
             term.write(replay.normalData);
-            historyEndsInAlternateScreen = replay.alternate;
           }
           const result = await window.termbeacon.createTerminal({
             terminalId: terminal.id,
@@ -689,28 +740,40 @@ function App() {
             agentType: terminal.agentType,
           });
           const existing = Boolean((result as { existing?: boolean } | undefined)?.existing);
-          if (!existing) {
-            // The saved history can end in a TUI's alternate screen even when
-            // its old process is gone. A fresh shell always starts on normal
-            // screen, so do not carry that parser state into the new PTY.
-            alternateScreenByTerminal.current.set(terminal.id, false);
-          } else if (historyEndsInAlternateScreen) {
-            alternateScreenByTerminal.current.set(terminal.id, true);
-          }
+          const restored = restoredTerminalIds.current.delete(terminal.id);
+          // Disk history excludes alternate-screen output, so it cannot tell
+          // us which screen an attached process is currently displaying.
+          alternateScreenByTerminal.current.set(terminal.id, false);
+          // Attaching to a live PTY must not invent a healthy state: keep what
+          // the host reported in the snapshot, and only a brand-new PTY starts
+          // at 就绪. This is the path that used to pin the sidebar to 就绪.
+          const snapshot = hostStates.current.get(terminal.id);
           setTerminals((items) => items.map((item) => item.id === terminal.id
-            ? { ...item, alive: true, state: existing ? item.state === "stopped" ? "ready" : item.state : "ready", recoveryState: existing ? "recovered" : item.recoveryState, resumeError: undefined }
+            ? {
+              ...item,
+              alive: true,
+              state: snapshot ? snapshot.state : existing ? item.state : "ready",
+              recoveryState: restored ? restoredTerminalRecovery(item, existing) : item.recoveryState,
+              resumeError: undefined,
+            }
             : item));
           if (existing) {
-            // A detached TUI may still be painting its alternate screen in the
-            // PTY host. The disk history intentionally excludes that repaint
-            // traffic, so reconstruct it from the host ring when the history
-            // snapshot ended inside the alternate screen.
-            if (historyEndsInAlternateScreen) {
+            // Restore the screen mode from the host buffer, then force a full
+            // TUI repaint even when that bounded buffer starts mid-screen.
+            if (terminal.agentType !== "generic") {
+              consumedLocal.current.delete(terminal.id);
               window.termbeacon.replay({ terminalId: terminal.id, fromSequence: 0 });
             }
-            setTasks((items) => items.map((task) => task.terminalId === terminal.id && task.state === "interrupted"
-              ? { ...task, state: "working", finishedAt: undefined, recoveryState: "recovered", error: undefined, summary: undefined }
-              : task));
+            const temporaryCols = cols > 2 ? cols - 1 : cols + 1;
+            applyPtySize(terminal.id, temporaryCols, rows);
+            const pendingResize = resizeTimers.current.get(terminal.id);
+            if (pendingResize) window.clearTimeout(pendingResize);
+            const resizeTimer = window.setTimeout(() => {
+              resizeTimers.current.delete(terminal.id);
+              if (terminalViews.current.get(terminal.id) === term) applyPtySize(terminal.id, term.cols, term.rows);
+            }, 100);
+            resizeTimers.current.set(terminal.id, resizeTimer);
+            setTasks((items) => restoreAttachedTasks(items, terminal.id, previouslyActiveTasks.current));
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -1249,6 +1312,7 @@ function App() {
       </button>
       {integrationOpen && <div className="integration-panel">
         <div className="settings-hint">用于更准确识别 opencode 和 Claude Code 的工作状态。</div>
+        <div className="settings-hint">未安装插件时 opencode 的完成检测受限：只能看到任务开始，任务结束后可能一直停在「工作中」。插件只对从 TermBeacon 终端启动的 opencode 生效（启动时会自动加 --standalone），装好插件后需要重启 opencode。</div>
         <div className="integration-row">
           <span>opencode 插件</span>
           <button onClick={() => void installOpencodePlugin()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "opencode" ? "处理中…" : integration?.opencodePluginInstalled ? "更新" : "安装"}</button>

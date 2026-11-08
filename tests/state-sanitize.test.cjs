@@ -140,6 +140,18 @@ test("preserves bounded recovery metadata without accepting malformed session id
   assert.equal(malformed.terminals.length, 0);
 });
 
+test("preserves bounded retest attempt metadata", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1"] }],
+    terminals: [validTerminal],
+    tasks: [{ id: "task-2", terminalId: "t1", startedAt: 2, state: "completed", batchId: "batch-1", retestOf: "task-1", attempt: 2 }],
+  });
+  assert.equal(result.tasks[0].batchId, "batch-1");
+  assert.equal(result.tasks[0].retestOf, "task-1");
+  assert.equal(result.tasks[0].attempt, 2);
+});
+
 test("normalizes legacy terminal fields and keeps the active terminal inside its workspace", () => {
   const result = sanitizeState({
     schemaVersion: 1,

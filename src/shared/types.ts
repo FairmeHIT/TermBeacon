@@ -50,6 +50,12 @@ export interface TaskRecord {
   summary?: string;
   error?: string;
   recoveryState?: RecoveryState;
+  /** Batch that created this attempt, when it was started by a retest. */
+  batchId?: string;
+  /** Original task this attempt was created from. */
+  retestOf?: string;
+  /** One-based attempt number for the original task. */
+  attempt?: number;
 }
 
 export interface PlatformInfo {
@@ -68,6 +74,24 @@ export interface StateUpdateEvent {
   confidence: number;
   source: "output" | "hook" | "osc" | "title" | "user" | "process";
   summary?: string;
+  at: number;
+}
+
+/**
+ * Live detector state for one terminal, published by the PTY host whenever a
+ * client attaches. The host outlives renderer reloads, so this is the only way
+ * a reconnecting UI can learn what the sidebar should show.
+ */
+export interface StateSnapshotEntry {
+  terminalId: string;
+  state: AgentState;
+  summary?: string;
+  at: number;
+}
+
+export interface StateSnapshotEvent {
+  type: "state:snapshot";
+  entries: StateSnapshotEntry[];
   at: number;
 }
 

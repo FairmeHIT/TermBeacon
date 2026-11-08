@@ -37,6 +37,12 @@ const sessionIds = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
+// Last known detector state per live terminal. The renderer reloads (dev HMR,
+// window reload, app restart) while this host keeps the PTY alive, and the
+// state only ever reaches the UI through transient messages. Keep a snapshot so
+// a client that attaches later learns the live state instead of assuming
+// "ready" — the sidebar used to stay 就绪 forever because of that gap.
+const stateSnapshots = new Map();
 let dataPort = null;
 let tickTimer = null;
 let standaloneServer = null;
@@ -149,16 +155,32 @@ function sendError(operation, error, requestId, terminalId) {
   });
 }
 
+// One place that both publishes a transition to the current client and records
+// it for the next one. Detector summaries are raw output excerpts; sanitize them
+// the same way the pty:output summaries are sanitized.
+function publishState(terminalId, update) {
+  const summary = update.summary === undefined ? undefined : summarize(update.summary);
+  const at = typeof update.at === "number" ? update.at : Date.now();
+  stateSnapshots.set(terminalId, { terminalId, state: update.current, summary, at });
+  send({ type: "state:update", terminalId, ...update, summary, at });
+}
+
+// A freshly created detector is idle. Seeding the snapshot means a reconnecting
+// client always has an entry per live terminal, even before the first turn.
+function seedState(terminalId, state) {
+  stateSnapshots.set(terminalId, { terminalId, state: state || "ready", summary: undefined, at: Date.now() });
+}
+
+function sendStateSnapshot() {
+  const entries = [...stateSnapshots.values()].map((entry) => ({ ...entry }));
+  send({ type: "state:snapshot", entries, at: Date.now() });
+}
+
 function makeDetector(terminalId, agentType) {
   agentTypes.set(terminalId, agentType);
-  const detector = createDetector(agentType, (update) => send({
-    type: "state:update",
-    terminalId,
-    ...update,
-    // Detector summaries are raw output excerpts; sanitize them the same way.
-    summary: update.summary === undefined ? undefined : summarize(update.summary),
-  }));
+  const detector = createDetector(agentType, (update) => publishState(terminalId, update));
   detectors.set(terminalId, detector);
+  seedState(terminalId, detector.runtime?.state);
   return detector;
 }
 
@@ -174,9 +196,7 @@ function makeAgentSniffer(terminalId) {
     // agent. That can briefly arm the generic detector, so publish the new
     // agent's idle baseline explicitly.
     if (previous && previous.runtime?.state !== "ready") {
-      send({
-        type: "state:update",
-        terminalId,
+      publishState(terminalId, {
         previous: previous.runtime.state,
         current: "ready",
         confidence: 1,
@@ -306,6 +326,8 @@ function createSession(message, hookWaited = false) {
     oscParsers.delete(request.terminalId);
     agentTypes.delete(request.terminalId);
     sessionIds.delete(request.terminalId);
+    // A dead terminal must not be resurrected by a later snapshot.
+    stateSnapshots.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
     // the tail of the final output; it is released on explicit recreate.
   });
@@ -415,7 +437,7 @@ function handleMessage(message) {
         throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
       }
       makeDetector(request.terminalId, agentType);
-      send({ type: "state:update", terminalId: request.terminalId, previous: "ready", current: "ready", confidence: 1, source: "user", summary: `detector rebuilt for ${agentType}`, at: Date.now() });
+      publishState(request.terminalId, { previous: "ready", current: "ready", confidence: 1, source: "user", summary: `detector rebuilt for ${agentType}`, at: Date.now() });
     } catch (error) {
       sendError("state:rebuild-detector", error, message.requestId, message?.terminalId);
     }
@@ -450,6 +472,9 @@ function attachElectronPort(port) {
   dataPort.on("messageerror", (error) => sendError("data-port", error));
   dataPort.start();
   send({ type: "pty:host-ready", at: Date.now() });
+  // A reattaching client has no idea what the detectors hold; hand it the live
+  // state immediately after the readiness handshake.
+  sendStateSnapshot();
 }
 
 function startStandaloneServer(socketPath) {
@@ -494,6 +519,7 @@ function startStandaloneServer(socketPath) {
       }
     });
     send({ type: "pty:host-ready", at: Date.now() });
+    sendStateSnapshot();
   });
   server.on("error", (error) => {
     try { console.error(`[pty-host] standalone server error: ${error.message}`); } catch { /* no console */ }

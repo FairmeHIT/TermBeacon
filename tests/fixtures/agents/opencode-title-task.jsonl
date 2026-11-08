@@ -1,0 +1,7 @@
+{"kind":"meta","agent":"opencode","version":"opencode v2.2.1","name":"title-task-start","description":"派生自 captures/opencode-opencode-task-20261105-225832.jsonl：提交任务后标题变为 OC | <任务>，这个形状只说明任务开始了，不代表完成。"}
+{"kind":"output","data":"\u001b]0;C:\\WINDOWS\\system32\\cmd.exe\u0007","at":500}
+{"kind":"output","data":"\u001b]0;OpenCode\u0007","at":3000}
+{"kind":"input","data":"列出当前目录下的文件，然后用一句话总结\r","at":12108}
+{"kind":"output","data":"\u001b]0;OC | 列出文件并总结\u0007","at":74500}
+{"kind":"tick","at":90000}
+{"kind":"assert","state":"working"}

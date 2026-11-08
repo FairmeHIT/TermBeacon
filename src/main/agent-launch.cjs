@@ -17,7 +17,16 @@ function withOpenCodeStandalone(data, candidate, agentType) {
   if (/(?:^|\s)--(?:standalone|server)(?:\s|$)/i.test(normalized)) return data;
   const end = data.search(/[\r\n]/);
   if (end < 0) return data;
-  const command = data.slice(0, end).replace(/^(\s*opencode)(?=\s|$)/i, "$1 --standalone");
+  const typed = data.slice(0, end);
+  if (!typed.trim()) {
+    // Interactive typing sends the command and the newline as separate chunks.
+    // The command is already sitting on the shell line, so the flag has to be
+    // appended to it here; rewriting only the same-chunk paste shape would let
+    // plain `opencode` through and attach to the shared background service,
+    // where the hook plugin cannot see TermBeacon's per-PTY variables.
+    return ` --standalone${data.slice(end)}`;
+  }
+  const command = typed.replace(/^(\s*opencode)(?=\s|$)/i, "$1 --standalone");
   return `${command}${data.slice(end)}`;
 }
 

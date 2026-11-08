@@ -15,6 +15,7 @@ const MAX_TITLE_LENGTH = 200;
 const MAX_CWD_LENGTH = 32760;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_RESUME_ERROR_LENGTH = 500;
+const MAX_TASK_BATCH_ID_LENGTH = 128;
 
 function validId(value) {
   return typeof value === "string"
@@ -96,6 +97,9 @@ function sanitizeState(parsed) {
         ...(typeof task.summary === "string" && task.summary.trim() ? { summary: task.summary.trim().slice(0, 500) } : {}),
         ...(typeof task.error === "string" && task.error.trim() ? { error: task.error.trim().slice(0, 500) } : {}),
         ...(RECOVERY_STATES.has(task.recoveryState) ? { recoveryState: task.recoveryState } : {}),
+        ...(typeof task.batchId === "string" && validId(task.batchId) ? { batchId: task.batchId.slice(0, MAX_TASK_BATCH_ID_LENGTH) } : {}),
+        ...(typeof task.retestOf === "string" && validId(task.retestOf) ? { retestOf: task.retestOf } : {}),
+        ...(Number.isInteger(task.attempt) && task.attempt > 0 && task.attempt <= 100 ? { attempt: task.attempt } : {}),
       }))
     : [];
   const knownWorkspaceIds = new Set(workspaces.map((workspace) => workspace.id));

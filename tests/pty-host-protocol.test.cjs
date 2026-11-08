@@ -93,7 +93,17 @@ function createHarness({ spawn, detection } = {}) {
     clearInterval: () => { tickCallback = null; },
   }, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
-  return { dataPort, messages, spawned, spawnedOptions, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
+  // Reconnecting client (renderer reload / app restart): the host keeps every
+  // session and attaches a brand new port. Returns that port's own messages.
+  const reattach = () => {
+    const nextPort = new EventEmitter();
+    const nextMessages = [];
+    nextPort.postMessage = (message) => nextMessages.push(message);
+    nextPort.start = () => {};
+    parentPort.emit("message", { data: { type: "connect" }, ports: [nextPort] });
+    return nextMessages;
+  };
+  return { dataPort, messages, spawned, spawnedOptions, reattach, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -283,4 +293,70 @@ test("PTY host routes bridge events to the terminal detector", () => {
   const sessionUpdate = messages.find((message) => message.type === "session:update");
   assert.equal(sessionUpdate?.terminalId, "t1");
   assert.equal(sessionUpdate?.sessionId, "session-1");
+});
+
+// Detector stub that walks ready -> working -> stopped on the same terminal so
+// the host has a real state history to snapshot.
+function scriptedDetection() {
+  return {
+    createDetector(agentType, emit) {
+      const runtime = { state: "ready" };
+      return {
+        runtime,
+        output() {},
+        tick() {},
+        input() {
+          runtime.state = "working";
+          emit({ previous: "ready", current: "working", confidence: 0.55, source: "user", summary: "npm test", at: 1000 });
+        },
+        exit(exitCode) {
+          runtime.state = exitCode === 0 ? "stopped" : "error";
+          emit({ previous: "working", current: runtime.state, confidence: 1, source: "process", at: 2000 });
+        },
+        viewed() {},
+        hook() {},
+      };
+    },
+  };
+}
+
+test("PTY host publishes a ready baseline in the snapshot for a fresh terminal", () => {
+  const { dataPort, reattach } = createHarness({ detection: scriptedDetection() });
+  dataPort.emit("message", { data: createMessage("t1") });
+  const snapshot = reattach().find((message) => message.type === "state:snapshot");
+  assert.ok(snapshot, "a reconnecting client must receive a state snapshot");
+  assert.equal(snapshot.entries.length, 1);
+  assert.equal(snapshot.entries[0].terminalId, "t1");
+  assert.equal(snapshot.entries[0].state, "ready");
+  assert.equal(typeof snapshot.entries[0].at, "number");
+});
+
+test("PTY host sends the live detector state to a reconnecting client", () => {
+  // The renderer can reload while the host keeps the PTY alive. Without this
+  // snapshot the sidebar has no way to recover the real state and fakes "就绪".
+  const { dataPort, reattach } = createHarness({ detection: scriptedDetection() });
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "npm test\r" } });
+
+  const next = reattach();
+  const readyIndex = next.findIndex((message) => message.type === "pty:host-ready");
+  const snapshotIndex = next.findIndex((message) => message.type === "state:snapshot");
+  assert.ok(readyIndex >= 0, "the reconnect still starts with pty:host-ready");
+  assert.ok(snapshotIndex > readyIndex, "the snapshot must follow pty:host-ready");
+  const snapshot = next[snapshotIndex];
+  assert.equal(snapshot.entries.length, 1);
+  assert.equal(snapshot.entries[0].terminalId, "t1");
+  assert.equal(snapshot.entries[0].state, "working");
+  assert.equal(snapshot.entries[0].summary, "npm test");
+});
+
+test("PTY host drops a terminal from the state snapshot once it exits", () => {
+  const { dataPort, spawned, reattach } = createHarness({ detection: scriptedDetection() });
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "npm test\r" } });
+  spawned[0].exitCallback({ exitCode: 0 });
+
+  const snapshot = reattach().find((message) => message.type === "state:snapshot");
+  assert.ok(snapshot, "a snapshot is still sent");
+  assert.equal(snapshot.entries.length, 0);
 });

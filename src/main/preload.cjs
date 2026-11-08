@@ -7,6 +7,7 @@ const replayNeeds = new Map();
 const consumedSequences = new Map();
 const outputListeners = new Set();
 const stateListeners = new Set();
+const snapshotListeners = new Set();
 const exitListeners = new Set();
 const errorListeners = new Set();
 const hostListeners = new Set();
@@ -14,6 +15,11 @@ const titleListeners = new Set();
 const cwdListeners = new Set();
 const agentListeners = new Set();
 const sessionListeners = new Set();
+
+// The host sends the state snapshot as soon as it attaches the port, which can
+// be before React mounts and subscribes. Keep the last one so a late
+// subscriber still learns the live detector state.
+let latestSnapshot = null;
 
 function send(message) {
   if (dataPort) {
@@ -77,6 +83,10 @@ function handleDataMessage(payload) {
     outputListeners.forEach((listener) => listener(payload));
   }
   if (payload.type === "state:update") stateListeners.forEach((listener) => listener(payload));
+  if (payload.type === "state:snapshot") {
+    latestSnapshot = payload;
+    snapshotListeners.forEach((listener) => listener(payload));
+  }
   if (payload.type === "pty:exit") exitListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:title") titleListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:cwd") cwdListeners.forEach((listener) => listener(payload));
@@ -100,6 +110,8 @@ ipcRenderer.on("pty:connect", (_event) => {
   if (!nextPort) return;
   try { dataPort?.close(); } catch { /* old port may already be closed */ }
   dataPort = nextPort;
+  // A different host may own this port; never replay a snapshot from the old one.
+  latestSnapshot = null;
   dataPort.onmessage = (messageEvent) => handleDataMessage(messageEvent.data);
   dataPort.onmessageerror = () => {
     dataPort = null;
@@ -170,6 +182,13 @@ contextBridge.exposeInMainWorld("termbeacon", {
   onSession: (listener) => { sessionListeners.add(listener); return () => sessionListeners.delete(listener); },
   onOutput: (listener) => { outputListeners.add(listener); return () => outputListeners.delete(listener); },
   onState: (listener) => { stateListeners.add(listener); return () => stateListeners.delete(listener); },
+  onSnapshot: (listener) => {
+    snapshotListeners.add(listener);
+    if (latestSnapshot) {
+      try { listener(latestSnapshot); } catch { /* a broken listener must not break the bridge */ }
+    }
+    return () => snapshotListeners.delete(listener);
+  },
   onExit: (listener) => { exitListeners.add(listener); return () => exitListeners.delete(listener); },
   onError: (listener) => { errorListeners.add(listener); return () => errorListeners.delete(listener); },
   onHost: (listener) => { hostListeners.add(listener); return () => hostListeners.delete(listener); },

@@ -50,6 +50,15 @@ module.exports = {
     id: "opencode",
     displayName: "opencode",
     ...common,
+    // opencode's TUI reports `OC | <task>` in the window title while a turn
+    // runs, and it never goes back to `OpenCode` afterwards (verified with two
+    // real captures: plugin-probe-standalone and plugin-probe-attached both end
+    // on `OC | ...`). So the title can only start a turn, never finish one:
+    // completion comes from the hook plugin (`hooks/opencode/termbeacon.js`),
+    // which needs `opencode --standalone` for its per-PTY environment.
+    title: {
+      working: [/^OC\s*[|｜]/],
+    },
     patterns: {
       ...common.patterns,
       working: [/Thinking|Running tool|Applying patch|Retry(?:ing)?|正在|重试/i],

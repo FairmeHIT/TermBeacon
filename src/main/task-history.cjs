@@ -11,7 +11,7 @@ function cleanTaskPrompt(value) {
   return cleaned ? cleaned.slice(0, 500) : undefined;
 }
 
-function applyTaskEvent(items, event, prompt) {
+function applyTaskEvent(items, event, prompt, metadata = {}) {
   const terminalTasks = items.filter((task) => task.terminalId === event.terminalId);
   const latest = terminalTasks.at(-1);
   const activeTask = latest && (latest.state === "working" || latest.state === "awaiting-input") ? latest : undefined;
@@ -29,6 +29,9 @@ function applyTaskEvent(items, event, prompt) {
         state: "working",
         ...(prompt ? { prompt } : {}),
         ...(event.summary ? { summary: event.summary } : {}),
+        ...(typeof metadata.batchId === "string" ? { batchId: metadata.batchId } : {}),
+        ...(typeof metadata.retestOf === "string" ? { retestOf: metadata.retestOf } : {}),
+        ...(Number.isInteger(metadata.attempt) && metadata.attempt > 0 ? { attempt: metadata.attempt } : {}),
       }];
     }
   } else if (event.current === "awaiting-input" && activeTask) {
@@ -65,4 +68,18 @@ function markInterrupted(items, at, detail = "应用重启，任务中断") {
     : task);
 }
 
-module.exports = { cleanTaskPrompt, applyTaskEvent, settleTask, markInterrupted };
+function restoreAttachedTasks(items, terminalId, previouslyActive) {
+  return items.map((task) => {
+    const original = previouslyActive.get(task.id);
+    return task.terminalId === terminalId && task.state === "interrupted" && original
+      ? { ...original, recoveryState: "recovered" }
+      : task;
+  });
+}
+
+function restoredTerminalRecovery(terminal, existing) {
+  if (existing) return "recovered";
+  return terminal.agentType !== "generic" ? "resumable" : "none";
+}
+
+module.exports = { cleanTaskPrompt, applyTaskEvent, settleTask, markInterrupted, restoreAttachedTasks, restoredTerminalRecovery };
