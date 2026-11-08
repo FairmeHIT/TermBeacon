@@ -10,25 +10,35 @@ const pluginSource = path.join(repoRoot, "hooks", "opencode", "termbeacon.js");
 
 test("resolves the global plugin path under the user home", () => {
   const target = resolvePluginTarget({ home: "C:\\Users\\someone", cwd: "C:\\work" });
-  assert.equal(target, path.join("C:\\Users\\someone", ".config", "opencode", "plugin", "termbeacon.js"));
+  assert.equal(target, path.join("C:\\Users\\someone", ".config", "opencode", "plugins", "termbeacon", "index.js"));
 });
 
 test("resolves the project plugin path under the working directory", () => {
   const target = resolvePluginTarget({ project: true, home: "C:\\Users\\someone", cwd: "C:\\work" });
-  assert.equal(target, path.join("C:\\work", ".opencode", "plugin", "termbeacon.js"));
+  assert.equal(target, path.join("C:\\work", ".opencode", "plugins", "termbeacon", "index.js"));
 });
 
-test("installs the plugin byte-for-byte and is idempotent", () => {
+test("source installers resolve the same custom config directories as Settings", () => {
+  const { claudeSettingsPath } = require("../scripts/hooks-install.cjs");
+  const shared = require("../src/main/integration-config.cjs");
+  const options = { home: "C:/user", env: { OPENCODE_CONFIG_DIR: "C:/config/oc", CLAUDE_CONFIG_DIR: "C:/config/cc" } };
+  assert.equal(resolvePluginTarget(options), shared.resolvePluginTarget(options));
+  assert.equal(claudeSettingsPath(options), shared.resolveClaudeSettings(options));
+});
+
+test("installs a self-contained plugin package and is idempotent", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tb-hooks-"));
   try {
     const first = installPlugin({ home });
     assert.equal(first.existed, false);
     assert.ok(fs.existsSync(first.target));
-    assert.deepEqual(fs.readFileSync(first.target), fs.readFileSync(pluginSource));
+    assert.equal(fs.readFileSync(first.target, "utf8"), fs.readFileSync(pluginSource, "utf8").replaceAll("../shared/status-reporter.js", "./status-reporter.js"));
+    assert.ok(fs.existsSync(path.join(path.dirname(first.target), "status-reporter.js")));
 
     const second = installPlugin({ home });
     assert.equal(second.existed, true);
-    assert.deepEqual(fs.readFileSync(second.target), fs.readFileSync(pluginSource));
+    assert.equal(fs.readFileSync(second.target, "utf8"), fs.readFileSync(first.target, "utf8"));
+    assert.ok(second.backupPath);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

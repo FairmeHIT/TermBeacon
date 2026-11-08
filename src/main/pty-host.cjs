@@ -12,13 +12,17 @@ if (!parentPort && !standaloneSocketPath) {
   try { parentPort = require("electron").parentPort; } catch { /* running under plain Node */ }
 }
 const fs = require("node:fs");
+const { randomUUID } = require("node:crypto");
 const pty = require("node-pty");
 const { isWindows } = require("./platform.cjs");
 const { createDetector } = require("./detection-engine.cjs");
 const { createOscParser } = require("./osc-parser.cjs");
 const { createAgentSniffer } = require("./agent-sniff.cjs");
 const { createHookServer } = require("./hook-server.cjs");
+const { managedEnvironment } = require("./cli-runtime.cjs");
 const { summarize } = require("./summary-utils.cjs");
+const { utf8Tail } = require("./utf8-utils.cjs");
+const { createOutputFlow } = require("./output-flow.cjs");
 const {
   AGENT_TYPES,
   normalizeCreateRequest,
@@ -37,6 +41,8 @@ const sessionIds = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
+const pendingSessionCreates = new Map();
+const pausedSessions = new Map();
 // Last known detector state per live terminal. The renderer reloads (dev HMR,
 // window reload, app restart) while this host keeps the PTY alive, and the
 // state only ever reaches the UI through transient messages. Keep a snapshot so
@@ -47,22 +53,43 @@ let dataPort = null;
 let tickTimer = null;
 let standaloneServer = null;
 let activeStandaloneSocket = null;
+const outputFlow = createOutputFlow({
+  send,
+  onPause(paused) {
+    const now = Date.now();
+    for (const [terminalId, session] of sessions) {
+      if (paused) {
+        pausedSessions.set(terminalId, now);
+        try { session.pause?.(); } catch { /* the process may already be exiting */ }
+      } else {
+        const started = pausedSessions.get(terminalId);
+        pausedSessions.delete(terminalId);
+        // Transport backpressure is not evidence that the agent finished.
+        const runtime = detectors.get(terminalId)?.runtime;
+        if (runtime && started !== undefined) {
+          for (const clock of ["lastOutputAt", "candidateAt", "titleWorkingAt", "titleIdleAt", "oscCompletedAt"]) {
+            if (runtime[clock]) runtime[clock] += now - started;
+          }
+        }
+        try { session.resume?.(); } catch { /* the process may already be exiting */ }
+      }
+    }
+  },
+});
 
 // External CLI hooks/plugins post status events to this loopback server. The
 // port/token are injected into each PTY environment so a hook process can find
 // the bridge without any global config. See hook-server.cjs for the protocol.
-const hookServer = createHookServer({
-  onEvent: ({ terminalId, event, status, sessionId }) => {
-    if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(sessionId)) {
-      sessionIds.set(terminalId, sessionId);
-      send({ type: "session:update", terminalId, sessionId, at: Date.now() });
-    }
-    const detector = detectors.get(terminalId);
-    if (detector && typeof event === "string" && typeof status === "string") {
-      detector.hook(event, status);
-    }
-  },
-});
+function applyHookEvent({ terminalId, event, status, sessionId, eventId, occurredAt }) {
+  const detector = detectors.get(terminalId);
+  if (!detector || typeof event !== "string" || typeof status !== "string"
+    || detector.hook(event, status, { eventId, occurredAt }) === false) return;
+  if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(sessionId)) {
+    sessionIds.set(terminalId, sessionId);
+    send({ type: "session:update", terminalId, sessionId, at: Date.now() });
+  }
+}
+const hookServer = createHookServer({ onEvent: applyHookEvent });
 const hookReady = hookServer.start().catch((error) => {
   sendError("hook-server", error);
   return 0;
@@ -70,6 +97,9 @@ const hookReady = hookServer.start().catch((error) => {
 
 // Per-terminal bounded output ring buffer for replay after renderer reconnect.
 const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
+const EXITED_BUFFER_LIMIT_BYTES = 16 * 1024 * 1024;
+const EXITED_BUFFER_TTL_MS = 5 * 60 * 1000;
+const OUTPUT_CHUNK_CHARS = 16 * 1024;
 const MAX_SOCKET_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 // Detection is time-driven: quiet windows only advance when tick() is called.
@@ -81,7 +111,9 @@ function startTickLoop() {
   if (tickTimer) return;
   tickTimer = setInterval(() => {
     const now = Date.now();
-    for (const detector of detectors.values()) {
+    pruneExitedBuffers(now);
+    for (const [terminalId, detector] of detectors) {
+      if (pausedSessions.has(terminalId)) continue;
       try {
         detector.tick(now);
       } catch {
@@ -92,23 +124,24 @@ function startTickLoop() {
   if (typeof tickTimer.unref === "function") tickTimer.unref();
 }
 
-function bufferAppend(terminalId, data) {
+function bufferAppend(terminalId, message) {
   let entry = buffers.get(terminalId);
   if (!entry) {
     entry = { parts: [], start: 0, bytes: 0 };
     buffers.set(terminalId, entry);
   }
-  entry.parts.push(data);
-  entry.bytes += Buffer.byteLength(data);
+  const bytes = Buffer.byteLength(message.data);
+  entry.parts.push({ ...message, bytes });
+  entry.bytes += bytes;
   while (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length - entry.start > 1) {
-    entry.bytes -= Buffer.byteLength(entry.parts[entry.start]);
-    entry.start += 1;
+    entry.bytes -= entry.parts[entry.start].bytes;
+    entry.parts[entry.start++] = null;
   }
   if (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length - entry.start === 1) {
     // Single oversized chunk: keep only the most recent limit bytes.
-    const kept = entry.parts[entry.start].slice(-OUTPUT_BUFFER_LIMIT_BYTES);
-    entry.parts[entry.start] = kept;
-    entry.bytes = Buffer.byteLength(kept);
+    const part = entry.parts[entry.start];
+    part.data = utf8Tail(part.data, OUTPUT_BUFFER_LIMIT_BYTES);
+    part.bytes = entry.bytes = Buffer.byteLength(part.data);
   }
   // Avoid O(n) Array#shift on every high-volume PTY chunk while still
   // periodically reclaiming discarded entries.
@@ -122,24 +155,41 @@ function bufferRelease(terminalId) {
   buffers.delete(terminalId);
 }
 
+function pruneExitedBuffers(now = Date.now()) {
+  let bytes = 0;
+  const exited = [];
+  for (const [id, entry] of buffers) {
+    if (entry.exitedAt === undefined) continue;
+    if (now - entry.exitedAt >= EXITED_BUFFER_TTL_MS) bufferRelease(id);
+    else { bytes += entry.bytes; exited.push([id, entry]); }
+  }
+  exited.sort((a, b) => a[1].exitedAt - b[1].exitedAt);
+  for (const [id, entry] of exited) {
+    if (bytes <= EXITED_BUFFER_LIMIT_BYTES) break;
+    bytes -= entry.bytes;
+    bufferRelease(id);
+  }
+}
+
 function replay(terminalId, fromSequence) {
   const entry = buffers.get(terminalId);
   if (!entry) return;
-  const retained = entry.parts.length - entry.start;
-  const base = (sequence.get(terminalId) || 0) - retained;
-  entry.parts.slice(entry.start).forEach((data, index) => {
-    const seq = base + index + 1;
-    if (seq <= fromSequence) return;
-    send({ type: "pty:output", terminalId, data, sequence: seq, replay: true, at: Date.now() });
-  });
+  for (let index = entry.start; index < entry.parts.length; index += 1) {
+    const part = entry.parts[index];
+    if (part.sequence <= fromSequence) continue;
+    const { bytes, ...message } = part;
+    outputFlow.output({ ...message, replay: true });
+  }
 }
 
 function send(message) {
   try {
-    dataPort?.postMessage(message);
+    return dataPort?.postMessage(message);
   } catch {
     // The renderer can reconnect after a port failure. PTY lifecycle must keep
     // running even when a transient data-port send fails.
+    dataPort = null;
+    outputFlow.detach();
   }
 }
 
@@ -155,9 +205,7 @@ function sendError(operation, error, requestId, terminalId) {
   });
 }
 
-// One place that both publishes a transition to the current client and records
-// it for the next one. Detector summaries are raw output excerpts; sanitize them
-// the same way the pty:output summaries are sanitized.
+// Sanitize activity excerpts only when a detector transition needs one.
 function publishState(terminalId, update) {
   const summary = update.summary === undefined ? undefined : summarize(update.summary);
   const at = typeof update.at === "number" ? update.at : Date.now();
@@ -191,11 +239,17 @@ function makeAgentSniffer(terminalId) {
   return createAgentSniffer((agent) => {
     if (agentTypes.get(terminalId) === agent) return;
     const previous = detectors.get(terminalId);
-    makeDetector(terminalId, agent);
+    const current = makeDetector(terminalId, agent);
+    // Hooks may arrive before the banner. Preserve their authoritative state
+    // when the output sniffer upgrades a generic detector.
+    if (previous?.runtime.hookStatus) {
+      Object.assign(current.runtime, previous.runtime);
+      seedState(terminalId, current.runtime.state);
+    }
     // The shell echoes the launch command before the CLI banner identifies the
     // agent. That can briefly arm the generic detector, so publish the new
     // agent's idle baseline explicitly.
-    if (previous && previous.runtime?.state !== "ready") {
+    if (previous && !previous.runtime.hookStatus && previous.runtime?.state !== "ready") {
       publishState(terminalId, {
         previous: previous.runtime.state,
         current: "ready",
@@ -236,7 +290,12 @@ function createSession(message, hookWaited = false) {
   // The hook port is assigned asynchronously; a create that arrives before the
   // listener is ready waits once, then proceeds with or without hook env.
   if (!hookServer.port && !hookWaited) {
-    hookReady.then(() => createSession(message, true)).catch((error) => {
+    pendingSessionCreates.set(message.terminalId, message);
+    hookReady.then(() => {
+      if (pendingSessionCreates.get(message.terminalId) !== message) return;
+      pendingSessionCreates.delete(message.terminalId);
+      createSession(message, true);
+    }).catch((error) => {
       sendError("pty:create", error, typeof message.requestId === "string" ? message.requestId : undefined, message?.terminalId);
     });
     return;
@@ -279,7 +338,7 @@ function createSession(message, hookWaited = false) {
       cols: request.cols,
       rows: request.rows,
       cwd: request.cwd,
-      env: { ...process.env, ...request.env, ...hookEnv },
+      env: managedEnvironment({ ...process.env, ...request.env, ...hookEnv }),
       ...(isWindows ? { useConpty: true } : {}),
     });
   } catch (error) {
@@ -290,6 +349,11 @@ function createSession(message, hookWaited = false) {
 
   creating.delete(request.terminalId);
   sessions.set(request.terminalId, session);
+  if (outputFlow.paused) {
+    pausedSessions.set(request.terminalId, Date.now());
+    try { session.pause?.(); } catch { /* the process may already be exiting */ }
+  }
+  outputFlow.forget(request.terminalId);
   sequence.set(request.terminalId, 0);
   bufferRelease(request.terminalId);
   // Start detection with the generic pattern set: a fresh shell is not yet an
@@ -297,16 +361,22 @@ function createSession(message, hookWaited = false) {
   const initialDetector = makeDetector(request.terminalId, "generic");
   const oscParser = makeOscParser(request.terminalId);
   const sniffer = makeAgentSniffer(request.terminalId);
+  const streamId = randomUUID();
   send({ type: "pty:create-result", requestId, terminalId: request.terminalId, pid: session.pid, ok: true, at: Date.now() });
 
   session.onData((data) => {
-    const next = (sequence.get(request.terminalId) || 0) + 1;
-    sequence.set(request.terminalId, next);
-    bufferAppend(request.terminalId, data);
-    // The sidebar renders this under the terminal title; send a sanitized
-    // single line so control sequences never reach the DOM as mojibake.
-    const summary = summarize(data);
-    send({ type: "pty:output", terminalId: request.terminalId, data, sequence: next, replay: false, summary, at: Date.now() });
+    if (sessions.get(request.terminalId) !== session) return;
+    const at = Date.now();
+    for (let start = 0; start < data.length;) {
+      let end = Math.min(start + OUTPUT_CHUNK_CHARS, data.length);
+      if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end -= 1;
+      const next = (sequence.get(request.terminalId) || 0) + 1;
+      sequence.set(request.terminalId, next);
+      const message = { type: "pty:output", terminalId: request.terminalId, data: data.slice(start, end), sequence: next, streamId, replay: false, at };
+      bufferAppend(request.terminalId, message);
+      outputFlow.output(message);
+      start = end;
+    }
     try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
     try { sniffer.feed(data); } catch { /* agent sniffing must never break output delivery */ }
     // Agent sniffing can replace the detector while processing this same
@@ -316,6 +386,7 @@ function createSession(message, hookWaited = false) {
     detector.tick();
   });
   session.onExit(({ exitCode }) => {
+    if (sessions.get(request.terminalId) !== session) return;
     const reason = killRequests.delete(request.terminalId) ? "user-kill" : "natural";
     const detector = detectors.get(request.terminalId) || initialDetector;
     detector.exit(reason === "user-kill" ? 0 : exitCode);
@@ -326,18 +397,57 @@ function createSession(message, hookWaited = false) {
     oscParsers.delete(request.terminalId);
     agentTypes.delete(request.terminalId);
     sessionIds.delete(request.terminalId);
+    pausedSessions.delete(request.terminalId);
     // A dead terminal must not be resurrected by a later snapshot.
     stateSnapshots.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
-    // the tail of the final output; it is released on explicit recreate.
+    // the tail of the final output, with a global budget and expiry.
+    const entry = buffers.get(request.terminalId);
+    if (entry) entry.exitedAt = Date.now();
+    pruneExitedBuffers();
   });
 }
 
 function handleMessage(message) {
   if (!message || typeof message !== "object") return;
+  if (message.type === "client:attach") {
+    const flowId = outputFlow.attach();
+    send({ type: "pty:host-ready", flowId, at: Date.now() });
+    sendStateSnapshot();
+    return;
+  }
+  if (message.type === "client:detach") {
+    outputFlow.detach();
+    return;
+  }
+  if (message.type === "pty:output-ack") {
+    outputFlow.acknowledge(message);
+    return;
+  }
+  if (message.type === "pty:forget") {
+    try {
+      const { terminalId } = normalizeTerminalRequest(message, "pty:forget");
+      pendingSessionCreates.delete(terminalId);
+      const session = sessions.get(terminalId);
+      sessions.delete(terminalId);
+      sequence.delete(terminalId);
+      detectors.delete(terminalId);
+      oscParsers.delete(terminalId);
+      agentTypes.delete(terminalId);
+      sessionIds.delete(terminalId);
+      stateSnapshots.delete(terminalId);
+      killRequests.delete(terminalId);
+      pausedSessions.delete(terminalId);
+      bufferRelease(terminalId);
+      outputFlow.forget(terminalId);
+      session?.kill();
+    } catch (error) { sendError("pty:forget", error, message.requestId, message?.terminalId); }
+    return;
+  }
   if (message.type === "detach") {
     // A detached client is expected during an Electron restart. Keep all PTY
     // sessions and their detectors alive; the next client will attach again.
+    outputFlow.detach();
     if (standaloneSocketPath && dataPort) {
       try { dataPort.close?.(); } catch { /* socket already closed */ }
       dataPort = null;
@@ -446,14 +556,7 @@ function handleMessage(message) {
   if (message.type === "state:hook") {
     try {
       const request = normalizeTerminalRequest(message, "state:hook");
-      const detector = detectors.get(request.terminalId);
-      if (detector && typeof message.event === "string" && typeof message.status === "string") {
-        if (typeof message.sessionId === "string" && message.sessionId.length > 0 && message.sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(message.sessionId)) {
-          sessionIds.set(request.terminalId, message.sessionId);
-          send({ type: "session:update", terminalId: request.terminalId, sessionId: message.sessionId, at: Date.now() });
-        }
-        detector.hook(message.event, message.status);
-      }
+      applyHookEvent({ ...message, terminalId: request.terminalId });
     } catch (error) {
       sendError("state:hook", error, message.requestId, message?.terminalId);
     }
@@ -461,17 +564,25 @@ function handleMessage(message) {
 }
 
 function attachElectronPort(port) {
+  outputFlow.detach();
   if (dataPort && dataPort !== port && typeof dataPort.close === "function") {
     try { dataPort.close(); } catch { /* stale port */ }
   }
   dataPort = port;
   if (!dataPort) return;
   dataPort.on("message", (portEvent) => {
+    if (dataPort !== port) return;
     try { handleMessage(portEvent.data); } catch (error) { sendError("message", error); }
   });
   dataPort.on("messageerror", (error) => sendError("data-port", error));
+  dataPort.on("close", () => {
+    if (dataPort !== port) return;
+    dataPort = null;
+    outputFlow.detach();
+  });
   dataPort.start();
-  send({ type: "pty:host-ready", at: Date.now() });
+  const flowId = outputFlow.attach();
+  send({ type: "pty:host-ready", flowId, at: Date.now() });
   // A reattaching client has no idea what the detectors hold; hand it the live
   // state immediately after the readiness handshake.
   sendStateSnapshot();
@@ -485,10 +596,11 @@ function startStandaloneServer(socketPath) {
     if (dataPort && typeof dataPort.close === "function") {
       try { dataPort.close(); } catch { /* stale client */ }
     }
+    outputFlow.detach();
     activeStandaloneSocket = socket;
     dataPort = {
       postMessage(message) {
-        if (!socket.destroyed) socket.write(`${JSON.stringify(message)}\n`);
+        if (!socket.destroyed) return socket.write(`${JSON.stringify(message)}\n`);
       },
       close() {
         try { socket.destroy(); } catch { /* already closed */ }
@@ -496,7 +608,11 @@ function startStandaloneServer(socketPath) {
     };
     let pending = "";
     socket.setEncoding("utf8");
+    socket.on("drain", () => {
+      if (activeStandaloneSocket === socket) outputFlow.drain();
+    });
     socket.on("data", (chunk) => {
+      if (activeStandaloneSocket !== socket) return;
       pending += chunk;
       if (Buffer.byteLength(pending, "utf8") > MAX_SOCKET_MESSAGE_BYTES) {
         pending = "";
@@ -516,8 +632,10 @@ function startStandaloneServer(socketPath) {
       if (activeStandaloneSocket === socket) {
         activeStandaloneSocket = null;
         dataPort = null;
+        outputFlow.detach();
       }
     });
+    socket.on("error", () => { /* close releases pressure for the current client */ });
     send({ type: "pty:host-ready", at: Date.now() });
     sendStateSnapshot();
   });

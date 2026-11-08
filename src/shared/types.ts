@@ -1,4 +1,34 @@
-export type AgentType = "generic" | "opencode" | "codex" | "claude";
+export type AgentType = "generic" | "opencode" | "codex" | "claude" | "pi";
+export type AgentCliId = Exclude<AgentType, "generic">;
+export type CliAction = "install" | "update" | "reinstall" | "integrate" | "use-system" | "use-managed" | "rollback";
+export interface CliProgress { id: AgentCliId; action: CliAction; phase: string; message: string; at: number; }
+export interface AgentCliInfo {
+  id: AgentCliId;
+  name: string;
+  command: string;
+  package: string;
+  description: string;
+  docs: string;
+  signal: string;
+  installed: boolean;
+  executable?: string;
+  version?: string;
+  error?: string;
+  source: "system" | "managed" | "missing";
+  externalPaths: string[];
+  managedInstalled: boolean;
+  managedVersion?: string;
+  previousVersion?: string;
+  integration: { state: "inferred" | "configured" | "outdated" | "missing" | "error"; label: string; detail: string; path?: string };
+  operation?: CliProgress;
+}
+export interface CliScan {
+  agents: AgentCliInfo[];
+  runtime: { ready: boolean; node?: string; npm?: string; nodeVersion?: string; message: string };
+  root: string;
+  checkedAt: number;
+}
+export interface CliPlan { token: string; id: AgentCliId; action: CliAction; title: string; packageVersion?: string; command?: string; changes: string[]; target: string; expiresAt: number; }
 export type AgentState = "working" | "completed-unseen" | "ready" | "awaiting-input" | "error" | "stopped";
 export type RecoveryState = "none" | "interrupted" | "resumable" | "recovering" | "recovered" | "unsupported";
 export type TaskState = "working" | "completed" | "awaiting-input" | "interrupted" | "error" | "cancelled";
@@ -100,11 +130,14 @@ export interface PtyOutputEvent {
   terminalId: string;
   data: string;
   sequence: number;
+  streamId?: string;
+  flowId?: string;
+  deliveryId?: number;
   replay: boolean;
-  /** Sanitized single-line activity excerpt, safe to render in the UI. */
-  summary?: string;
   at: number;
 }
+
+export type PtyOutputReceipt = Pick<PtyOutputEvent, "terminalId" | "sequence" | "streamId" | "flowId" | "deliveryId">;
 
 export interface PtyTitleEvent {
   type: "pty:title";
@@ -157,6 +190,12 @@ export interface PtyHostExitEvent {
   code?: number;
   signal?: string;
   message?: string;
+  at: number;
+}
+
+export interface PtyHostReadyEvent {
+  type: "pty:host-ready";
+  flowId?: string;
   at: number;
 }
 

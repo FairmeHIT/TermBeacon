@@ -1,12 +1,13 @@
-import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen } from "electron";
+import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendFile, copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
+import { copyFile, readFile, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
+import type { AgentCliId, CliProgress, CliScan, CliPlan } from "../shared/types";
 
 const require = createRequire(import.meta.url);
 // electron-updater is CommonJS; a named ESM import fails at runtime with
@@ -17,17 +18,24 @@ const { FreshGitHubProvider, checkForUpdatesWithRetry, formatUpdateError } = req
   checkForUpdatesWithRetry: <T>(check: () => Promise<T>, options?: { onRetry?: (attempt: number, total: number) => void }) => Promise<T>;
   formatUpdateError: (error: unknown) => string;
 };
-const { discoverAll } = require("./cli-discovery.cjs") as {
-  discoverAll: () => Record<string, unknown>;
+const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") as {
+  CATALOG: Record<string, { docs: string }>;
+  createCliManager: (options: { assets: unknown; onProgress: (event: CliProgress) => void }) => {
+    scan(): Promise<CliScan>;
+    plan(request: unknown): Promise<CliPlan>;
+    execute(request: unknown): Promise<unknown>;
+    launch(request: { id: AgentCliId; shell?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
+  };
+};
+const { createHistoryStore } = require("./terminal-history.cjs") as {
+  createHistoryStore: (options: { directory: string }) => {
+    load: (id: string) => Promise<string>;
+    append: (id: string, data: string) => Promise<boolean>;
+    remove: (id: string) => Promise<boolean>;
+  };
 };
 const { platformInfo } = require("./platform.cjs") as {
   platformInfo: () => { platform: string; isWindows: boolean; isMac: boolean; shell: string; cwd: string };
-};
-const { normalizeCreateRequest, protocolError } = require("./pty-validation.cjs") as {
-  normalizeCreateRequest: (message: unknown) => {
-    terminalId: string; title: string; cwd: string; shell: string; cols: number; rows: number; agentType: string;
-  };
-  protocolError: (code: string, message: string, details?: Record<string, unknown>) => Error & { code: string };
 };
 const { sanitizeState, defaultState } = require("./state-sanitize.cjs") as {
   sanitizeState: (parsed: unknown) => PersistedState;
@@ -49,24 +57,17 @@ const { planRestart } = require("./host-restart.cjs") as {
   };
 };
 const { getResumeSpec } = require("./session-resume.cjs") as {
-  getResumeSpec: (request: { agentType?: string; sessionId?: string; cwd?: string; shell?: string }) => Record<string, unknown>;
+  getResumeSpec: (request: { agentType?: string; sessionId?: string; cwd?: string; shell?: string }) => { supported: boolean; args?: string[]; [key: string]: unknown };
 };
-const {
-  resolveAssets,
-  installOpencodePlugin,
-  configureClaude,
-  integrationStatus,
-} = require("./integration-config.cjs") as {
+const { resolveAssets } = require("./integration-config.cjs") as {
   resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null };
-  installOpencodePlugin: (options: { assets: { opencodePlugin: string; hookScript: string } }) => { target: string; existed: boolean; bytes: number };
-  configureClaude: (options: { assets: { opencodePlugin: string; hookScript: string } }) => { target: string; backupPath?: string; hookScript: string };
-  integrationStatus: (options: { assets: { opencodePlugin: string; hookScript: string } }) => Record<string, unknown>;
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 let mainWindow: BrowserWindow | null = null;
 let ptyHostProcess: ChildProcess | null = null;
 let hostSocket: Socket | null = null;
+let hostSocketBlocked = false;
 let rendererPort: Electron.MessagePortMain | null = null;
 let hostSocketName: string | null = null;
 let hostConnectTimer: NodeJS.Timeout | undefined;
@@ -76,21 +77,19 @@ let isQuitting = false;
 let hostRestartTimer: NodeJS.Timeout | undefined;
 let hostRestartAttempts = 0;
 let hostStartedAt = 0;
-const terminals = new Map<string, TerminalInstance>();
 let stateCache: PersistedState | null = null;
 let windowSaveTimer: NodeJS.Timeout | undefined;
 let updateConfigured = false;
 let quitPersisting = false;
-// Last update result, kept so the settings popover can show it without
+// Last update result, kept so the settings page can show it without
 // waiting for a new event (the renderer may open after the startup check).
 type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
 let updateStatus: UpdateStatus = { type: "idle" };
 let updateCheckInFlight = false;
-const historyWrites = new Map<string, Promise<boolean>>();
+let terminalHistory: ReturnType<typeof createHistoryStore> | undefined;
 let stateWriteTail: Promise<void> = Promise.resolve();
 let stateWriteSequence = 0;
 const MAX_HOST_MESSAGE_BYTES = 4 * 1024 * 1024;
-const MAX_HOOK_INPUT_BYTES = 128 * 1024;
 
 interface PersistedState {
   schemaVersion: 1;
@@ -106,13 +105,17 @@ interface PersistedState {
 
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }
 function historyDir() { return path.join(app.getPath("userData"), "terminal-history"); }
-function historyPath(terminalId: string) {
-  if (!/^[a-zA-Z0-9_-]{1,100}$/.test(terminalId)) return null;
-  return path.join(historyDir(), `${terminalId}.log`);
-}
+function historyStore() { return terminalHistory ??= createHistoryStore({ directory: historyDir() }); }
 
 function integrationAssets() {
   return resolveAssets({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), executablePath: process.execPath });
+}
+
+let cliManager: ReturnType<typeof createCliManager> | undefined;
+function agentManager() {
+  return cliManager ??= createCliManager({ assets: integrationAssets(), onProgress: (event) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("cli:progress", event);
+  } });
 }
 
 async function readState(): Promise<PersistedState> {
@@ -214,51 +217,15 @@ async function checkForUpdatesNow() {
 }
 
 async function loadTerminalHistory(terminalId: string) {
-  const target = historyPath(terminalId);
-  if (!target) return "";
-  try {
-    const raw = await readFile(target, "utf8");
-    return raw.length > 250_000 ? raw.slice(-250_000) : raw;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
-    throw error;
-  }
+  return historyStore().load(terminalId);
 }
 
 async function appendTerminalHistory(terminalId: string, data: string) {
-  if (typeof data !== "string" || data.length === 0) return true;
-  const target = historyPath(terminalId);
-  if (!target) return true;
-  const previous = historyWrites.get(terminalId) || Promise.resolve(true);
-  const next = previous.catch(() => true).then(async () => {
-    await mkdir(historyDir(), { recursive: true });
-    await appendFile(target, data, "utf8");
-    try {
-      const details = await stat(target);
-      if (details.size > 400_000) {
-        const raw = await readFile(target, "utf8");
-        await writeFile(target, raw.slice(-250_000), "utf8");
-      }
-    } catch { /* history is a convenience; a failed trim must not affect PTY */ }
-    return true;
-  });
-  historyWrites.set(terminalId, next);
-  void next.then(() => {
-    if (historyWrites.get(terminalId) === next) historyWrites.delete(terminalId);
-  }, () => {
-    if (historyWrites.get(terminalId) === next) historyWrites.delete(terminalId);
-  });
-  return next;
+  return historyStore().append(terminalId, data);
 }
 
 async function removeTerminalHistory(terminalId: string) {
-  const target = historyPath(terminalId);
-  if (!target) return true;
-  await (historyWrites.get(terminalId) || Promise.resolve(true)).catch(() => true);
-  try { await unlink(target); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  return true;
+  return historyStore().remove(terminalId);
 }
 
 function notifyHostEvent(
@@ -313,19 +280,19 @@ function queueHostMessage(message: unknown) {
 }
 
 function sendHostMessage(message: unknown) {
-  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable) {
+  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable || hostSocketBlocked) {
     queueHostMessage(message);
     return;
   }
   try {
-    hostSocket.write(`${JSON.stringify(message)}\n`);
+    hostSocketBlocked = !hostSocket.write(`${JSON.stringify(message)}\n`);
   } catch {
     queueHostMessage(message);
   }
 }
 
 function flushHostMessages() {
-  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable) return;
+  if (!hostSocket || hostSocket.destroyed || !hostSocket.writable || hostSocketBlocked) return;
   const pending = hostMessageQueue.splice(0);
   for (const message of pending) sendHostMessage(message);
 }
@@ -335,10 +302,17 @@ function attachHostSocket(socket: Socket) {
     try { hostSocket.destroy(); } catch { /* stale connection */ }
   }
   hostSocket = socket;
+  hostSocketBlocked = false;
   hostStartedAt = hostStartedAt || Date.now();
   let pending = "";
   socket.setEncoding("utf8");
+  socket.on("drain", () => {
+    if (hostSocket !== socket) return;
+    hostSocketBlocked = false;
+    flushHostMessages();
+  });
   socket.on("data", (chunk) => {
+    if (hostSocket !== socket) return;
     pending += chunk;
     if (Buffer.byteLength(pending, "utf8") > MAX_HOST_MESSAGE_BYTES) {
       console.error("[pty-host] oversized socket message");
@@ -370,11 +344,13 @@ function attachHostSocket(socket: Socket) {
   socket.on("close", () => {
     if (hostSocket !== socket) return;
     hostSocket = null;
+    hostSocketBlocked = false;
     if (isQuitting) return;
     notifyHostEvent("pty:host-disconnected", undefined, undefined, "PTY Host 连接已断开");
     schedulePtyHostRestart();
   });
   flushHostMessages();
+  if (rendererReady) connectDataPlane();
 }
 
 function connectToPtyHost() {
@@ -467,6 +443,7 @@ function connectDataPlane() {
   });
   rendererPort.start();
   mainWindow.webContents.postMessage("pty:connect", null, [channel.port2]);
+  sendHostMessage({ type: "client:attach" });
 }
 
 // Application menu. On Windows/Linux the bar is hidden (autoHideMenuBar) —
@@ -545,6 +522,21 @@ function createWindow(savedState: PersistedState = stateCache || defaultState())
   mainWindow.on("move", scheduleWindowStateSave);
   mainWindow.on("maximize", scheduleWindowStateSave);
   mainWindow.on("unmaximize", scheduleWindowStateSave);
+  mainWindow.webContents.on("did-start-loading", () => {
+    rendererReady = false;
+    try { rendererPort?.close(); } catch { /* renderer is reloading */ }
+    rendererPort = null;
+    sendHostMessage({ type: "client:detach" });
+  });
+  mainWindow.webContents.on("render-process-gone", () => {
+    rendererReady = false;
+    sendHostMessage({ type: "client:detach" });
+  });
+  mainWindow.on("closed", () => {
+    rendererReady = false;
+    rendererPort = null;
+    sendHostMessage({ type: "client:detach" });
+  });
   mainWindow.webContents.on("did-finish-load", () => {
     rendererReady = true;
     connectDataPlane();
@@ -554,57 +546,12 @@ function createWindow(savedState: PersistedState = stateCache || defaultState())
 }
 
 async function runHookMode() {
-  const port = process.env.TERMBEACON_HOOK_PORT;
-  const token = process.env.TERMBEACON_HOOK_TOKEN;
-  const terminalId = process.env.TERMBEACON_TERMINAL_ID;
-  let raw = "";
-  let inputTooLarge = false;
-  if (!process.stdin.isTTY) {
-    for await (const chunk of process.stdin) {
-      const text = String(chunk);
-      if (Buffer.byteLength(raw, "utf8") + Buffer.byteLength(text, "utf8") > MAX_HOOK_INPUT_BYTES) {
-        inputTooLarge = true;
-        continue;
-      }
-      raw += text;
-    }
-  }
-  let input: Record<string, unknown> = {};
-  try { input = !inputTooLarge && raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { input = {}; }
-  const args = process.argv.slice(2);
-  const positional = args.filter((value) => !value.startsWith("--"));
-  const option = (name: string) => {
-    const index = args.indexOf(`--${name}`);
-    return index >= 0 ? args[index + 1] : undefined;
-  };
-  const event = String(option("event") || positional[1] || input.hook_event_name || input.event || "hook");
-  const statusByEvent: Record<string, string> = {
-    SessionStart: "started", UserPromptSubmit: "running", PreToolUse: "running", PostToolUse: "running",
-    PreCompact: "running", Notification: "waiting", Stop: "completed", SubagentStop: "completed", SessionEnd: "completed",
-  };
-  const status = String(option("status") || positional[0] || statusByEvent[event] || "running");
-  const validStatuses = new Set(["started", "running", "waiting", "completed", "failed"]);
-  if (!validStatuses.has(status)) {
-    console.error(`[termbeacon-hook] unknown status: ${status}`);
-    process.exitCode = 1;
-  } else if (port && token && terminalId) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2000);
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/hook`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-termbeacon-token": token },
-        body: JSON.stringify({ terminalId, event, status }),
-        signal: controller.signal,
-      });
-      if (!response.ok) console.error(`[termbeacon-hook] bridge returned HTTP ${response.status}`);
-    } catch {
-      console.error("[termbeacon-hook] could not reach the TermBeacon hook bridge");
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-  app.quit();
+  // Use exactly the same mapping, session metadata and retry budget as the
+  // standalone script. The build copies the self-contained client here.
+  try {
+    const { runHook } = require("./hook-client.cjs") as { runHook: () => Promise<void> };
+    await runHook();
+  } finally { app.quit(); }
 }
 
 function runPtyHostMode() {
@@ -688,9 +635,21 @@ ipcMain.handle("state:load", async () => {
   if (!stateCache) stateCache = await readState();
   return stateCache;
 });
-ipcMain.handle("cli:discover", () => discoverAll());
+ipcMain.handle("cli:scan", () => agentManager().scan());
+ipcMain.handle("cli:plan", (_event, request) => agentManager().plan(request));
+ipcMain.handle("cli:execute", (_event, request) => agentManager().execute(request));
+ipcMain.handle("cli:launch-spec", (_event, request) => agentManager().launch({ id: request?.id, shell: request?.shell }));
+ipcMain.handle("cli:docs", async (_event, id) => {
+  if (typeof id !== "string" || !Object.hasOwn(cliCatalog, id)) throw new Error("不支持的 Agent CLI");
+  await shell.openExternal(cliCatalog[id].docs);
+});
 ipcMain.handle("platform:info", () => platformInfo());
-ipcMain.handle("session:resume-spec", (_event, request) => getResumeSpec(request || {}));
+ipcMain.handle("session:resume-spec", async (_event, request) => {
+  const spec = getResumeSpec(request || {});
+  if (!spec.supported) return spec;
+  const launch = await agentManager().launch({ id: request.agentType, shell: request.shell, args: spec.args });
+  return { ...spec, command: launch.command };
+});
 ipcMain.handle("cwd:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
@@ -727,10 +686,7 @@ ipcMain.handle("update:state", () => ({
   configured: updateConfigured,
 }));
 ipcMain.handle("update:check", () => checkForUpdatesNow());
-ipcMain.handle("integration:status", () => integrationStatus({ assets: integrationAssets() }));
-ipcMain.handle("integration:install-opencode", () => installOpencodePlugin({ assets: integrationAssets() }));
-ipcMain.handle("integration:configure-claude", () => configureClaude({ assets: integrationAssets() }));
-ipcMain.handle("pty:restart-host", () => {
+ipcMain.handle("pty:restart-host", (_event, request) => {
   if (isQuitting) return false;
   if (hostRestartTimer) {
     clearTimeout(hostRestartTimer);
@@ -738,28 +694,16 @@ ipcMain.handle("pty:restart-host", () => {
   }
   hostRestartAttempts = 0;
   if (hostSocket) {
+    if (request?.force === true) {
+      sendHostMessage({ type: "shutdown" });
+      return true;
+    }
     if (rendererReady) connectDataPlane();
     return true;
   }
   startPtyHost();
   if (rendererReady) connectDataPlane();
   return true;
-});
-ipcMain.handle("pty:create", (_event, request) => {
-  let normalized;
-  try {
-    normalized = normalizeCreateRequest(request);
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? (error as { code?: string }).code : "INVALID_REQUEST";
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`pty:create rejected: ${code}: ${message}`);
-  }
-  const terminal: TerminalInstance = {
-    id: normalized.terminalId, title: normalized.title, cwd: normalized.cwd, agentType: normalized.agentType as TerminalInstance["agentType"],
-    state: "ready", alive: true, lastActivityAt: Date.now(),
-  };
-  terminals.set(terminal.id, terminal);
-  return { terminalId: terminal.id };
 });
 }
 

@@ -287,3 +287,153 @@ test("parseOscTitle accepts BEL and ST terminators", () => {
   assert.equal(parseOscTitle("\u001b]2;75_TermBeacon\u001b\\"), "75_TermBeacon");
   assert.equal(parseOscTitle("plain text"), undefined);
 });
+
+test("hook waiting survives redraws, title spinners, progress and error-looking prose", () => {
+  const { detector } = makeAgent("claude");
+  detector.hook("UserPromptSubmit", "running");
+  detector.hook("PermissionRequest", "waiting");
+  detector.output("\x1b]0;◐ Claude Code\x07Error: an example\r\nDone\r\n$ \x1b]9;4;1;100\x07", 1000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "awaiting-input");
+  detector.hook("PreToolUse", "running");
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("native running prevents heuristic completion until the native turn ends", () => {
+  const { detector, updates } = makeAgent("claude");
+  detector.hook("UserPromptSubmit", "running");
+  detector.output("\x1b]0;◐ Claude Code\x07", 1000);
+  detector.output("\x1b]0;✳ Claude Code\x07Done\r\n$ ", 2000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "working");
+  detector.hook("Stop", "completed");
+  assert.equal(detector.runtime.state, "completed-unseen");
+  assert.equal(updates.at(-1).source, "hook");
+  assert.equal(updates.at(-1).confidence, 0.95);
+});
+
+test("native completion immediately clears a tool grace period", () => {
+  const { detector } = makeAgent("opencode");
+  detector.input("run tool\r");
+  detector.output("Executing tool", Date.now());
+  assert.equal(detector.runtime.toolInFlight, true);
+  detector.hook("session.idle", "completed");
+  assert.equal(detector.runtime.state, "completed-unseen");
+  assert.equal(detector.runtime.toolInFlight, false);
+  detector.output("Running tool\r\nError: old diagnostics");
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
+test("repeated native completion does not relight a viewed task", () => {
+  const { detector } = makeAgent("opencode");
+  detector.hook("session.idle", "completed");
+  detector.viewed();
+  detector.hook("session.snapshot", "completed");
+  assert.equal(detector.runtime.state, "ready");
+  detector.input("new task\r");
+  detector.hook("session.status", "running");
+  detector.hook("session.idle", "completed");
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
+test("native failure is sticky across output and recovers from a native retry", () => {
+  const { detector } = makeAgent("opencode");
+  detector.hook("session.execution.failed", "failed");
+  detector.output("Thinking... retrying...\r\nDone\r\n$ ", 1000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "error");
+  detector.hook("session.status", "running");
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("legacy Claude child completion cannot complete the main turn", () => {
+  const { detector } = makeAgent("claude");
+  detector.hook("UserPromptSubmit", "running");
+  assert.equal(detector.hook("SubagentStop", "completed"), false);
+  assert.equal(detector.hook("TaskCompleted", "completed"), false);
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("late retried hooks cannot reverse a newer transition", () => {
+  const { detector } = makeAgent("opencode");
+  detector.hook("session.idle", "completed", { occurredAt: 2000 });
+  assert.equal(detector.hook("session.status", "running", { occurredAt: 1000 }), false);
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
+test("Enter resumes a hook waiting state after arrow-key selection", () => {
+  const { detector } = makeAgent("claude");
+  detector.hook("PermissionRequest", "waiting");
+  detector.input("\x1b[B");
+  assert.equal(detector.runtime.state, "awaiting-input");
+  detector.input("\r");
+  assert.equal(detector.runtime.state, "working");
+  assert.equal(detector.runtime.hookStatus, null);
+});
+
+test("Codex and Claude titles survive every possible PTY split including the ESC byte", () => {
+  for (const [agent, working, idle] of [
+    ["codex", "⠋ project", "project"], ["claude", "◐ Claude Code", "✳ Claude Code"],
+  ]) {
+    for (const end of ["\x07", "\x1b\\"]) {
+      const active = `\x1b]0;${working}${end}`;
+      const finished = `\x1b]2;${idle}${end}`;
+      for (let split = 1; split < active.length; split += 1) {
+        const { detector } = makeAgent(agent);
+        detector.input("run\r");
+        detector.output(active.slice(0, split), 1000);
+        detector.output(active.slice(split), 1100);
+        const idleSplit = Math.min(split, finished.length - 1);
+        detector.output(finished.slice(0, idleSplit), 5000);
+        detector.output(finished.slice(idleSplit), 5100);
+        detector.tick(8000);
+        assert.equal(detector.runtime.state, "completed-unseen", `${agent}, split ${split}`);
+      }
+    }
+  }
+});
+
+test("all titles in one chunk are applied in order", () => {
+  const { detector } = makeAgent("codex");
+  detector.input("run\r");
+  detector.output("\x1b]0;⠋ task\x07\x1b]0;task\x07\x1b]0;⠙ task\x07", 1000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("progress split at any byte still completes and later active progress invalidates it", () => {
+  const sequence = "\x1b]9;4;1;100\x1b\\";
+  for (let split = 1; split < sequence.length; split += 1) {
+    const { detector } = make();
+    detector.input("run\r");
+    detector.output(sequence.slice(0, split), 1000);
+    detector.output(sequence.slice(split), 1100);
+    detector.tick(9000);
+    assert.equal(detector.runtime.state, "completed-unseen", `split ${split}`);
+  }
+  const { detector } = make();
+  detector.input("run\r");
+  detector.output(sequence + "\x1b]9;4;1;20\x07", 1000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("OSC metadata is not evidence of text completion or failure", () => {
+  const { detector } = make();
+  detector.input("run\r");
+  detector.output("\x1b]0;Error: Done\x07", 1000);
+  detector.tick(90000);
+  assert.equal(detector.runtime.state, "working");
+});
+
+test("prompt editing keeps native state and old completion cannot end a new submission", () => {
+  const { detector } = makeAgent("claude");
+  const old = Date.now() - 1000;
+  detector.hook("Stop", "completed", { occurredAt: old });
+  detector.input("next prompt");
+  assert.equal(detector.runtime.state, "completed-unseen");
+  detector.input("\r");
+  assert.equal(detector.runtime.state, "working");
+  assert.equal(detector.hook("Stop", "completed", { occurredAt: old + 1 }), false);
+  assert.equal(detector.runtime.state, "working");
+});

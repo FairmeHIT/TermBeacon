@@ -46,6 +46,7 @@ const common = {
 
 module.exports = {
   generic: { id: "generic", displayName: "Generic CLI", ...common },
+  pi: { id: "pi", displayName: "Pi", ...common },
   opencode: {
     id: "opencode",
     displayName: "opencode",
@@ -97,6 +98,6 @@ module.exports = {
       working: [/Thinking|Running|Tool use|Reading|Writing/i],
       completion: [/Task completed|Done(?!\s+in\b)|Summary|完成/i],
     },
-    hooks: { supportedEvents: ["Stop", "TaskCompleted", "Notification", "SubagentStop"], timeoutMs: 5000 },
+    hooks: { supportedEvents: ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "SessionEnd"], timeoutMs: 5000 },
   },
 };

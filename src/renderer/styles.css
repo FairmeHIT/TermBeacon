@@ -524,20 +524,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   stroke-linejoin: round;
   stroke-width: 1.65;
 }
-.settings-popover {
-  position: absolute;
-  bottom: 47px;
-  left: calc(var(--sidebar-width) - 226px);
-  z-index: 5;
-  width: 240px;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-bg);
-  box-shadow: var(--overlay-shadow);
-  max-height: calc(100vh - 64px);
-  overflow-y: auto;
-}
 .sidebar-toggle-collapsed {
   position: absolute;
   top: auto;
@@ -545,118 +531,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   left: 14px;
   z-index: 5;
 }
-.settings-title { color: var(--text); font-size: 12px; font-weight: 650; }
-.settings-caption { margin: 14px 0 7px; color: var(--muted); font-size: 10px; }
-.shell-select {
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 8px;
-  color: var(--text-soft);
-  font-size: 11px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  outline: none;
-  background: var(--panel-soft);
-}
-.shell-select:focus { border-color: var(--accent); }
-.theme-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.theme-option {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-height: 31px;
-  padding: 6px;
-  color: var(--muted);
-  font-size: 11px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: transparent;
-  cursor: pointer;
-}
-.theme-option:hover { color: var(--text); background: var(--panel-soft); }
-.theme-option.selected {
-  color: var(--accent);
-  border-color: var(--border-strong);
-  background: var(--accent-soft);
-}
-.settings-update {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-  color: var(--muted);
-  font-size: 10px;
-}
-.settings-update button, .settings-install {
-  padding: 5px 8px;
-  color: var(--text-soft);
-  font-size: 10px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--panel-soft);
-  cursor: pointer;
-}
-.settings-update button:hover, .settings-install:hover {
-  color: var(--accent);
-  border-color: var(--border-strong);
-}
-.settings-update button:disabled { cursor: not-allowed; opacity: .45; }
-.settings-install { width: 100%; margin-top: 10px; color: var(--accent); }
-.settings-hint { margin-top: 8px; color: var(--muted); font-size: 10px; line-height: 1.55; }
-.settings-hint.error { color: var(--danger); }
-.settings-section-toggle {
-  display: flex;
-  width: 100%;
-  min-height: 28px;
-  align-items: center;
-  justify-content: space-between;
-  margin: 14px 0 0;
-  padding: 0;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: .08em;
-  text-align: left;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.settings-section-toggle:hover { color: var(--text); }
-.settings-section-toggle small { color: var(--muted); font-size: 9px; font-weight: 500; letter-spacing: 0; }
-.settings-section-toggle svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.8;
-}
-.integration-panel { margin-top: 1px; }
-.integration-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 28px;
-  color: var(--muted);
-  font-size: 10px;
-}
-.integration-row + .integration-row { margin-top: 5px; }
-.integration-row button {
-  min-width: 54px;
-  padding: 5px 8px;
-  color: var(--text-soft);
-  font-size: 10px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--panel-soft);
-  cursor: pointer;
-}
-.integration-row button:hover { color: var(--accent); border-color: var(--border-strong); }
-.integration-row button:disabled { cursor: not-allowed; opacity: .45; }
 
 /* Workspace */
 .workspace {

@@ -63,5 +63,5 @@ test("opencode completes from the hook plugin, not from the title", () => {
 });
 
 test("settings explain that opencode completion detection is limited without the plugin", () => {
-  assert.match(app, /检测受限/);
+  assert.match(fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8"), /检测受限/);
 });

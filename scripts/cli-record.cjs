@@ -16,7 +16,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { isWindows, defaultShell } = require("../src/main/platform.cjs");
-const { discoverAll } = require("../src/main/cli-discovery.cjs");
+const { discoverAll, getLaunchSpec } = require("../src/main/cli-discovery.cjs");
 const { stripInputSequences } = require("../src/main/detection-engine.cjs");
 const { createHookServer } = require("../src/main/hook-server.cjs");
 
@@ -64,7 +64,7 @@ function stamp() {
 function usage() {
   console.error(`TermBeacon CLI recorder
 
-  --cli <opencode|codex|claude|generic>  Agent id (used for metadata and default command)
+  --cli <opencode|codex|claude|pi|generic>  Agent id (used for metadata and default command)
   --command <string>                     Override the launched command
   --name <label>                         Capture label (used in the file name)
   --out <path>                           Output JSONL path (default: captures/<cli>-<stamp>.jsonl)
@@ -83,9 +83,10 @@ if (args.help) { usage(); process.exit(0); }
 if (!args.cli && !args.command) { usage(); process.exit(1); }
 
 const agent = String(args.cli || "generic");
-const discovered = discoverAll();
+const discovered = await discoverAll();
 const info = discovered[agent];
-const command = String(args.command || info?.command || agent);
+const shell = isWindows ? (process.env.ComSpec || "cmd.exe") : defaultShell();
+const command = args.command ? String(args.command) : (await getLaunchSpec({ id: agent, shell })).command;
 const label = String(args.name || "capture").replace(/[^a-zA-Z0-9._-]+/g, "-");
 const outPath = path.resolve(String(args.out || path.join("captures", `${agent}-${label}-${stamp()}.jsonl`)));
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -132,8 +133,8 @@ record({
   startedAt: new Date().toISOString(),
 });
 
-const shell = isWindows ? (process.env.ComSpec || "cmd.exe") : defaultShell();
-const shellArgs = isWindows ? ["/d", "/s", "/c", command] : ["-c", command];
+// Keep cmd.exe's quoting intact; node-pty's argv escaping targets C runtimes.
+const shellArgs = isWindows ? `/d /s /c "${command}"` : ["-c", command];
 
 let child;
 let pty;

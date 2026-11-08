@@ -50,14 +50,20 @@ function decodeFileUri(uri, platform = process.platform) {
   return path;
 }
 
-function createOscParser(onTitle, onCwd) {
+function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () => {}) {
   let pending = "";
+  let discarding = false;
 
   function finish(text) {
     // text is the raw payload between "\x1b]N;" and the terminator.
     const semicolon = text.indexOf(";");
     if (semicolon <= 0) return;
     const code = text.slice(0, semicolon);
+    if (code === "9") {
+      const progress = text.slice(semicolon + 1).match(/^4;(\d+);?(\d+)?$/);
+      if (progress) onProgress({ state: Number(progress[1]), progress: progress[2] === undefined ? undefined : Number(progress[2]) });
+      return;
+    }
     const value = sanitizeValue(text.slice(semicolon + 1));
     if (code === "0" || code === "2") {
       if (value) onTitle(value);
@@ -70,44 +76,53 @@ function createOscParser(onTitle, onCwd) {
   }
 
   function feed(chunk) {
-    let buffer = pending + chunk;
+    const buffer = pending + chunk;
+    pending = "";
+    const plain = [];
     let index = 0;
     while (index < buffer.length) {
-      const intro = buffer.indexOf(OSC_INTRO, index);
+      const intro = discarding ? index : buffer.indexOf(OSC_INTRO, index);
       if (intro < 0) {
-        // No sequence start: drop consumed text.
-        pending = "";
-        return;
+        // Even the ESC byte of the introducer may arrive on its own.
+        const trailingEscape = buffer.endsWith("\x1b");
+        plain.push(buffer.slice(index, trailingEscape ? -1 : undefined));
+        if (trailingEscape) pending = "\x1b";
+        break;
       }
-      const after = intro + OSC_INTRO.length;
-      if (after >= buffer.length) {
-        // Chunk ended right after ESC ]: wait for more data.
-        pending = buffer.slice(intro);
-        return;
-      }
+      if (!discarding) plain.push(buffer.slice(index, intro));
+      const after = discarding ? intro : intro + OSC_INTRO.length;
       // Find the terminator: BEL or ESC \, whichever comes first.
       const bel = buffer.indexOf("\x07", after);
       const escBack = buffer.indexOf("\x1b\\", after);
       const end = bel >= 0 && (escBack < 0 || bel < escBack)
         ? { index: bel, length: 1 }
         : escBack >= 0 ? { index: escBack, length: 2 }
-        : undefined;      if (!end) {
-        // Sequence not terminated yet. If it is huge, it is not a title.
-        if (buffer.length - intro > MAX_PENDING_LENGTH) {
-          index = intro + OSC_INTRO.length;
-          pending = "";
-          continue;
-        }
-        pending = buffer.slice(intro);
-        return;
+        : undefined;
+      // A new introducer recovers from a truncated or abandoned sequence.
+      const nextIntro = buffer.indexOf(OSC_INTRO, after);
+      if (nextIntro >= 0 && (!end || nextIntro < end.index)) {
+        discarding = false;
+        index = nextIntro;
+        continue;
       }
-      finish(buffer.slice(after, end.index));
+      if (!end) {
+        if (discarding || buffer.length - intro > MAX_PENDING_LENGTH) {
+          discarding = true;
+          if (buffer.endsWith("\x1b")) pending = "\x1b";
+        } else pending = buffer.slice(intro);
+        break;
+      }
+      if (!discarding && end.index - intro <= MAX_PENDING_LENGTH) finish(buffer.slice(after, end.index));
+      discarding = false;
       index = end.index + end.length;
     }
-    pending = "";
+    // Return only visible text so titles, hyperlinks and clipboard payloads
+    // cannot accidentally match task completion/error expressions.
+    return plain.join("");
   }
 
-  return { feed };
+  function reset() { pending = ""; discarding = false; }
+  return { feed, reset };
 }
 
 module.exports = { createOscParser, sanitizeValue, decodeFileUri };

@@ -43,6 +43,8 @@ function validPayload(payload) {
     && payload.event.length <= MAX_EVENT_LENGTH
     && typeof payload.status === "string"
     && STATUSES.has(payload.status)
+    && (payload.eventId === undefined || (typeof payload.eventId === "string" && payload.eventId.length > 0 && payload.eventId.length <= MAX_FIELD_LENGTH && !/[\u0000-\u001f\u007f]/.test(payload.eventId)))
+    && (payload.occurredAt === undefined || (Number.isSafeInteger(payload.occurredAt) && payload.occurredAt >= 0))
     && (payload.sessionId === undefined || (typeof payload.sessionId === "string" && payload.sessionId.length > 0 && payload.sessionId.length <= MAX_SESSION_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(payload.sessionId)));
 }
 
@@ -50,6 +52,7 @@ function createHookServer({ onEvent } = {}) {
   const token = crypto.randomBytes(24).toString("hex");
   let port = 0;
   let handler = onEvent;
+  const delivered = new Map();
 
   const server = http.createServer((request, response) => {
     let pathname = "";
@@ -94,7 +97,14 @@ function createHookServer({ onEvent } = {}) {
         return;
       }
       try {
-        handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, sessionId: payload.sessionId, at: Date.now() });
+        const key = payload.eventId ? JSON.stringify([payload.terminalId, payload.eventId]) : null;
+        if (!key || !delivered.has(key)) {
+          handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, sessionId: payload.sessionId, eventId: payload.eventId, occurredAt: payload.occurredAt, at: Date.now() });
+          if (key) {
+            delivered.set(key, true);
+            if (delivered.size > 1024) delivered.delete(delivered.keys().next().value);
+          }
+        }
         response.writeHead(204);
         response.end();
       } catch {

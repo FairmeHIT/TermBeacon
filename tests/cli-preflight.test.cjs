@@ -5,6 +5,7 @@ const { containsTermBeaconHook, inspectPreflight } = require("../scripts/cli-pre
 test("preflight detects nested Claude Hook configuration without reading secrets", () => {
   assert.equal(containsTermBeaconHook({ hooks: [{ command: "node C:/TermBeacon/scripts/termbeacon-hook.cjs" }] }), true);
   assert.equal(containsTermBeaconHook({ hooks: [{ command: "node other-hook.cjs" }] }), false);
+  assert.equal(containsTermBeaconHook({ hooks: [{ command: '"C:/Program Files/TermBeacon/TermBeacon.exe" --hook' }] }), true);
 });
 
 test("preflight reports installed CLIs and readiness separately from optional integrations", () => {
@@ -18,7 +19,7 @@ test("preflight reports installed CLIs and readiness separately from optional in
     claudeSettings: true,
   });
   assert.equal(result.readyForOutputCalibration, true);
-  assert.equal(result.readyForInteractiveCalibration, false);
+  assert.equal(result.readyForInteractiveCalibration, true);
   assert.equal(result.cli.claude.version, "2.1.318");
   assert.equal(result.opencodePlugin, false);
 
@@ -29,4 +30,13 @@ test("preflight reports installed CLIs and readiness separately from optional in
     claudeSettings: true,
   });
   assert.equal(complete.readyForInteractiveCalibration, true);
+});
+
+test("preflight checks installed native agents, including Pi, rather than requiring absent CLIs", () => {
+  const input = { discovered: { codex: { installed: true }, pi: { installed: true } }, hookClient: true, opencodePlugin: false, claudeSettings: false };
+  assert.equal(inspectPreflight(input).readyForInteractiveCalibration, false);
+  const ready = inspectPreflight({ ...input, piExtension: true });
+  assert.equal(ready.readyForInteractiveCalibration, true);
+  assert.equal(ready.cli.codex.readyForNativeCalibration, false);
+  assert.equal(ready.cli.pi.readyForNativeCalibration, true);
 });

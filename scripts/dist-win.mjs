@@ -1,71 +1,29 @@
-/**
- * Build the distributable and make sure artifacts end up in the in-repo
- * release/ directory. Some Windows file-locking tools can leave delete-pending
- * EBUSY locks on freshly built files inside the project tree. Build into a
- * scratch directory outside the project, then COPY (not move) the artifacts
- * into release/, which is not affected by the lock. The locked scratch
- * directory is renamed aside and best-effort cleaned.
- */
+/** Build into a fresh scratch directory, then fail closed on copy errors. */
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync, renameSync, existsSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { cpSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { resolve, join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 
-const root = resolve(process.cwd());
-const releaseDir = resolve(root, "release");
-const scratch = process.env.TERMBEACON_BUILD_DIR || resolve(root, "..", "termbeacon-build");
-
-console.log("[dist] building into scratch dir:", scratch);
-const command = process.platform === "win32"
-  ? `npx electron-builder --win --config electron-builder.config.cjs --config.directories.output=${scratch}`
-  : `npx electron-builder --win --config electron-builder.config.cjs --config.directories.output=${scratch}`;
-execFileSync(command, { stdio: "inherit", shell: true });
-
-mkdirSync(releaseDir, { recursive: true });
-function copyTreeBestEffort(from, to) {
-  mkdirSync(to, { recursive: true });
-  for (const child of readdirSync(from, { withFileTypes: true })) {
-    const source = resolve(from, child.name);
-    const target = resolve(to, child.name);
-    if (child.isDirectory()) {
-      copyTreeBestEffort(source, target);
-      continue;
-    }
-    try {
-      cpSync(source, target, { force: true });
-    } catch (error) {
-      console.warn(`[dist] could not copy locked file ${child.name}: ${error.code ?? error.message}`);
-    }
-  }
-}
-
-for (const entry of readdirSync(scratch)) {
-  const from = resolve(scratch, entry);
-  const to = resolve(releaseDir, entry);
-  try {
-    cpSync(from, to, { recursive: true });
-    console.log("[dist] copied:", entry);
-  } catch (error) {
-    if (entry === "win-unpacked" && existsSync(from)) {
-      console.warn(`[dist] win-unpacked contains locked files; copying available files individually: ${error.code ?? error.message}`);
-      copyTreeBestEffort(from, to);
-    } else {
-      console.warn(`[dist] could not copy ${entry}: ${error.code ?? error.message} (the file is lock-remnant debris; skipping)`);
-      rmSync(from, { recursive: true, force: true, maxRetries: 3, retryDelay: 500 });
-    }
-  }
-}
-
-// Best-effort cleanup of the scratch tree; leave a renamed remnant when the
-// driver still holds delete-pending handles, so it does not break the next run.
+const root = resolve(import.meta.dirname, "..");
+const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const release = join(root, "release");
+const base = resolve(process.env.TERMBEACON_BUILD_DIR || tmpdir());
+const scratch = join(base, `termbeacon-build-${version}-${randomUUID()}`);
+if (relative(base, scratch).startsWith("..") || scratch === base) throw new Error("Invalid scratch directory");
+mkdirSync(scratch, { recursive: true });
+console.log("[dist] building in", scratch);
 try {
-  rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 1000 });
-  console.log("[dist] scratch cleaned");
-} catch {
-  const stale = scratch + "-locked";
-  try { if (existsSync(stale)) rmSync(stale, { recursive: true, force: true, maxRetries: 3 }); } catch { /* give up on older remnant */ }
-  try { renameSync(scratch, stale); console.log("[dist] scratch renamed aside as", stale, "(will clean after reboot)"); } catch (error) {
-    console.warn("[dist] scratch could not be renamed:", error.code, "- next build will retry into it");
+  execFileSync(process.execPath, [join(root, "node_modules/electron-builder/out/cli/cli.js"), "--win", "--publish", "never", "--config", "electron-builder.config.cjs", `--config.directories.output=${scratch}`], { cwd: root, stdio: "inherit", windowsHide: true });
+  mkdirSync(release, { recursive: true });
+  // Copy the manifest last. A failed copy can never advertise a ready release.
+  for (const name of ["win-unpacked", `TermBeacon-${version}-setup.exe`, `TermBeacon-${version}-setup.exe.blockmap`, "latest.yml"]) {
+    cpSync(join(scratch, name), join(release, name), { recursive: true, force: true });
+    console.log("[dist] copied", name);
   }
+} finally {
+  // Only this invocation's freshly created child directory is eligible.
+  try { rmSync(scratch, { recursive: true, force: true, maxRetries: 2, retryDelay: 200 }); }
+  catch (error) { console.warn(`[dist] scratch retained at ${scratch}: ${error.code}`); }
 }
-
-console.log("[dist] artifacts in:", releaseDir);
+console.log("[dist] artifacts in", release);

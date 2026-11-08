@@ -1,21 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const processPath = require("node:path").delimiter;
-const { discoveryPath, firstOutputLine, version } = require("../src/main/cli-discovery.cjs");
+const { discoverAll } = require("../src/main/cli-discovery.cjs");
 
-test("discovery path preserves PATH entries and adds macOS tool locations", () => {
-  const value = discoveryPath({ PATH: "/custom/bin" });
-  assert.ok(value.split(processPath).includes("/custom/bin"));
-  if (process.platform === "darwin") assert.ok(value.split(processPath).includes("/opt/homebrew/bin"));
-});
-
-test("version reads the first line from a directly executable CLI", () => {
-  const value = version("node", process.execPath);
-  assert.match(value || "", /^v\d+/);
-});
-
-test("first output line is bounded and handles empty output", () => {
-  assert.equal(firstOutputLine(""), undefined);
-  assert.equal(firstOutputLine("first\nsecond"), "first");
-  assert.equal(firstOutputLine("x".repeat(200)).length, 160);
+test("development discovery preserves the selected source and diagnostics", async () => {
+  const agents = [{ id: "pi", source: "managed", installed: true, executable: "managed/pi", version: "1.5.0", integration: { state: "configured" } }, { id: "codex", installed: true, error: "version unavailable" }];
+  const result = await discoverAll({ scan: async () => ({ agents }) });
+  assert.equal(result.pi, agents[0]);
+  assert.equal(result.codex.error, "version unavailable");
+  assert.equal(Object.keys(result).length, 2);
 });

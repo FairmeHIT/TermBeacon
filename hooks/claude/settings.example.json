@@ -50,7 +50,17 @@
         ]
       }
     ],
-    "SubagentStop": [
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"C:/path/to/TermBeacon/scripts/termbeacon-hook.cjs\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
       {
         "hooks": [
           {

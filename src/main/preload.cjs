@@ -5,6 +5,8 @@ const queued = [];
 const pendingCreates = new Map();
 const replayNeeds = new Map();
 const consumedSequences = new Map();
+const outputStreams = new Map();
+let activeFlowId = null;
 const outputListeners = new Set();
 const stateListeners = new Set();
 const snapshotListeners = new Set();
@@ -58,6 +60,10 @@ function handleDataMessage(payload) {
     if (pending) {
       clearTimeout(pending.timer);
       pendingCreates.delete(payload.requestId);
+      if (!payload.existing) {
+        consumedSequences.delete(payload.terminalId);
+        outputStreams.delete(payload.terminalId);
+      }
       pending.resolve(payload);
     }
     return;
@@ -77,9 +83,13 @@ function handleDataMessage(payload) {
     return;
   }
   if (payload.type === "pty:output") {
-    if (typeof payload.terminalId === "string" && Number.isInteger(payload.sequence)) {
-      consumedSequences.set(payload.terminalId, Math.max(consumedSequences.get(payload.terminalId) || 0, payload.sequence));
+    if (payload.streamId && outputStreams.get(payload.terminalId) !== payload.streamId) {
+      outputStreams.set(payload.terminalId, payload.streamId);
+      consumedSequences.delete(payload.terminalId);
     }
+    // Output can arrive before React subscribes. Release transport credits but
+    // never call it consumed until xterm's write callback confirms parsing.
+    if (outputListeners.size === 0) acknowledgeOutput(payload, false);
     outputListeners.forEach((listener) => listener(payload));
   }
   if (payload.type === "state:update") stateListeners.forEach((listener) => listener(payload));
@@ -93,6 +103,7 @@ function handleDataMessage(payload) {
   if (payload.type === "pty:agent") agentListeners.forEach((listener) => listener(payload));
   if (payload.type === "session:update") sessionListeners.forEach((listener) => listener(payload));
   if (payload.type === "pty:host-ready") {
+    activeFlowId = payload.flowId || null;
     hostListeners.forEach((listener) => listener(payload));
     // Renderer reconnected to a (possibly restarted) host: request replay of
     // any buffered output beyond what this renderer already consumed.
@@ -105,16 +116,29 @@ function handleDataMessage(payload) {
   }
 }
 
+function acknowledgeOutput(event, consumed = true) {
+  if (!dataPort || !activeFlowId || event?.flowId !== activeFlowId) return;
+  if (!Number.isSafeInteger(event.deliveryId) || !Number.isInteger(event.sequence)) return;
+  if (consumed && (!event.streamId || outputStreams.get(event.terminalId) === event.streamId)) {
+    consumedSequences.set(event.terminalId, Math.max(consumedSequences.get(event.terminalId) || 0, event.sequence));
+  }
+  // ACKs belong to one connection; never queue them across reconnects.
+  try { dataPort.postMessage({ type: "pty:output-ack", flowId: activeFlowId, deliveryId: event.deliveryId }); } catch { /* reconnect will replay unconsumed output */ }
+}
+
 ipcRenderer.on("pty:connect", (_event) => {
   const nextPort = _event.ports[0];
   if (!nextPort) return;
   try { dataPort?.close(); } catch { /* old port may already be closed */ }
   dataPort = nextPort;
+  activeFlowId = null;
   // A different host may own this port; never replay a snapshot from the old one.
   latestSnapshot = null;
-  dataPort.onmessage = (messageEvent) => handleDataMessage(messageEvent.data);
+  dataPort.onmessage = (messageEvent) => { if (dataPort === nextPort) handleDataMessage(messageEvent.data); };
   dataPort.onmessageerror = () => {
+    if (dataPort !== nextPort) return;
     dataPort = null;
+    activeFlowId = null;
     if (consumedSequences.size > 0) {
       for (const [terminalId, sequenceNumber] of consumedSequences) replayNeeds.set(terminalId, sequenceNumber);
     }
@@ -128,6 +152,10 @@ ipcRenderer.on("pty:connect", (_event) => {
 
 ipcRenderer.on("pty:host-exit", (_event, payload) => {
   dataPort = null;
+  activeFlowId = null;
+  if (payload?.type === "pty:host-disconnected") {
+    for (const [terminalId, sequenceNumber] of consumedSequences) replayNeeds.set(terminalId, sequenceNumber);
+  }
   queued.length = 0;
   rejectPendingCreates(Object.assign(new Error(payload?.message || "PTY host exited"), payload || {}));
   hostListeners.forEach((listener) => listener(payload));
@@ -135,7 +163,16 @@ ipcRenderer.on("pty:host-exit", (_event, payload) => {
 
 contextBridge.exposeInMainWorld("termbeacon", {
   loadState: () => ipcRenderer.invoke("state:load"),
-  discoverCli: () => ipcRenderer.invoke("cli:discover"),
+  scanCli: () => ipcRenderer.invoke("cli:scan"),
+  planCli: (request) => ipcRenderer.invoke("cli:plan", request),
+  executeCli: (request) => ipcRenderer.invoke("cli:execute", request),
+  getCliLaunchSpec: (request) => ipcRenderer.invoke("cli:launch-spec", request),
+  openCliDocs: (id) => ipcRenderer.invoke("cli:docs", id),
+  onCliProgress: (listener) => {
+    const handler = (_event, payload) => listener(payload);
+    ipcRenderer.on("cli:progress", handler);
+    return () => ipcRenderer.removeListener("cli:progress", handler);
+  },
   getPlatformInfo: () => ipcRenderer.invoke("platform:info"),
   pickCwd: () => ipcRenderer.invoke("cwd:pick"),
   loadHistory: (terminalId) => ipcRenderer.invoke("history:load", terminalId),
@@ -145,10 +182,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
   getUpdateState: () => ipcRenderer.invoke("update:state"),
   checkForUpdates: () => ipcRenderer.invoke("update:check"),
   getResumeSpec: (request) => ipcRenderer.invoke("session:resume-spec", request),
-  getIntegrationStatus: () => ipcRenderer.invoke("integration:status"),
-  installOpencodePlugin: () => ipcRenderer.invoke("integration:install-opencode"),
-  configureClaudeHook: () => ipcRenderer.invoke("integration:configure-claude"),
-  restartHost: () => ipcRenderer.invoke("pty:restart-host"),
+  restartHost: (request) => ipcRenderer.invoke("pty:restart-host", request),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   createTerminal: (request) => {
     const requestId = crypto.randomUUID();
@@ -168,7 +202,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
           at: Date.now(),
         }));
       }, 10000);
-      pendingCreates.set(requestId, { resolve, reject, timer });
+      pendingCreates.set(requestId, { resolve, reject, timer, terminalId: request?.terminalId });
       send({ type: "pty:create", requestId, ...request });
     });
   },
@@ -176,6 +210,20 @@ contextBridge.exposeInMainWorld("termbeacon", {
   launch: (request) => send({ type: "pty:write", ...request, launch: true }),
   resize: (request) => send({ type: "pty:resize", ...request }),
   replay: (request) => send({ type: "pty:replay-request", ...request }),
+  acknowledgeOutput,
+  forget: (terminalId) => {
+    for (const [requestId, pending] of pendingCreates) {
+      if (pending.terminalId !== terminalId) continue;
+      clearTimeout(pending.timer);
+      pendingCreates.delete(requestId);
+      removeQueued(requestId);
+      pending.reject(Object.assign(new Error("Terminal creation cancelled"), { code: "CANCELLED", terminalId }));
+    }
+    consumedSequences.delete(terminalId);
+    outputStreams.delete(terminalId);
+    replayNeeds.delete(terminalId);
+    send({ type: "pty:forget", terminalId });
+  },
   kill: (request) => send({ type: "pty:kill", ...request }),
   viewed: (terminalId) => send({ type: "state:viewed", terminalId }),
   rebuildDetector: (request) => send({ type: "state:rebuild-detector", ...request }),

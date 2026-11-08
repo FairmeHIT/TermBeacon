@@ -195,28 +195,18 @@ test("Claude task titles stay in the sidebar while OSC status labels are ignored
   assert.match(app, /titlePinned: false/);
 });
 
-test("settings popover is mounted outside the clipped sidebar", () => {
-  const footer = app.match(/<div className="sidebar-footer">([\s\S]*?)<\/div>/)?.[1];
-  assert.ok(footer, "sidebar footer must exist");
-  assert.equal(footer.includes('className="settings-popover"'), false);
-  const sidebarEnd = app.indexOf("</aside>");
-  const popoverStart = app.indexOf('className="settings-popover"');
-  assert.ok(sidebarEnd >= 0 && popoverStart > sidebarEnd, "popover must follow the sidebar in the app shell");
-});
-
-test("settings popover uses app-level positioning beside the sidebar", () => {
-  const rule = styles.match(/\.settings-popover\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(rule, "settings popover styles must exist");
-  assert.match(rule, /left:\s*calc\(var\(--sidebar-width\) - 226px\)/);
-  assert.match(rule, /bottom:\s*47px/);
-});
-
-test("optional CLI integration is collapsed by default", () => {
-  assert.match(app, /const \[integrationOpen, setIntegrationOpen\] = useState\(false\)/);
-  assert.match(app, /className="settings-section-toggle" aria-expanded=\{integrationOpen\}/);
-  assert.match(app, /\{integrationOpen && <div className="integration-panel">/);
-  assert.match(app, /<span>CLI 集成 <small>可选<\/small><\/span>/);
-  assert.match(styles, /\.settings-section-toggle\s*\{/);
+test("settings occupy an independent page while terminal views remain mounted", () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "../src/renderer/settings.css"), "utf8");
+  assert.match(app, /settingsOpen && <SettingsPage/);
+  assert.match(app, /settingsOpen \? "settings-hidden"/);
+  assert.match(app, /className="terminal-stage" ref=\{terminalStage\}/);
+  assert.doesNotMatch(app, /settings-popover/);
+  assert.match(css, /\.workspace\.settings-hidden \{ display: none; \}/);
+  assert.match(settings, /aria-label=\{t\("设置分类"\)\}/);
+  assert.match(settings, /返回终端/);
+  assert.match(settings, /常规/);
+  assert.match(settings, /Agent CLI/);
 });
 
 test("generic input only treats a complete CLI command as an agent launch", () => {

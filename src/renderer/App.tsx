@@ -3,7 +3,10 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyOutputEvent, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateSnapshotEvent, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
+import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyHostReadyEvent, PtyOutputEvent, PtyOutputReceipt, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateSnapshotEvent, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
+import SettingsPage from "./SettingsPage";
+import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, settingsText, type SettingsLocale } from "./settings-i18n";
+import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
 import { splitScreenOutput } from "./terminal-screen";
@@ -25,29 +28,17 @@ const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
 // Mirrors the payload the main process sends on update:event and returns from
 // update:check / update:state.
 type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
-type IntegrationStatus = {
-  assetsAvailable: boolean;
-  opencodePluginInstalled: boolean;
-  claudeHookConfigured: boolean;
-  opencodePluginPath: string;
-  claudeSettingsPath: string;
-  hookScriptPath: string;
-};
-
 declare global {
-  interface CliInfo {
-    id: AgentType;
-    command: string;
-    installed: boolean;
-    executable?: string;
-    version?: string;
-  }
-
   interface Window {
     termbeacon: {
       loadState(): Promise<PersistedState>;
       saveState(state: PersistedState): Promise<boolean>;
-      discoverCli(): Promise<Record<string, CliInfo>>;
+      scanCli(): Promise<CliScan>;
+      planCli(request: { id: AgentCliId; action: CliAction }): Promise<CliPlan>;
+      executeCli(request: { token: string }): Promise<unknown>;
+      getCliLaunchSpec(request: { id: AgentCliId; shell: ShellType }): Promise<{ command: string }>;
+      openCliDocs(id: AgentCliId): Promise<void>;
+      onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
       pickCwd(): Promise<string | null>;
       loadHistory(terminalId: string): Promise<string>;
@@ -56,16 +47,15 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
-      getIntegrationStatus(): Promise<IntegrationStatus>;
-      installOpencodePlugin(): Promise<{ target: string; existed: boolean; bytes: number }>;
-      configureClaudeHook(): Promise<{ target: string; backupPath?: string; hookScript: string }>;
       getResumeSpec(request: { agentType?: AgentType; sessionId?: string; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string }>;
-      restartHost(): Promise<boolean>;
+      restartHost(request?: { force: boolean }): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
       launch(request: unknown): void;
       resize(request: unknown): void;
       replay(request: unknown): void;
+      acknowledgeOutput(event: PtyOutputReceipt, consumed?: boolean): void;
+      forget(terminalId: string): void;
       kill(request: unknown): void;
       viewed(terminalId: string): void;
       rebuildDetector(request: unknown): void;
@@ -74,31 +64,13 @@ declare global {
       onSnapshot(listener: (event: StateSnapshotEvent) => void): () => void;
       onExit(listener: (event: PtyExitEvent) => void): () => void;
       onError(listener: (event: PtyErrorEvent) => void): () => void;
-      onHost(listener: (event: PtyHostExitEvent) => void): () => void;
+      onHost(listener: (event: PtyHostExitEvent | PtyHostReadyEvent) => void): () => void;
       onTitle(listener: (event: PtyTitleEvent) => void): () => void;
       onCwd(listener: (event: PtyCwdEvent) => void): () => void;
       onAgent(listener: (event: PtyAgentEvent) => void): () => void;
       onSession(listener: (event: PtySessionEvent) => void): () => void;
       onUpdate(listener: (event: UpdateStatus) => void): () => void;
     };
-  }
-}
-
-// One line of feedback for the settings popover, derived from the last update
-// event so it stays in sync with the banner above the terminal.
-function describeUpdate(status: UpdateStatus | null, packaged: boolean) {
-  if (!packaged) return "开发模式（未打包），不检查更新";
-  if (!status) return "";
-  switch (status.type) {
-    case "checking": return status.message || "正在检查更新…";
-    case "available": return `发现新版本 ${status.version ?? ""}，正在后台下载…`;
-    case "downloading": return `正在下载更新 ${Math.round(status.percent || 0)}%`;
-    case "not-available": return "已是最新版本";
-    case "downloaded": return `新版本 ${status.version ?? ""} 已下载，重启应用即可安装`;
-    case "disabled": return "已禁用更新检查（TERMBEACON_DISABLE_UPDATES=1）";
-    case "unsupported": return status.message ?? "当前版本不支持自动更新";
-    case "error": return `检查失败：${status.message ?? "未知错误"}`;
-    default: return "";
   }
 }
 
@@ -125,6 +97,7 @@ const agentLabel: Record<AgentType, string> = {
   opencode: "opencode",
   codex: "Codex",
   claude: "Claude Code",
+  pi: "Pi",
 };
 
 const shellLabel: Record<string, string> = {
@@ -303,6 +276,8 @@ function App() {
     return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLocale, setSettingsLocale] = useState<SettingsLocale>(() => readSettingsLocale(window.localStorage));
+  useEffect(() => { saveSettingsLocale(window.localStorage, settingsLocale); }, [settingsLocale]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("termbeacon-sidebar-collapsed") === "true");
   const [hostDown, setHostDown] = useState(false);
   const [hostMessage, setHostMessage] = useState("");
@@ -311,18 +286,16 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [appPackaged, setAppPackaged] = useState(true);
   const [updateBusy, setUpdateBusy] = useState(false);
-  const [integration, setIntegration] = useState<IntegrationStatus | null>(null);
-  const [integrationBusy, setIntegrationBusy] = useState<"opencode" | "claude" | null>(null);
-  const [integrationMessage, setIntegrationMessage] = useState("");
-  const [integrationOpen, setIntegrationOpen] = useState(false);
+  const pendingCliLaunch = useRef(new Map<string, string>());
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
   const fitAddons = useRef(new Map<string, FitAddon>());
   const consumedLocal = useRef(new Map<string, number>());
+  const outputStreams = useRef(new Map<string, string>());
+  const activityAt = useRef(new Map<string, number>());
   const terminalStage = useRef<HTMLDivElement | null>(null);
   const workspaceStrip = useRef<HTMLDivElement | null>(null);
-  const pendingOutput = useRef(new Map<string, { at: number; summary?: string }>());
-  const pendingHistory = useRef(new Map<string, string[]>());
+  const pendingHistory = useRef(new Map<string, { chunks: string[]; start: number; length: number }>());
   const alternateScreenByTerminal = useRef(new Map<string, boolean>());
   const pendingOpenCodeWheel = useRef(new Map<string, { data: string; frame: number }>());
   const taskTitles = useRef(new Map<string, string>());
@@ -330,7 +303,6 @@ function App() {
   const lastSavedState = useRef("");
   const restoredTerminalIds = useRef(new Set<string>());
   const previouslyActiveTasks = useRef(new Map<string, TaskRecord>());
-  const outputFlushTimer = useRef<number | null>(null);
   const agentTypeByTerminal = useRef(new Map<string, AgentType>());
   const lastInput = useRef(new Map<string, string>());
   const inputBuffers = useRef(new Map<string, string>());
@@ -372,9 +344,9 @@ function App() {
   function flushPendingHistory() {
     const pending = new Map(pendingHistory.current);
     pendingHistory.current.clear();
-    pending.forEach((chunks, terminalId) => {
-      if (chunks.length > 0) {
-        void window.termbeacon.appendHistory(terminalId, chunks.join("")).catch((error) => {
+    pending.forEach(({ chunks, start }, terminalId) => {
+      if (chunks.length > start) {
+        void window.termbeacon.appendHistory(terminalId, chunks.slice(start).join("")).catch((error) => {
           console.error(`[history] save failed for ${terminalId}`, error);
         });
       }
@@ -489,40 +461,59 @@ function App() {
     });
     const disposeOutput = window.termbeacon.onOutput((event) => {
       const view = terminalViews.current.get(event.terminalId);
-      if (view && event.replay && consumedLocal.current.has(event.terminalId) && (consumedLocal.current.get(event.terminalId) ?? 0) >= event.sequence) return;
+      // Return only the receipt across contextBridge, not a second copy of
+      // the terminal payload, and don't retain that payload in write callbacks.
+      const receipt = { terminalId: event.terminalId, sequence: event.sequence, streamId: event.streamId, flowId: event.flowId, deliveryId: event.deliveryId };
+      if (!view) window.termbeacon.acknowledgeOutput(receipt, false);
+      if (event.streamId && outputStreams.current.get(event.terminalId) !== event.streamId) {
+        outputStreams.current.set(event.terminalId, event.streamId);
+        consumedLocal.current.delete(event.terminalId);
+      }
+      if (view && event.replay && consumedLocal.current.has(event.terminalId) && (consumedLocal.current.get(event.terminalId) ?? 0) >= event.sequence) {
+        window.termbeacon.acknowledgeOutput(receipt, false);
+        return;
+      }
       if (view && Number.isInteger(event.sequence)) {
         const seen = consumedLocal.current.get(event.terminalId) ?? 0;
-        if (event.sequence <= seen && !event.replay) return;
+        if (event.sequence <= seen && !event.replay) {
+          window.termbeacon.acknowledgeOutput(receipt, false);
+          return;
+        }
         consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
       }
       const screen = splitScreenOutput(event.data, alternateScreenByTerminal.current.get(event.terminalId) ?? false);
       alternateScreenByTerminal.current.set(event.terminalId, screen.alternate);
-      view?.write(event.data);
+      view?.write(event.data, () => window.termbeacon.acknowledgeOutput(receipt));
+      activityAt.current.set(event.terminalId, event.at);
       if (!event.replay && screen.normalData) {
-        const chunks = pendingHistory.current.get(event.terminalId) || [];
-        chunks.push(screen.normalData);
-        pendingHistory.current.set(event.terminalId, chunks);
+        const pending = pendingHistory.current.get(event.terminalId) || { chunks: [], start: 0, length: 0 };
+        pending.chunks.push(screen.normalData);
+        pending.length += screen.normalData.length;
+        // Only a bounded tail is persisted. Limit batches before the timer
+        // fires too, including when background-window timers are throttled.
+        while (pending.length > 250_000) {
+          const first = pending.chunks[pending.start];
+          const discard = Math.min(first.length, pending.length - 250_000);
+          if (discard === first.length) {
+            pending.chunks[pending.start++] = "";
+            pending.length -= first.length;
+          } else {
+            const tail = first.slice(discard).replace(/^[\uDC00-\uDFFF]/, "");
+            pending.chunks[pending.start] = tail;
+            pending.length -= first.length - tail.length;
+          }
+        }
+        if (pending.start > 64 && pending.start * 2 >= pending.chunks.length) {
+          pending.chunks = pending.chunks.slice(pending.start);
+          pending.start = 0;
+        }
+        pendingHistory.current.set(event.terminalId, pending);
         if (historyFlushTimer.current === null) {
           historyFlushTimer.current = window.setTimeout(() => {
             historyFlushTimer.current = null;
             flushPendingHistory();
           }, 750);
         }
-      }
-      // Sidebar summaries are cosmetic; coalesce them so a fast PTY stream does
-      // not re-render the whole app on every chunk. xterm writes stay immediate.
-      pendingOutput.current.set(event.terminalId, { at: event.at, summary: event.summary });
-      if (outputFlushTimer.current === null) {
-        outputFlushTimer.current = window.setTimeout(() => {
-          outputFlushTimer.current = null;
-          const pending = new Map(pendingOutput.current);
-          pendingOutput.current.clear();
-          if (pending.size === 0) return;
-          setTerminals((items) => items.map((item) => {
-            const update = pending.get(item.id);
-            return update ? { ...item, lastActivityAt: update.at, lastOutputSummary: update.summary ?? item.lastOutputSummary } : item;
-          }));
-        }, 100);
       }
     });
     const disposeSnapshot = window.termbeacon.onSnapshot((event) => {
@@ -554,10 +545,11 @@ function App() {
     });
     const disposeError = window.termbeacon.onError((event) => {
       if (!event.terminalId) return;
+      const terminalId = event.terminalId;
       setTerminals((items) => items.map((item) => item.id === event.terminalId
         ? { ...item, alive: false, state: "error", recoveryState: item.recoveryState === "recovering" ? "unsupported" : item.recoveryState, resumeError: item.recoveryState === "recovering" ? String(event.message || "恢复命令失败").slice(-500) : item.resumeError, lastOutputSummary: String(event.message || "PTY request failed").slice(-90) }
         : item));
-      setTasks((items) => settleTaskRecords(items, event.terminalId, "error", event.at, event.message));
+      setTasks((items) => settleTaskRecords(items, terminalId, "error", event.at, event.message));
     });
     const disposeHost = window.termbeacon.onHost((event) => {
       if (event.type === "pty:host-ready") {
@@ -617,7 +609,6 @@ function App() {
       setAppPackaged(info.packaged);
       if (info.status.type !== "idle") setUpdateState(info.status);
     }).catch(() => undefined);
-    void window.termbeacon.getIntegrationStatus().then(setIntegration).catch(() => undefined);
     const flushOnVisibilityChange = () => { if (document.visibilityState === "hidden") flushPendingHistory(); };
     document.addEventListener("visibilitychange", flushOnVisibilityChange);
     window.addEventListener("beforeunload", flushPendingHistory);
@@ -626,10 +617,6 @@ function App() {
       document.removeEventListener("visibilitychange", flushOnVisibilityChange);
       window.removeEventListener("beforeunload", flushPendingHistory);
       flushPendingHistory();
-      if (outputFlushTimer.current !== null) {
-        window.clearTimeout(outputFlushTimer.current);
-        outputFlushTimer.current = null;
-      }
       if (historyFlushTimer.current !== null) {
         window.clearTimeout(historyFlushTimer.current);
         historyFlushTimer.current = null;
@@ -725,6 +712,7 @@ function App() {
       void (async () => {
         try {
           const history = await window.termbeacon.loadHistory(terminal.id);
+          if (terminalViews.current.get(terminal.id) !== term) return;
           if (history && terminalViews.current.get(terminal.id) === term) {
             const replay = splitScreenOutput(history);
             term.write(replay.normalData);
@@ -739,6 +727,11 @@ function App() {
             rows,
             agentType: terminal.agentType,
           });
+          const pendingCommand = pendingCliLaunch.current.get(terminal.id);
+          if (pendingCommand) {
+            pendingCliLaunch.current.delete(terminal.id);
+            window.termbeacon.launch({ terminalId: terminal.id, data: `${pendingCommand}\r` });
+          }
           const existing = Boolean((result as { existing?: boolean } | undefined)?.existing);
           const restored = restoredTerminalIds.current.delete(terminal.id);
           // Disk history excludes alternate-screen output, so it cannot tell
@@ -797,7 +790,7 @@ function App() {
         agentType: terminal.agentType,
         state: terminal.state,
         alive: false,
-        lastActivityAt: terminal.lastActivityAt || 0,
+        lastActivityAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0,
         ...(terminal.lastSessionId ? { lastSessionId: terminal.lastSessionId } : {}),
         ...(terminal.resumeAvailable !== undefined ? { resumeAvailable: terminal.resumeAvailable } : {}),
         ...(terminal.recoveryState ? { recoveryState: terminal.recoveryState } : {}),
@@ -855,6 +848,8 @@ function App() {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") { event.preventDefault(); setSettingsOpen(true); return; }
+      if (settingsOpen) return;
       if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return;
       const key = event.key.toLowerCase();
       if (key === "t") {
@@ -878,7 +873,7 @@ function App() {
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [activeId, workspaceTerminals, terminals, workspaces, activeWorkspaceId]);
+  }, [activeId, workspaceTerminals, terminals, workspaces, activeWorkspaceId, settingsOpen]);
 
   // Last cols/rows actually sent to the PTY per terminal. xterm's local size
   // changes instantly on fit(), but the pty-side resize travels an async IPC
@@ -950,7 +945,7 @@ function App() {
     });
   }
 
-  // Manual check from the settings popover. The main process keeps a single
+  // Manual check from the settings page. The main process keeps a single
   // in-flight check, so a double click just returns the current status.
   async function checkForUpdates() {
     setUpdateBusy(true);
@@ -965,35 +960,7 @@ function App() {
     }
   }
 
-  async function installOpencodePlugin() {
-    setIntegrationBusy("opencode");
-    setIntegrationMessage("");
-    try {
-      const result = await window.termbeacon.installOpencodePlugin();
-      setIntegration(await window.termbeacon.getIntegrationStatus());
-      setIntegrationMessage(`opencode 插件已${result.existed ? "更新" : "安装"}，请重启或 reload opencode`);
-    } catch (error) {
-      setIntegrationMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIntegrationBusy(null);
-    }
-  }
-
-  async function configureClaudeHook() {
-    setIntegrationBusy("claude");
-    setIntegrationMessage("");
-    try {
-      const result = await window.termbeacon.configureClaudeHook();
-      setIntegration(await window.termbeacon.getIntegrationStatus());
-      setIntegrationMessage(`Claude Hook 已配置${result.backupPath ? "，原配置已备份" : ""}`);
-    } catch (error) {
-      setIntegrationMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIntegrationBusy(null);
-    }
-  }
-
-  const updateHint = describeUpdate(updateState, appPackaged);
+  const updateHint = describeSettingsUpdate(settingsLocale, updateState, appPackaged);
 
   function restartTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
@@ -1070,11 +1037,29 @@ function App() {
   }
 
   function selectTerminal(id: string) {
+    setSettingsOpen(false);
     setActiveId(id);
     window.termbeacon.viewed(id);
     setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
     focusTerminalView(id);
   }
+
+  async function launchCli(id: AgentCliId) {
+    const spec = await window.termbeacon.getCliLaunchSpec({ id, shell: defaultShell });
+    const terminal = newTerminal(terminals.length + 1, defaultShell, activeWorkspace?.cwd || DEFAULT_CWD);
+    terminal.agentType = id;
+    terminal.title = agentLabel[id];
+    pendingCliLaunch.current.set(terminal.id, spec.command);
+    setTerminals((items) => [...items, terminal]);
+    setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
+    setActiveId(terminal.id);
+    setSettingsOpen(false);
+  }
+
+  useEffect(() => {
+    if (settingsOpen) terminalViews.current.get(activeId)?.blur();
+    else requestAnimationFrame(() => { schedulePtyFit(activeId, 0); terminalViews.current.get(activeId)?.focus(); });
+  }, [settingsOpen]);
 
   function toggleSidebar() {
     const next = !sidebarCollapsed;
@@ -1085,6 +1070,7 @@ function App() {
 
   // Terminals created inside a workspace start in the workspace's folder.
   function addTerminal() {
+    setSettingsOpen(false);
     const workspaceCwd = activeWorkspace?.cwd;
     const terminal = newTerminal(terminals.length + 1, defaultShell, workspaceCwd && isValidCwd(workspaceCwd) ? workspaceCwd : DEFAULT_CWD);
     setTerminals((items) => [...items, terminal]);
@@ -1096,7 +1082,7 @@ function App() {
     const target = terminals.find((item) => item.id === id);
     if (!target) return;
     if (!window.confirm(`删除终端「${target.title}」？正在运行的进程会被停止。`)) return;
-    if (target.alive) window.termbeacon.kill({ terminalId: id, reason: "user-kill" });
+    window.termbeacon.forget(id);
     const view = terminalViews.current.get(id);
     if (view) {
       try { view.dispose(); } catch { /* view may already be disposed */ }
@@ -1104,6 +1090,8 @@ function App() {
     terminalViews.current.delete(id);
     fitAddons.current.delete(id);
     consumedLocal.current.delete(id);
+    outputStreams.current.delete(id);
+    activityAt.current.delete(id);
     terminalNodes.current.delete(id);
     pendingHistory.current.delete(id);
     alternateScreenByTerminal.current.delete(id);
@@ -1111,6 +1099,7 @@ function App() {
     if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
     pendingOpenCodeWheel.current.delete(id);
     taskTitles.current.delete(id);
+    pendingCliLaunch.current.delete(id);
     agentTypeByTerminal.current.delete(id);
     lastInput.current.delete(id);
     inputBuffers.current.delete(id);
@@ -1137,6 +1126,7 @@ function App() {
   }
 
   function selectWorkspace(id: string) {
+    setSettingsOpen(false);
     setActiveWorkspaceId(id);
     const nextTerminalId = workspaces.find((workspace) => workspace.id === id)?.terminalIds[0];
     if (nextTerminalId && terminals.some((terminal) => terminal.id === nextTerminalId)) {
@@ -1182,8 +1172,7 @@ function App() {
     if (!target) return;
     if (!window.confirm(`删除工作区「${target.name}」及其中的 ${target.terminalIds.length} 个终端？${target.cwd ? `\n（目录：${target.cwd}）` : ""}`)) return;
     target.terminalIds.forEach((terminalId) => {
-      const terminal = terminals.find((item) => item.id === terminalId);
-      if (terminal?.alive) window.termbeacon.kill({ terminalId, reason: "user-kill" });
+      window.termbeacon.forget(terminalId);
     });
     const removedIds = new Set(target.terminalIds);
     removedIds.forEach((id) => pinnedTitles.current.delete(id));
@@ -1192,6 +1181,8 @@ function App() {
       terminalViews.current.delete(terminalId);
       fitAddons.current.delete(terminalId);
       consumedLocal.current.delete(terminalId);
+      outputStreams.current.delete(terminalId);
+      activityAt.current.delete(terminalId);
       terminalNodes.current.delete(terminalId);
       pendingHistory.current.delete(terminalId);
       alternateScreenByTerminal.current.delete(terminalId);
@@ -1240,7 +1231,7 @@ function App() {
       : item));
   }
 
-  return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+  return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${settingsOpen ? "settings-mode" : ""}`}>
     <aside className="sidebar">
       {!sidebarCollapsed && <>
       <div className="brand-row"><div className="brand-lockup"><BrandMark /><div className="brand">TermBeacon</div></div></div>
@@ -1289,42 +1280,17 @@ function App() {
       <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title="拖动调整侧栏宽度" />
       </>}
     </aside>
-    {settingsOpen && <div className="settings-popover">
-      <div className="settings-title">设置</div>
-      <div className="settings-caption">主题</div>
-      <div className="theme-options" role="group" aria-label="主题">
-        {(["dark", "light"] as Theme[]).map((option) => <button key={option} className={`theme-option ${theme === option ? "selected" : ""}`} onClick={() => setTheme(option)}><ThemeIcon theme={option} />{option === "dark" ? "深色" : "浅色"}</button>)}
-      </div>
-      <div className="settings-caption">默认 Shell</div>
-      <select className="shell-select" value={defaultShell} onChange={(event) => setDefaultShell(event.target.value as ShellType)} aria-label="默认 Shell">
-        {SHELL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-      <div className="settings-caption">更新</div>
-      <div className="settings-update">
-        <span>{appVersion ? `当前版本 ${appVersion}` : "当前版本未知"}</span>
-        <button onClick={() => void checkForUpdates()} disabled={updateBusy || updateState?.type === "downloading"}>{updateBusy ? "检查中…" : "检查更新"}</button>
-      </div>
-      {updateHint && <div className={`settings-hint ${updateState?.type === "error" ? "error" : ""}`}>{updateHint}</div>}
-      {updateState?.type === "downloaded" && <button className="settings-install" onClick={() => void window.termbeacon.installUpdate()}>重启并安装 {updateState.version || "新版本"}</button>}
-      <button type="button" className="settings-section-toggle" aria-expanded={integrationOpen} onClick={() => setIntegrationOpen((open) => !open)}>
-        <span>CLI 集成 <small>可选</small></span>
-        <ChevronIcon open={integrationOpen} />
-      </button>
-      {integrationOpen && <div className="integration-panel">
-        <div className="settings-hint">用于更准确识别 opencode 和 Claude Code 的工作状态。</div>
-        <div className="settings-hint">未安装插件时 opencode 的完成检测受限：只能看到任务开始，任务结束后可能一直停在「工作中」。插件只对从 TermBeacon 终端启动的 opencode 生效（启动时会自动加 --standalone），装好插件后需要重启 opencode。</div>
-        <div className="integration-row">
-          <span>opencode 插件</span>
-          <button onClick={() => void installOpencodePlugin()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "opencode" ? "处理中…" : integration?.opencodePluginInstalled ? "更新" : "安装"}</button>
-        </div>
-        <div className="integration-row">
-          <span>Claude Hook</span>
-          <button onClick={() => void configureClaudeHook()} disabled={!integration?.assetsAvailable || integrationBusy !== null}>{integrationBusy === "claude" ? "处理中…" : integration?.claudeHookConfigured ? "重新配置" : "配置"}</button>
-        </div>
-        {integrationMessage && <div className={`settings-hint ${integrationMessage.includes("失败") || integrationMessage.includes("不存在") ? "error" : ""}`}>{integrationMessage}</div>}
-      </div>}
-    </div>}
-    <section className="workspace">
+    {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={theme} onTheme={setTheme} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
+      version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
+      updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
+      onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}
+      onRestartHost={async () => {
+        if (!window.confirm(settingsText(settingsLocale, "重启终端服务将关闭所有终端进程，包括正在运行的 Agent。请先完成或保存任务。确定重启？"))) return;
+        const ok = await window.termbeacon.restartHost({ force: true });
+        if (!ok) throw new Error("终端服务重启失败，请稍后重试。");
+      }}
+      onBack={() => setSettingsOpen(false)} onLaunch={launchCli} />}
+    <section className={`workspace ${settingsOpen ? "settings-hidden" : ""}`} aria-hidden={settingsOpen}>
       {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title="展开工作栏" aria-label="展开工作栏"><SidebarToggleIcon collapsed /></button>}
       {active && !active.alive && <button className="terminal-restart" onClick={() => restartTerminal(active.id)} title="终端已停止，点击重启">重启终端</button>}
       {updateState?.type === "downloaded" && <div className="update-banner">新版本 {updateState.version || "已下载"} 已准备好。<button onClick={() => void window.termbeacon.installUpdate()}>重启并安装</button></div>}

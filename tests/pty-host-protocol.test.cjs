@@ -8,7 +8,7 @@ const vm = require("node:vm");
 const hostSource = fs.readFileSync(path.join(__dirname, "..", "src", "main", "pty-host.cjs"), "utf8");
 const validation = require("../src/main/pty-validation.cjs");
 
-function createHarness({ spawn, detection } = {}) {
+function createHarness({ spawn, detection, hookPort = 12345 } = {}) {
   const parentPort = new EventEmitter();
   const dataPort = new EventEmitter();
   const messages = [];
@@ -23,6 +23,10 @@ function createHarness({ spawn, detection } = {}) {
       onExit(callback) { this.exitCallback = callback; },
       write() {},
       resize() {},
+      pauses: 0,
+      resumes: 0,
+      pause() { this.pauses += 1; },
+      resume() { this.resumes += 1; },
       kill() { this.exitCallback?.({ exitCode: 0 }); },
     };
     return session;
@@ -42,7 +46,7 @@ function createHarness({ spawn, detection } = {}) {
   const fakeHookServer = {
     start: () => Promise.resolve(12345),
     close: () => Promise.resolve(),
-    port: 12345,
+    port: hookPort,
     token: "test-token",
   };
   const fakeHookModule = {
@@ -60,6 +64,7 @@ function createHarness({ spawn, detection } = {}) {
   const fakeRequire = (request) => {
     if (request === "electron") return { parentPort };
     if (request === "node:fs") return fakeFs;
+    if (request === "node:crypto") return require(request);
     if (request === "node-pty") return { spawn: wrappedSpawn };
     if (request === "./detection-engine.cjs") return fakeDetection;
     if (request === "./hook-server.cjs") return fakeHookModule;
@@ -76,7 +81,7 @@ function createHarness({ spawn, detection } = {}) {
     tickCallback = callback;
     return { unref() {} };
   };
-  vm.runInNewContext(hostSource, {
+  const context = vm.createContext({
     require: fakeRequire,
     process: fakeProcess,
     console,
@@ -91,7 +96,8 @@ function createHarness({ spawn, detection } = {}) {
     Buffer,
     setInterval: fakeSetInterval,
     clearInterval: () => { tickCallback = null; },
-  }, { filename: "pty-host.cjs" });
+  });
+  vm.runInContext(hostSource, context, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
   // Reconnecting client (renderer reload / app restart): the host keeps every
   // session and attaches a brand new port. Returns that port's own messages.
@@ -103,7 +109,7 @@ function createHarness({ spawn, detection } = {}) {
     parentPort.emit("message", { data: { type: "connect" }, ports: [nextPort] });
     return nextMessages;
   };
-  return { dataPort, messages, spawned, spawnedOptions, reattach, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
+  return { dataPort, messages, spawned, spawnedOptions, reattach, context, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -295,6 +301,18 @@ test("PTY host routes bridge events to the terminal detector", () => {
   assert.equal(sessionUpdate?.sessionId, "session-1");
 });
 
+test("native status received before an agent banner survives detector upgrade", () => {
+  const { dataPort, spawned, messages, emitHook, reattach } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "PermissionRequest", status: "waiting", sessionId: "main", occurredAt: 2000 });
+  spawned[0].dataCallback("Claude Code\r\n\x1b]0;◐ Claude Code\x07");
+  assert.equal(messages.filter((event) => event.type === "state:update").at(-1).current, "awaiting-input");
+  assert.equal(reattach().find((event) => event.type === "state:snapshot").entries[0].state, "awaiting-input");
+  // A stale retry must not replace the session id used by resume.
+  emitHook({ terminalId: "t1", event: "UserPromptSubmit", status: "running", sessionId: "old", occurredAt: 1000 });
+  assert.equal(messages.filter((event) => event.type === "session:update").at(-1).sessionId, "main");
+});
+
 // Detector stub that walks ready -> working -> stopped on the same terminal so
 // the host has a real state history to snapshot.
 function scriptedDetection() {
@@ -359,4 +377,82 @@ test("PTY host drops a terminal from the state snapshot once it exits", () => {
   const snapshot = reattach().find((message) => message.type === "state:snapshot");
   assert.ok(snapshot, "a snapshot is still sent");
   assert.equal(snapshot.entries.length, 0);
+});
+
+test("permanently forgotten terminals release cached output and ignore late PTY callbacks", () => {
+  const { dataPort, spawned, messages, context } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  spawned[0].dataCallback("x".repeat(2 * 1024 * 1024));
+  dataPort.emit("message", { data: { type: "pty:forget", terminalId: "t1" } });
+  spawned[0].dataCallback("late data after kill");
+  assert.equal(vm.runInContext("buffers.size + sessions.size + stateSnapshots.size", context), 0);
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "t1", fromSequence: 0 } });
+  assert.equal(messages.at(-1).code, "NOT_FOUND");
+});
+
+test("exited output remains replayable with its original sequence until forgotten", () => {
+  const { dataPort, spawned, messages } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  spawned[0].dataCallback("before exit");
+  spawned[0].exitCallback({ exitCode: 0 });
+  dataPort.emit("message", { data: { type: "pty:replay-request", terminalId: "t1", fromSequence: 0 } });
+  const replayed = messages.filter((m) => m.type === "pty:output" && m.replay);
+  assert.equal(replayed.length, 1);
+  assert.equal(replayed[0].sequence, 1);
+  assert.equal(replayed[0].data, "before exit");
+  dataPort.emit("message", { data: { type: "pty:forget", terminalId: "t1" } });
+  assert.equal(messages.some((m) => m.operation === "pty:forget" && m.type === "pty:error"), false);
+});
+
+test("exited buffers have a global budget and expire without recreating their IDs", () => {
+  const { dataPort, spawned, context } = createHarness();
+  for (let i = 0; i < 12; i += 1) {
+    dataPort.emit("message", { data: createMessage(`t${i}`) });
+    spawned[i].dataCallback("x".repeat(2 * 1024 * 1024));
+    spawned[i].exitCallback({ exitCode: 0 });
+  }
+  assert.ok(vm.runInContext("[...buffers.values()].reduce((n, entry) => n + entry.bytes, 0) <= EXITED_BUFFER_LIMIT_BYTES", context));
+  vm.runInContext("pruneExitedBuffers(Date.now() + EXITED_BUFFER_TTL_MS)", context);
+  assert.equal(vm.runInContext("buffers.size", context), 0);
+});
+
+test("PTY backpressure waits for parsing ACKs and detach resumes background work", () => {
+  const { dataPort, spawned, messages, tick, context } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  spawned[0].dataCallback("x".repeat(1024 * 1024));
+  assert.equal(spawned[0].pauses, 1);
+  const initial = messages.filter((m) => m.type === "pty:output");
+  assert.equal(initial.reduce((sum, m) => sum + m.data.length, 0), 512 * 1024);
+  for (const output of initial) dataPort.emit("message", { data: { type: "pty:output-ack", flowId: output.flowId, deliveryId: output.deliveryId } });
+  assert.equal(messages.filter((m) => m.type === "pty:output").length, 64);
+  assert.equal(vm.runInContext("pausedSessions.size", context), 1);
+  tick();
+  dataPort.emit("message", { data: { type: "client:detach" } });
+  assert.equal(spawned[0].resumes, 1);
+  assert.equal(vm.runInContext("pausedSessions.size", context), 0);
+});
+
+test("large Unicode output is bounded, preserves characters and no longer builds per-chunk summaries", () => {
+  const { dataPort, spawned, messages, context } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  const text = "中🙂".repeat(300000);
+  spawned[0].dataCallback(text);
+  let offset = 0;
+  while (offset < messages.length) {
+    const m = messages[offset++];
+    if (m.type === "pty:output") dataPort.emit("message", { data: { type: "pty:output-ack", flowId: m.flowId, deliveryId: m.deliveryId } });
+  }
+  const output = messages.filter((m) => m.type === "pty:output");
+  assert.equal(output.map((m) => m.data).join(""), text);
+  assert.ok(output.every((m) => m.data.length <= 16384 && m.summary === undefined));
+  assert.ok(output.every((m) => !/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(m.data)));
+  assert.ok(vm.runInContext("buffers.get('t1').bytes <= OUTPUT_BUFFER_LIMIT_BYTES", context));
+});
+
+test("forget cancels a PTY creation waiting for the hook server", async () => {
+  const { dataPort, spawned } = createHarness({ hookPort: 0 });
+  dataPort.emit("message", { data: createMessage("t1") });
+  dataPort.emit("message", { data: { type: "pty:forget", terminalId: "t1" } });
+  await Promise.resolve();
+  assert.equal(spawned.length, 0);
 });

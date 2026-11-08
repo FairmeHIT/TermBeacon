@@ -1,4 +1,5 @@
 const registry = require("./agent-registry.cjs");
+const { createOscParser } = require("./osc-parser.cjs");
 
 function stripAnsi(value) {
   return value.replace(/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, "");
@@ -61,7 +62,11 @@ function createDetector(agentType = "generic", emit = () => {}) {
     titleWorkingAt: 0,
     titleIdleAt: 0,
     pending: null,
+    hookStatus: null,
+    hookOccurredAt: 0,
   };
+  let outputAt = 0;
+  const oscParser = createOscParser(title, undefined, progress);
   // Longer quiet window required when OSC 9;4 progress-100 is the only
   // completion evidence, no prompt/completion text has been observed.
   const oscOnlyConfirmMs = (config.quietWindow.confirmMs || 2500) * 3;
@@ -85,12 +90,18 @@ function createDetector(agentType = "generic", emit = () => {}) {
     runtime.oscCompletedAt = 0;
     runtime.titleWorkingAt = 0;
     runtime.titleIdleAt = 0;
+    runtime.hookStatus = null;
   }
 
   function input(data) {
     const printable = stripInputSequences(data);
-    if (/[^\u0000-\u001f\u007f]/.test(printable)) {
+    // Editing a prompt is not a new native turn. In particular, typing a
+    // permission answer must not release the hook's waiting state early.
+    if (runtime.hookStatus && !/[\r\n]/.test(printable)) return;
+    if (/[^\u0000-\u001f\u007f]/.test(printable)
+      || ((runtime.hookStatus || runtime.state === "awaiting-input") && /[\r\n]/.test(printable))) {
       resetTask();
+      runtime.hookOccurredAt = Math.max(runtime.hookOccurredAt, Date.now());
       runtime.armed = true;
       transition("working", 0.55, "user");
     }
@@ -101,41 +112,53 @@ function createDetector(agentType = "generic", emit = () => {}) {
   // prompt settle as "ready" instead of lighting "completed-unseen".
   function launch() {
     resetTask();
+    oscParser.reset();
     transition("ready", 1, "user");
   }
 
-  function output(data, now = Date.now()) {
-    const clean = stripAnsi(data);
-    const osc = parseOscProgress(data);
-    if (osc) {
+  function progress(osc) {
+    if (!runtime.hookStatus) {
       runtime.oscProgress = osc;
       // OSC 9;4 state 0 removes the progress line (task finished or reset);
       // progress 100 with any active state also marks completion evidence.
-      if (osc.progress >= 100 && osc.state !== 0) runtime.oscCompletedAt = now;
-      if (osc.state === 0) runtime.oscCompletedAt = now;
+      if (osc.progress >= 100 || osc.state === 0) runtime.oscCompletedAt = outputAt;
+      // A later active progress report invalidates an earlier completion.
+      else runtime.oscCompletedAt = 0;
     }
-    const title = parseOscTitle(data);
-    if (title !== undefined) {
-      runtime.title = title;
-      const titleConfig = config.title;
-      const titleWorking = titleConfig?.working?.some((pattern) => pattern.test(title)) ?? false;
-      const titleIdle = titleConfig?.idle?.some((pattern) => pattern.test(title)) ?? false;
-      if (titleWorking) {
-        runtime.titleWorkingAt = now;
-        runtime.titleIdleAt = 0;
-        if (runtime.armed && runtime.state !== "error") {
-          transition("working", 0.85, "title", title);
-        }
-      } else if (titleIdle) {
-        runtime.titleIdleAt = now;
-        if (!runtime.armed && runtime.state === "working") {
-          transition("ready", 0.8, "title", title);
-        }
+  }
+
+  function title(value) {
+    runtime.title = value;
+    if (runtime.hookStatus) return;
+    const titleConfig = config.title;
+    const titleWorking = titleConfig?.working?.some((pattern) => pattern.test(value)) ?? false;
+    const titleIdle = titleConfig?.idle?.some((pattern) => pattern.test(value)) ?? false;
+    if (titleWorking) {
+      runtime.titleWorkingAt = outputAt;
+      runtime.titleIdleAt = 0;
+      runtime.pending = null;
+      runtime.candidateAt = 0;
+      runtime.oscCompletedAt = 0;
+      if (runtime.armed && runtime.state !== "error") {
+        transition("working", 0.85, "title", value);
+      }
+    } else if (titleIdle) {
+      runtime.titleIdleAt = outputAt;
+      if (!runtime.armed && runtime.state === "working") {
+        transition("ready", 0.8, "title", value);
       }
     }
+  }
+
+  function output(data, now = Date.now()) {
+    outputAt = now;
+    const clean = stripAnsi(oscParser.feed(data));
+    runtime.lastOutputAt = now;
+    // A native lifecycle event owns this turn until input, launch or another
+    // native event. TUI redraws and silence cannot reverse that evidence.
+    if (runtime.hookStatus) return;
     const recent = (runtime.signalTail + clean).slice(-EVIDENCE_TAIL);
     runtime.signalTail = recent.slice(-SIGNAL_TAIL);
-    runtime.lastOutputAt = now;
     const evidence = tailLines(recent, COMPLETION_LINES);
     const dialog = tailLines(recent, 8);
     const errorLines = tailLines(recent, 4);
@@ -193,6 +216,7 @@ function createDetector(agentType = "generic", emit = () => {}) {
   }
 
   function tick(now = Date.now()) {
+    if (runtime.hookStatus || runtime.state === "error") return;
     if (runtime.armed && runtime.titleIdleAt && runtime.titleWorkingAt && runtime.state === "working") {
       const quietFor = now - runtime.lastOutputAt;
       const idleFor = now - runtime.titleIdleAt;
@@ -251,23 +275,35 @@ function createDetector(agentType = "generic", emit = () => {}) {
   }
 
   function exit(exitCode) {
+    resetTask();
+    oscParser.reset();
     transition(exitCode === 0 ? "stopped" : "error", 1, "process");
   }
 
-  function hook(event, status) {
+  function hook(event, status, metadata = {}) {
+    // Older installations may still report these as whole-turn completion.
+    if (event === "SubagentStop" || (config.id === "claude" && event === "TaskCompleted")) return false;
+    if (!["started", "running", "waiting", "completed", "failed"].includes(status)) return false;
+    if (Number.isFinite(metadata.occurredAt)) {
+      if (metadata.occurredAt < runtime.hookOccurredAt) return false;
+      runtime.hookOccurredAt = metadata.occurredAt;
+    }
+    if (runtime.hookStatus === status) return true;
+    resetTask();
+    runtime.hookStatus = status;
     if (status === "started" || status === "running") {
       runtime.armed = true;
       transition("working", 0.9, "hook");
     } else if (status === "waiting") {
+      runtime.armed = true;
       transition("awaiting-input", 0.9, "hook");
     } else if (status === "completed") {
-      runtime.pending = { summary: event, source: "hook" };
-      runtime.candidateAt = Date.now();
-      runtime.lastOutputAt = Date.now();
-      tick(runtime.candidateAt + config.quietWindow.confirmMs);
+      // Native completion clears tool grace and keeps its source/confidence.
+      transition("completed-unseen", 0.95, "hook", event);
     } else if (status === "failed") {
       transition("error", 0.95, "hook", event);
     }
+    return true;
   }
 
   return { runtime, input, launch, output, tick, viewed, exit, hook, config };

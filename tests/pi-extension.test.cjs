@@ -1,0 +1,35 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const { pathToFileURL } = require("node:url");
+const path = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
+const { createHookServer } = require("../src/main/hook-server.cjs");
+
+test("Pi reports final settlement and blocking prompts, ignoring intermediate agent_end", { timeout: 5000 }, async (t) => {
+  const events = [];
+  const server = createHookServer({ onEvent: (event) => events.push(event) });
+  await server.start();
+  t.after(() => server.close());
+  const keys = ["TERMBEACON_HOOK_PORT", "TERMBEACON_HOOK_TOKEN", "TERMBEACON_TERMINAL_ID"];
+  const before = keys.map((key) => process.env[key]);
+  [String(server.port), server.token, "pi-test"].forEach((value, index) => { process.env[keys[index]] = value; });
+  t.after(() => keys.forEach((key, index) => { if (before[index] === undefined) delete process.env[key]; else process.env[key] = before[index]; }));
+  const extension = (await import(pathToFileURL(path.join(__dirname, "../hooks/pi/termbeacon.js")).href)).default;
+  const handlers = new Map();
+  extension({ on: (event, handler) => handlers.set(event, handler) });
+  t.after(() => handlers.get("session_shutdown")?.());
+  const ctx = { sessionManager: { getSessionId: () => "pi-session" } };
+  handlers.get("session_start")({}, ctx);
+  handlers.get("agent_start")({}, ctx);
+  handlers.get("ui_prompt_start")({}, ctx);
+  handlers.get("ui_prompt_end")({}, ctx);
+  assert.equal(handlers.has("agent_end"), false);
+  handlers.get("agent_settled")({ aborted: false }, ctx);
+  const deadline = Date.now() + 3000;
+  while (events.length < 4 && Date.now() < deadline) await delay(10);
+  assert.deepEqual(events.map((event) => event.status), ["running", "waiting", "running", "completed"]);
+  assert.ok(events.every((event) => event.sessionId === "pi-session"));
+  handlers.get("agent_settled")({}, ctx);
+  await delay(30);
+  assert.equal(events.length, 4);
+});

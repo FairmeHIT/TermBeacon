@@ -5,7 +5,7 @@ function defaultState() {
   return { schemaVersion: 1, workspaces: [{ id: "default", name: "默认工作区", terminalIds: [] }], terminals: [], tasks: [] };
 }
 
-const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude"]);
+const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude", "pi"]);
 const AGENT_STATES = new Set(["working", "completed-unseen", "ready", "awaiting-input", "error", "stopped"]);
 const SHELL_TYPES = new Set(["cmd.exe", "powershell.exe", "pwsh.exe", "/bin/bash", "/bin/zsh"]);
 const TASK_STATES = new Set(["working", "completed", "awaiting-input", "interrupted", "error", "cancelled"]);

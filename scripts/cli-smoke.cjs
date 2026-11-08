@@ -1,5 +1,5 @@
 const pty = require("node-pty");
-const { discoverAll } = require("../src/main/cli-discovery.cjs");
+const { discoverAll, getLaunchSpec } = require("../src/main/cli-discovery.cjs");
 const { isWindows } = require("../src/main/platform.cjs");
 
 const TIMEOUT_MS = 8000;
@@ -11,14 +11,17 @@ function stripTerminalControls(value) {
     .replace(/\r/g, "");
 }
 
-function runCommand(item, argument) {
+async function runCommand(item, argument) {
+  const shell = isWindows ? process.env.ComSpec || "cmd.exe" : "/bin/sh";
+  const spec = await getLaunchSpec({ id: item.id, shell, args: [argument] });
   return new Promise((resolve) => {
     const command = item.command;
     let child;
     try {
       if (isWindows) {
-        const shell = process.env.ComSpec || "cmd.exe";
-        child = pty.spawn(shell, ["/d", "/s", "/c", command + " " + argument], {
+        // node-pty accepts a raw Windows command tail. An argv array would
+        // apply C runtime escaping to quotes that cmd.exe must parse itself.
+        child = pty.spawn(shell, `/d /s /c "${spec.command}"`, {
           name: "xterm-256color",
           cols: 120,
           rows: 32,
@@ -27,7 +30,7 @@ function runCommand(item, argument) {
           useConpty: true,
         });
       } else {
-        child = pty.spawn(item.executable || command, [argument], {
+        child = pty.spawn(shell, ["-c", spec.command], {
           name: "xterm-256color",
           cols: 120,
           rows: 32,
@@ -57,7 +60,7 @@ function runCommand(item, argument) {
 }
 
 async function main() {
-  const discovered = discoverAll();
+  const discovered = await discoverAll();
   const installed = Object.values(discovered).filter((item) => item.installed);
   if (installed.length === 0) {
     console.log("No registered CLI is installed; smoke skipped.");

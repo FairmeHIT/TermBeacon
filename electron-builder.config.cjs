@@ -46,6 +46,8 @@ module.exports = {
   ],
   extraResources: [
     { from: "hooks/opencode/termbeacon.js", to: "termbeacon-hooks/opencode/termbeacon.js" },
+    { from: "hooks/pi/termbeacon.js", to: "termbeacon-hooks/pi/termbeacon.js" },
+    { from: "hooks/shared/status-reporter.js", to: "termbeacon-hooks/shared/status-reporter.js" },
     { from: "scripts/termbeacon-hook.cjs", to: "termbeacon-hooks/termbeacon-hook.cjs" },
   ],
   win: {

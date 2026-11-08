@@ -76,3 +76,24 @@ test("hook server only accepts POST /hook", async (t) => {
     assert.equal(response.status, 404);
   }
 });
+
+test("retries acknowledge an event once and preserve its original timestamp", async (t) => {
+  const { server, port, events } = await withServer(t);
+  const body = { terminalId: "t1", event: "Stop", status: "completed", eventId: "receipt-1", occurredAt: 1234 };
+  assert.equal((await post(port, body, server.token)).status, 204);
+  assert.equal((await post(port, body, server.token)).status, 204);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].eventId, "receipt-1");
+  assert.equal(events[0].occurredAt, 1234);
+  // The same id from a different terminal is a separate transition.
+  await post(port, { ...body, terminalId: "t2" }, server.token);
+  assert.equal(events.length, 2);
+});
+
+test("invalid retry metadata is rejected", async (t) => {
+  const { server, port } = await withServer(t);
+  const body = { terminalId: "t1", event: "Stop", status: "completed" };
+  for (const extra of [{ eventId: "" }, { eventId: "x".repeat(129) }, { occurredAt: -1 }, { occurredAt: "123" }]) {
+    assert.equal((await post(port, { ...body, ...extra }, server.token)).status, 400);
+  }
+});

@@ -117,3 +117,80 @@ test("renderer never fakes a healthy state when reattaching a live terminal", ()
   assert.match(createBlock, /const snapshot = hostStates\.current\.get\(terminal\.id\)/);
   assert.match(createBlock, /state: snapshot \? snapshot\.state : existing \? item\.state : "ready"/);
 });
+
+function outputEvent(sequence, overrides = {}) {
+  return { type: "pty:output", terminalId: "t1", data: "x", sequence, streamId: "stream1", flowId: "flow1", deliveryId: sequence, ...overrides };
+}
+
+test("preload reconnects from parsed output instead of merely received output", () => {
+  const { api, ipcHandlers } = loadPreload();
+  const { port } = connectPort(ipcHandlers);
+  api.onOutput(() => {});
+  port.onmessage({ data: { type: "pty:host-ready", flowId: "flow1" } });
+  port.onmessage({ data: outputEvent(1) });
+  port.onmessage({ data: outputEvent(2) });
+  api.acknowledgeOutput(outputEvent(1));
+  port.onmessageerror();
+  const next = connectPort(ipcHandlers);
+  next.port.onmessage({ data: { type: "pty:host-ready", flowId: "flow2" } });
+  const replay = next.sent.find((m) => m.type === "pty:replay-request");
+  assert.equal(replay.fromSequence, 1);
+});
+
+test("stale renderer callbacks never ACK output on a newer connection", () => {
+  const { api, ipcHandlers } = loadPreload();
+  const first = connectPort(ipcHandlers);
+  api.onOutput(() => {});
+  first.port.onmessage({ data: { type: "pty:host-ready", flowId: "flow1" } });
+  first.port.onmessage({ data: outputEvent(1) });
+  const next = connectPort(ipcHandlers);
+  next.port.onmessage({ data: { type: "pty:host-ready", flowId: "flow2" } });
+  api.acknowledgeOutput(outputEvent(1));
+  assert.equal(next.sent.some((m) => m.type === "pty:output-ack"), false);
+  first.port.onmessageerror();
+  next.port.onmessage({ data: outputEvent(2, { flowId: "flow2" }) });
+  api.acknowledgeOutput(outputEvent(2, { flowId: "flow2" }));
+  assert.equal(next.sent.filter((m) => m.type === "pty:output-ack").length, 1);
+});
+
+test("output without a mounted consumer releases credit without advancing parsed sequence", () => {
+  const { api, ipcHandlers } = loadPreload();
+  const { port, sent } = connectPort(ipcHandlers);
+  port.onmessage({ data: { type: "pty:host-ready", flowId: "flow1" } });
+  port.onmessage({ data: outputEvent(1) });
+  assert.equal(sent.at(-1).type, "pty:output-ack");
+  port.onmessageerror();
+  const next = connectPort(ipcHandlers);
+  next.port.onmessage({ data: { type: "pty:host-ready", flowId: "flow2" } });
+  assert.equal(next.sent.some((m) => m.type === "pty:replay-request"), false);
+  api.forget("t1");
+  assert.equal(next.sent.at(-1).type, "pty:forget");
+});
+
+test("callbacks from an old PTY incarnation cannot advance the new stream's replay position", () => {
+  const { api, ipcHandlers } = loadPreload();
+  const { port } = connectPort(ipcHandlers);
+  api.onOutput(() => {});
+  port.onmessage({ data: { type: "pty:host-ready", flowId: "flow1" } });
+  const old = outputEvent(100);
+  const current = outputEvent(1, { streamId: "stream2", deliveryId: 101 });
+  port.onmessage({ data: old });
+  port.onmessage({ data: current });
+  api.acknowledgeOutput(current);
+  api.acknowledgeOutput(old);
+  port.onmessageerror();
+  const next = connectPort(ipcHandlers);
+  next.port.onmessage({ data: { type: "pty:host-ready", flowId: "flow2" } });
+  assert.equal(next.sent.find((m) => m.type === "pty:replay-request").fromSequence, 1);
+});
+
+test("forget cancels queued creations before a renderer port is connected", async () => {
+  const { api, ipcHandlers } = loadPreload();
+  const creating = api.createTerminal({ terminalId: "cancelled" });
+  const cancelled = assert.rejects(creating, { code: "CANCELLED" });
+  api.forget("cancelled");
+  await cancelled;
+  const { sent } = connectPort(ipcHandlers);
+  assert.equal(sent.some((m) => m.type === "pty:create"), false);
+  assert.equal(sent.at(-1).type, "pty:forget");
+});

@@ -18,6 +18,7 @@ const MAX_SCAN_BYTES = 8 * 1024;
 // prompts, and Claude Code mentions nothing about codex, but ordering removes
 // any ambiguity when several signatures appear in one banner.
 const SIGNATURES = [
+  { agent: "pi", patterns: [/\bpi coding agent\b/i, /\bpi\s+v?\d+\.\d+\.\d+\b/i] },
   { agent: "claude", patterns: [/Claude Code/i, /✻\s*Welcome to Claude/i, /claude\.ai\/code/i] },
   { agent: "opencode", patterns: [/\bopencode\b/i] },
   { agent: "codex", patterns: [/\bOpenAI Codex\b/i, /Codex CLI/i, /\bcodex\s+v?\d+\.\d+/i] },

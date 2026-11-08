@@ -1,6 +1,6 @@
 const { defaultCwd, defaultShell, isAbsoluteCwd } = require("./platform.cjs");
 
-const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude"]);
+const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude", "pi"]);
 const MAX_TERMINAL_ID_LENGTH = 128;
 const MAX_TITLE_LENGTH = 200;
 const MAX_CWD_LENGTH = 32760;

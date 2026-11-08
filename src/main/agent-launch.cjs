@@ -1,4 +1,4 @@
-const AGENT_COMMANDS = ["opencode", "claude", "codex"];
+const AGENT_COMMANDS = ["opencode", "claude", "codex", "pi"];
 
 function isAgentLaunchInput(value, agentType) {
   if (agentType !== "generic" || typeof value !== "string") return false;

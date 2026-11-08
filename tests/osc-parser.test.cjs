@@ -95,3 +95,25 @@ test("decodeFileUri handles posix and windows forms", () => {
   assert.strictEqual(decodeFileUri("http://x", "linux"), undefined);
   assert.strictEqual(decodeFileUri("file:///bad%ZZpath", "linux"), undefined);
 });
+
+test("OSC introducer and ST terminator can each be split after ESC", () => {
+  const { parser, events } = recorder();
+  assert.equal(parser.feed("before\x1b"), "before");
+  assert.equal(parser.feed("]0;title\x1b"), "");
+  assert.equal(parser.feed("\\after"), "after");
+  assert.deepStrictEqual(events.titles, ["title"]);
+});
+
+test("discarded oversized OSC payload cannot leak completion text", () => {
+  const { parser, events } = recorder();
+  assert.equal(parser.feed("\x1b]52;" + "a".repeat(600)), "");
+  assert.equal(parser.feed("Error: Done\x07visible"), "visible");
+  parser.feed("\x1b]0;valid\x07");
+  assert.deepStrictEqual(events.titles, ["valid"]);
+});
+
+test("a complete oversized sequence is also rejected", () => {
+  const { parser, events } = recorder();
+  parser.feed("\x1b]0;" + "a".repeat(600) + "\x07\x1b]0;valid\x07");
+  assert.deepStrictEqual(events.titles, ["valid"]);
+});
