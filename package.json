@@ -1,6 +1,6 @@
 {
   "name": "termbeacon",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "type": "module",
   "description": "Terminal manager for local terminals and CLI agents",
@@ -18,6 +18,7 @@
     "start": "electron .",
     "smoke:cli": "node scripts/cli-smoke.cjs",
     "preflight:cli": "node scripts/cli-preflight.cjs",
+    "acceptance:cli": "node scripts/cli-acceptance-report.cjs",
     "hooks:install": "node scripts/hooks-install.cjs",
     "hooks:configure:claude": "node scripts/hooks-install.cjs --configure-claude",
     "record:cli": "node scripts/cli-record.cjs",

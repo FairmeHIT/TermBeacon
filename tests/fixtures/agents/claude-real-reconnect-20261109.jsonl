@@ -1,0 +1,7 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-reconnect-user-verified","description":"用户人工验收：Claude 权限等待期间关闭并重新打开 TermBeacon，窗口重连后状态恢复为等待输入；任务正文已脱敏","evidence":"real","scenario":"reconnect","source":"user-verification"}
+{"kind":"input","data":"[task]\r","at":0,"source":"user-verification"}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":1,"source":"user-verification"}
+{"kind":"hook","event":"PreToolUse","status":"waiting","at":2,"source":"user-verification"}
+{"kind":"reconnect","source":"window","phase":"detached","reason":"TermBeacon closed","verification":"user-confirmed"}
+{"kind":"reconnect","source":"window","phase":"attached","reason":"TermBeacon reopened","verification":"user-confirmed"}
+{"kind":"assert","state":"awaiting-input","verification":"user-confirmed"}

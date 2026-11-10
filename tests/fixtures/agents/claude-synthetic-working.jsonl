@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"claude","evidence":"synthetic","name":"synthetic-working","description":"Detector state coverage for native running event"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":100}
+{"kind":"assert","state":"working"}

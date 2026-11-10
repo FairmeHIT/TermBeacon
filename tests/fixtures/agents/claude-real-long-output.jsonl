@@ -1,0 +1,8 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-long-output","description":"真实 Claude Code 2.1.319 任务：Bash 输出 120 行后完成；原始 capture 在 captures/claude-claude-long-output-real-20261109-151433.jsonl，正文已脱敏","evidence":"real","scenario":"long-output"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":33121}
+{"kind":"hook","event":"PreToolUse","status":"running","at":35244}
+{"kind":"hook","event":"PostToolUse","status":"running","at":36894}
+{"kind":"output","data":"1\r\n2\r\n...\r\n120\r\nCLAUDE_LONG_DONE\r\n","at":38000}
+{"kind":"hook","event":"Stop","status":"completed","at":39008}
+{"kind":"assert","state":"completed-unseen"}

@@ -6,7 +6,7 @@
     <a href="https://www.electronjs.org/"><img src="https://img.shields.io/badge/Electron-36-3b4856?style=flat-square" alt="Electron 36" /></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-3b4856?style=flat-square" alt="React 19" /></a>
     <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-20%2B-3b4856?style=flat-square" alt="Node.js 20 or newer" /></a>
-    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-3b4856?style=flat-square" alt="Windows, macOS, and Linux" />
+    <img src="https://img.shields.io/badge/platform-Windows%20x64-3b4856?style=flat-square" alt="Windows x64" />
   </p>
 
   <p><strong>Run every terminal in one clean view, and never miss a task finishing.</strong></p>
@@ -61,15 +61,17 @@ Status signals are combined in this order: native Hook or plugin events, OSC tit
 
 Download the latest installer from [GitHub Releases](https://github.com/FairmeHIT/TermBeacon/releases), install it for the current Windows user, and launch **TermBeacon**. The installer includes Electron, the renderer, the host process, `node-pty`, and the Windows ConPTY runtime; Node.js is not required on the target machine.
 
+The community installer is currently unsigned. Windows SmartScreen may show a warning on first launch; verify the SHA-512 value published with the release before running it.
+
 Open **Settings → Agent CLI** to detect or manage a CLI and configure its status bridge. The app itself does not need Node.js; managed CLI installation needs system Node.js and npm (Node.js 22.19 or a newer LTS is recommended for all four agents).
 
 Managed installs keep system installations, credentials, and project configuration. Updates switch the launcher after version verification and retain the previous managed release for rollback. Running sessions keep running; reopen an existing terminal to refresh its PATH.
 
-Use **Settings → General → Language / 语言** for the settings language. The terminal workspace currently remains in Chinese.
+Use **Settings → General → Language / 语言** to switch the full interface, including the terminal workspace sidebar, status labels, prompts, and tooltips.
 
 ### Run from source
 
-Requirements: Node.js 20 or newer, npm 10 or newer, and Git. Windows is required for ConPTY and Windows installer builds; macOS and Linux are supported for development and terminal usage.
+Requirements: Node.js 20 or newer, npm 10 or newer, and Git. Windows is required for the supported installer; macOS and Linux are supported for source development and terminal usage, but are not part of the packaged release matrix.
 
 ```powershell
 npm ci
@@ -119,6 +121,8 @@ The host process owns PTYs independently from the window, so closing and reopeni
 
 - [`hooks/README.md`](hooks/README.md) - install and troubleshoot CLI status bridges.
 - [`docs/maintaining.md`](docs/maintaining.md) - architecture, verification, release process, and known limits.
+- [`docs/cli-acceptance-matrix.md`](docs/cli-acceptance-matrix.md) - Windows 1.0 CLI status acceptance matrix and current blockers.
+- [`LICENSE`](LICENSE) - MIT license for the open-source project.
 - `src/` and `tests/` are the source of truth for the implementation and regression behavior.
 
 ## Useful commands
@@ -130,9 +134,10 @@ The host process owns PTYs independently from the window, so closing and reopeni
 | `npm test` | Run the Node test suite. |
 | `npm run doctor` | Check Node, npm, lockfile, and native dependency prerequisites. |
 | `npm run preflight:cli` | Inspect installed CLIs and Hook/plugin configuration without changing files. |
+| `npm run acceptance:cli` | Generate the read-only CLI status acceptance report and fixture coverage. |
 | `npm run dist` | Build and verify the Windows installer without publishing. |
 | `npm run dist:publish` | Build, verify, and publish the Windows release after its source commit and tag are pushed. |
 
 ## Project status
 
-TermBeacon is an active MVP. The core desktop workflow is implemented; integrations and status detection continue to improve as more CLI event formats are covered. Contributions, reproducible bug reports, and sanitized CLI fixtures are welcome.
+TermBeacon `0.1.15` is a public community release for Windows x64. The core desktop workflow is implemented, with native status bridges for Claude Code, OpenCode 2, and Pi, plus inferred status detection for Codex and generic shells. The Windows installer is unsigned and the release notes describe the resulting SmartScreen warning and verification steps. The project is working toward `1.0.0`; see [`docs/release-1.0-criteria.md`](docs/release-1.0-criteria.md) for the supported scope and remaining quality gates. Contributions, reproducible bug reports, and sanitized CLI fixtures are welcome.

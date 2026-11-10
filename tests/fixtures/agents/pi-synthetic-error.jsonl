@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"pi","version":"1.5.0","evidence":"synthetic","name":"synthetic-error","description":"Detector state coverage for a failed settled turn"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"pi.agent_start","status":"running","at":100}
+{"kind":"hook","event":"pi.agent_settled","status":"failed","at":200}
+{"kind":"assert","state":"error"}

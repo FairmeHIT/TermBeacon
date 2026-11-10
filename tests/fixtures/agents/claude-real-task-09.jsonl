@@ -1,0 +1,6 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-task-09","description":"真实 Claude 任务 09：脱敏 Hook 生命周期证据","evidence":"real"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":2137}
+{"kind":"hook","event":"Stop","status":"completed","at":5119}
+{"kind":"hook","event":"SessionEnd","status":"completed","at":5293}
+{"kind":"assert","state":"completed-unseen"}

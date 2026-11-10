@@ -64,7 +64,7 @@ node scripts/create-release.mjs --verify-only
 ## Release limits and upgrade behavior
 
 - Windows x64 is the validated release target. macOS build configuration and Unix shell paths exist; native macOS/Linux acceptance is separate.
-- Without `CSC_LINK`, the Windows installer is unsigned. State this in release notes; SmartScreen may prompt. Clean-machine install/upgrade/uninstall and signing acceptance require a suitable separate environment.
+- Community releases may omit `CSC_LINK` and therefore ship an unsigned Windows installer. State this in release notes, publish the SHA-512 value, and expect a possible SmartScreen prompt. Clean-machine install/upgrade/uninstall still require a suitable separate environment before calling a release `1.0.0`.
 - Closing or updating the UI preserves its detached host and running PTYs. To load a new detector/PTY runtime, finish current tasks and use **Settings → General → Restart service**. This explicitly closes all terminal and Agent processes. Do not force it as part of publishing.
 - A machine reboot or host crash cannot restore the original process. Session resume launches a supported CLI's resume command; it does not replay the original prompt.
 - Configuration checks and native loader checks are distinct from real model-turn acceptance. Codex inference, CLI version changes, and network outages remain observable limits.

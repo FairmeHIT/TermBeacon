@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"codex","evidence":"synthetic","name":"synthetic-awaiting","description":"Detector state coverage for a blocking prompt"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"permission.asked","status":"waiting","at":100}
+{"kind":"assert","state":"awaiting-input"}

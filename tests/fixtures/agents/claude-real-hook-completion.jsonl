@@ -1,0 +1,6 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","evidence":"real","name":"real-hook-completion","description":"真实 Claude 非交互任务的 Hook 生命周期；正文已脱敏"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":1722}
+{"kind":"hook","event":"Stop","status":"completed","at":3925}
+{"kind":"hook","event":"SessionEnd","status":"completed","at":4137}
+{"kind":"assert","state":"completed-unseen"}

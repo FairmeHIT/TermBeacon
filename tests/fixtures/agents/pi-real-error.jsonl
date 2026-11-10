@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"pi","version":"1.5.0","name":"real-error","description":"真实 Pi 1.5.0 模型不可用错误：CLI 返回 Model not found 并以退出码 1 结束；原始 capture 在 captures/pi-pi-error-real-20261109-161133.jsonl，正文已脱敏","evidence":"real","scenario":"error"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"output","data":"Error: Model \"definitely-not-a-real-model\" not found. Use --list-models to see available models.\r\n","at":4356}
+{"kind":"exit","at":5698,"exitCode":1}
+{"kind":"assert","state":"error"}

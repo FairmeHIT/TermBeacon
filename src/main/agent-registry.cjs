@@ -5,6 +5,7 @@ const common = {
     completion: [/Task complete|Completed(?!\s+in\b)|Done(?!\s+in\b)|Finished(?!\s+in\b)|完成/i],
     waitingInput: [
       /\b(?:allow|deny|confirm|approve)\b[^\n]{0,80}\?/i,
+      /\b(?:grant|revoke)\s+permission\b[^\n]{0,80}\?/i,
       /\bdo you want to (?:proceed|continue|allow|run)\b/i,
       /^\s*[❯›>]?\s*\d+[.)]\s*(?:yes|no)\b/im,
       /\b(?:allow once|always allow|reject)\b/i,
@@ -16,6 +17,9 @@ const common = {
       /\b(?:command not found|is not recognized as an internal or external command)\b/i,
       /\b(?:ENOENT|EACCES|ECONNREFUSED)\b/,
       /\b(?:API error|request failed|fatal error|stream error)\b/i,
+      /\b(?:model unavailable|model .* not found)\b/i,
+      /(?:doesn't recognize the model|unrecognized_model)/i,
+      /(?:insufficient balance|insufficient_balance_error)/i,
       /Stream disconnected before completion/i,
       /servers are currently overloaded/i,
       /(?:失败|错误)[:：]/,

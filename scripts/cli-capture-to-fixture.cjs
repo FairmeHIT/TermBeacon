@@ -8,7 +8,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { parseCapture } = require("./cli-capture-audit.cjs");
 
-const AGENTS = new Set(["generic", "opencode", "codex", "claude"]);
+const AGENTS = new Set(["generic", "opencode", "codex", "claude", "pi"]);
 const STATES = new Set(["working", "completed-unseen", "ready", "awaiting-input", "error", "stopped"]);
 
 function parseArgs(argv) {
@@ -17,6 +17,7 @@ function parseArgs(argv) {
     const token = argv[index];
     if (token === "--sanitized") args.sanitized = true;
     else if (token === "--keep-input") args.keepInput = true;
+    else if (token === "--hooks-only") args.hooksOnly = true;
     else if (token.startsWith("--")) {
       const key = token.slice(2);
       const value = argv[++index];
@@ -27,7 +28,9 @@ function parseArgs(argv) {
       else if (key === "name") args.name = value;
       else if (key === "description") args.description = value;
       else if (key === "version") args.version = value;
+      else if (key === "scenario") args.scenario = value;
       else if (key === "expected") args.expected = value;
+      else if (key === "evidence") args.evidence = value;
       else throw new Error(`unknown option: --${key}`);
     }
   }
@@ -41,6 +44,8 @@ function sanitizeMeta(meta, args) {
     ...(args.version || meta.version ? { version: args.version || meta.version } : {}),
     name: args.name || meta.name || "sanitized-capture",
     description: args.description || meta.description || "Sanitized real CLI capture",
+    ...(args.evidence ? { evidence: args.evidence } : {}),
+    ...(args.scenario || meta.scenario ? { scenario: args.scenario || meta.scenario } : {}),
   };
 }
 
@@ -55,7 +60,10 @@ function toFixture(records, options) {
   const redactedInput = "[task]\r";
   const fixture = [sanitizeMeta(meta, { ...options, agent })];
   for (const record of records) {
-    if (record.kind === "output" || record.kind === "tick" || record.kind === "hook") {
+    if ((!options.hooksOnly && record.kind === "output")
+      || record.kind === "tick"
+      || record.kind === "hook"
+      || record.kind === "reconnect") {
       fixture.push(record);
     } else if (record.kind === "input") {
       fixture.push({

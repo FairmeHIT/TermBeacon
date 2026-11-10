@@ -45,9 +45,11 @@ function parseArgs(argv) {
       continue;
     }
     index += 1;
-    if (key === "cols" || key === "rows" || key === "max-minutes" || key === "task-delay") {
-      const mapped = key === "max-minutes" ? "maxMinutes" : key === "task-delay" ? "taskDelay" : key;
+    if (key === "cols" || key === "rows" || key === "max-minutes" || key === "task-delay" || key === "exit-after") {
+      const mapped = key === "max-minutes" ? "maxMinutes" : key === "task-delay" ? "taskDelay" : key === "exit-after" ? "exitAfter" : key;
       args[mapped] = Number(value);
+    } else if (key === "task-label") {
+      args.taskLabel = value;
     } else {
       args[key] = value;
     }
@@ -72,6 +74,8 @@ function usage() {
   --max-minutes <n>                      Safety timeout (default 15)
   --task <string>                        Auto-submit this task after --task-delay
   --task-delay <ms>                      Auto-task delay (default 12000)
+  --task-label <label>                   Record a redacted task marker for command-line prompts
+  --exit-after <ms>                      Send Ctrl+D after the task has had time to settle
   --hook-log                            Start a local bridge and record Hook events
 
 Exit the CLI normally to finish the capture.`);
@@ -133,6 +137,14 @@ record({
   startedAt: new Date().toISOString(),
 });
 
+// Non-interactive commands such as `claude -p` receive their task on the
+// command line, so no PTY input event exists to record. Keep only a redacted
+// marker; the command itself remains available in the capture metadata for
+// local audit and is never copied into a fixture.
+if (typeof args.taskLabel === "string" && args.taskLabel.length > 0) {
+  record({ kind: "input", at: 0, data: "[task]\r", source: "task-label", label: args.taskLabel });
+}
+
 // Keep cmd.exe's quoting intact; node-pty's argv escaping targets C runtimes.
 const shellArgs = isWindows ? `/d /s /c "${command}"` : ["-c", command];
 
@@ -171,6 +183,7 @@ console.error("[record] interact normally; exit the CLI to save the capture.");
 const task = typeof args.task === "string" ? args.task : undefined;
 const taskDelay = Number.isFinite(args.taskDelay) ? Math.max(1000, args.taskDelay) : 12000;
 let taskTimer = null;
+let exitTimer = null;
 if (task) {
   console.error(`[record] auto task in ${taskDelay}ms: ${task}`);
   taskTimer = setTimeout(() => {
@@ -178,6 +191,17 @@ if (task) {
     record({ kind: "input", at: Date.now() - startedAt, data, source: "task" });
     try { child.write(data); } catch { /* child may have exited */ }
   }, taskDelay);
+}
+
+if (Number.isFinite(args.exitAfter)) {
+  const exitDelay = Math.max(1000, args.exitAfter);
+  const scheduleExit = () => {
+    exitTimer = setTimeout(() => {
+      try { child.write("\u0004"); } catch { /* child may have exited */ }
+    }, exitDelay);
+  };
+  if (task) setTimeout(scheduleExit, taskDelay);
+  else scheduleExit();
 }
 
 const maxTimer = setTimeout(() => {
@@ -206,6 +230,7 @@ function finish(exitCode, signal) {
   closed = true;
   clearTimeout(maxTimer);
   if (taskTimer) clearTimeout(taskTimer);
+  if (exitTimer) clearTimeout(exitTimer);
   if (rawMode) {
     try { process.stdin.setRawMode(false); } catch { /* terminal already gone */ }
   }

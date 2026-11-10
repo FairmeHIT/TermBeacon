@@ -1,0 +1,6 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","name":"real-permission","description":"真实 OpenCode 2.2.1 TUI 权限确认：模型执行 ls 后显示 Grant permission / Deny permission；原始 capture 在 captures/opencode-opencode-permission-mini-20261109-150549.jsonl，正文已脱敏","evidence":"real","scenario":"permission"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"session.prompt","status":"running","at":2469}
+{"kind":"hook","event":"tool.execute.before","status":"running","at":6602}
+{"kind":"output","data":"Questions\r\nThe `ls` listing above is complete. Do you grant permission to proceed?\r\n1. Grant permission\r\n2. Deny permission\r\n","at":9332}
+{"kind":"assert","state":"awaiting-input"}

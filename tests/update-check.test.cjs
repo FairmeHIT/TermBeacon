@@ -76,6 +76,28 @@ test("persistent timeouts stop after three attempts and preserve the error", asy
   assert.equal(attempts, 3);
 });
 
+test("Electron closed connections retry and recover without exposing raw errors", async () => {
+  const error = new Error("net::ERR_CONNECTION_CLOSED");
+  let attempts = 0;
+  const result = await checkForUpdatesWithRetry(async () => {
+    if (++attempts < 3) throw error;
+    return { version: "0.1.14" };
+  }, { wait: async () => {} });
+  assert.equal(attempts, 3);
+  assert.deepEqual(result, { version: "0.1.14" });
+  assert.equal(formatUpdateError(error), "连接 GitHub 更新服务器失败，请检查网络后重试。");
+});
+
+test("persistent Electron closed connections stop after the bounded retry budget", async () => {
+  const error = new Error("net::ERR_CONNECTION_CLOSED");
+  let attempts = 0;
+  await assert.rejects(checkForUpdatesWithRetry(async () => {
+    attempts += 1;
+    throw error;
+  }, { wait: async () => {} }), (actual) => actual === error);
+  assert.equal(attempts, 3);
+});
+
 test("missing files and invalid signatures fail immediately", async () => {
   for (const error of [Object.assign(new Error("Not found"), { statusCode: 404 }), new Error("net::ERR_CERT_AUTHORITY_INVALID"), new Error("sha512 checksum mismatch")]) {
     let attempts = 0;

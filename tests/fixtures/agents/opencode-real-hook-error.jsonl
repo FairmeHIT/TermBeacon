@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","evidence":"real","scenario":"error","name":"real-hook-error","description":"真实 OpenCode standalone 任务因 provider 限额失败；正文已脱敏"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"session.prompt","status":"running","at":1846}
+{"kind":"hook","event":"session.execution.failed","status":"failed","at":87438}
+{"kind":"assert","state":"error"}

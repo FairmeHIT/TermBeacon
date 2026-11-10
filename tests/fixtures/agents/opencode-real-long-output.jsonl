@@ -1,0 +1,7 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","name":"real-long-output","description":"真实 OpenCode 2.2.1 任务：工具输出 120 行并完成；原始 capture 在 captures/opencode-opencode-long-output-real-20261109-151345.jsonl，正文已脱敏","evidence":"real","scenario":"long-output"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"session.prompt","status":"running","at":2428}
+{"kind":"hook","event":"tool.execute.before","status":"running","at":5518}
+{"kind":"output","data":"Line 1\r\nLine 2\r\n...\r\nLine 120\r\nLONG_OUTPUT_DONE\r\n","at":7000}
+{"kind":"hook","event":"session.execution.succeeded","status":"completed","at":7957}
+{"kind":"assert","state":"completed-unseen"}

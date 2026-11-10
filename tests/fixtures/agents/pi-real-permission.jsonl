@@ -1,0 +1,10 @@
+{"kind":"meta","agent":"pi","version":"1.5.0","name":"real-permission-confirm","description":"真实 Pi 1.5.0 原生 ctx.ui.confirm 权限等待：ui_prompt_start/waiting、ui_prompt_end/running、agent_settled/completed；原始 capture 在 captures/pi-permission-confirm-hooks4-20261109.jsonl","evidence":"real","scenario":"permission"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"input","data":"[task]\r","at":5083}
+{"kind":"hook","event":"pi.agent_start","status":"running","at":5145}
+{"kind":"hook","event":"pi.ui_prompt_start","status":"waiting","at":5168}
+{"kind":"hook","event":"pi.ui_prompt_end","status":"running","at":43009}
+{"kind":"hook","event":"pi.agent_start","status":"running","at":43010}
+{"kind":"hook","event":"pi.agent_settled","status":"completed","at":44841}
+{"kind":"hook","event":"pi.agent_settled","status":"completed","at":44842}
+{"kind":"assert","state":"completed-unseen"}

@@ -45,6 +45,14 @@ test("unknown diagnostic output and commands are preserved verbatim", () => {
   }
 });
 
+test("terminal workspace labels use the selected language", () => {
+  assert.equal(text("en", "工作区"), "Workspaces");
+  assert.equal(text("en", "终端"), "Terminals");
+  assert.equal(text("en", "就绪"), "Ready");
+  assert.equal(text("en", "终端 {index}", { index: 1 }), "Terminal 1");
+  assert.equal(text("zh-CN", "终端 {index}", { index: 1 }), "终端 1");
+});
+
 test("settings update messages include localized retries, downloads, and nested errors", () => {
   assert.equal(describeSettingsUpdate("en", { type: "downloading", percent: 52.7 }, true), "Downloading update 53%");
   assert.equal(describeSettingsUpdate("zh-CN", { type: "downloaded", version: "0.2.0" }, true), "新版本 0.2.0 已下载，重启应用即可安装");

@@ -168,8 +168,19 @@ export default {
         // outcome survives between turns. An old idle projection must not end
         // a newly submitted prompt while admission is still in progress.
         if (!isActive && Number.isFinite(info?.time?.idle) && info.time.idle < turnStartedAt) return;
+        // `session.active()` describes the foreground session owned by the
+        // OpenCode process, not whether its latest turn is still running. The
+        // interactive TUI keeps a completed session in that list while it
+        // waits for the next prompt. Once a native completion/failure was
+        // delivered, treating that stale membership as `running` would
+        // relight the detector and make a finished task survive reconnects as
+        // Working. A new prompt/execution event updates `reporter.latest` and
+        // is the authoritative signal that a new turn has started.
+        const latestStatus = reporter.latest?.status;
         const status = isActive
-          ? reporter.latest?.status === "waiting" ? "waiting" : "running"
+          ? latestStatus === "waiting" ? "waiting"
+            : latestStatus === "completed" || latestStatus === "failed" ? undefined
+              : "running"
           : statusOf(info?.outcome);
         if (status) reporter.report("session.snapshot", status, selected);
       } catch { /* The next poll/reconnect retries the snapshot. */ }

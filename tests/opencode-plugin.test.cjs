@@ -256,6 +256,29 @@ test("a slow poll cannot reverse a newer completion event", async (t) => {
   assert.equal(h.received.at(-1).status, "completed");
 });
 
+test("active session membership cannot relight a completed turn", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const h = await harness(t, {
+    async get({ sessionID }) { return { id: sessionID, outcome: "succeeded" }; },
+    // OpenCode keeps the interactive session in `active` while it waits for
+    // the next prompt, even after the current turn has completed.
+    async active() { return { main: { type: "idle" } }; },
+  });
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "main" } });
+  await until(() => h.received.length === 2);
+  assert.equal(h.received.at(-1).status, "completed");
+
+  t.mock.timers.tick(5000);
+  await delay(30);
+  assert.equal(h.received.length, 2, "a stale active snapshot must not restore Working");
+
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 3);
+  assert.equal(h.received.at(-1).status, "running", "a new prompt must start a new turn");
+});
+
 test("an idle projection from an earlier turn cannot complete a newly submitted prompt", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   let reads = 0;

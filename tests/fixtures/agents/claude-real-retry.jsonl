@@ -1,0 +1,9 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-retry","description":"真实 Claude Code 2.1.319 任务：第一次 Bash 命令失败，重试成功；原始 capture 在 captures/claude-claude-retry-real-20261109-152736.jsonl，正文已脱敏","evidence":"real","scenario":"retry"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":27031}
+{"kind":"hook","event":"PreToolUse","status":"running","at":29799}
+{"kind":"hook","event":"PreToolUse","status":"running","at":80188}
+{"kind":"hook","event":"PostToolUse","status":"running","at":80584}
+{"kind":"output","data":"First command failed; the retry succeeded.\r\nCLAUDE_RETRY_DONE\r\n","at":82236}
+{"kind":"hook","event":"Stop","status":"completed","at":82383}
+{"kind":"assert","state":"completed-unseen"}

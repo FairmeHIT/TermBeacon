@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","name":"real-task-03","description":"真实 OpenCode 任务 03：bifrost/wb-cn:deepseek-v4.1-flash 脱敏事件证据","evidence":"real"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"session.prompt","status":"running","at":4009}
+{"kind":"hook","event":"session.execution.succeeded","status":"completed","at":9508}
+{"kind":"assert","state":"completed-unseen"}

@@ -1,0 +1,8 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-error","description":"真实 Claude Code 2.1.319 独立错误任务：模型不可用错误被检测并保留错误状态；原始 capture 在 captures/claude-claude-error-real-20261109-161133.jsonl，正文已脱敏","evidence":"real","scenario":"error"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"output","at":537,"data":"\u001b[?9001h\u001b[?1004h"}
+{"kind":"output","at":3269,"data":"\u001b[?25l\u001b[2J\u001b[m\u001b[H\u001b]0;claude\u0007\u001b[?25h"}
+{"kind":"output","at":5897,"data":"Claude Code doesn't recognize the model \"definitely-not-a-real-model\", so it assumes a context window of 200k tokens. Update Claude Code, or see https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id to set the window.\r\n"}
+{"kind":"output","at":9709,"data":"[claude-code:unrecognized_model] {\"model\":\"definitely-not-a-real-model\",\"query_source\":\"sdk\"}\r\n"}
+{"kind":"output","at":14538,"data":"\u001b[?25lI'm ready to help with the TermBeacon project. What would you like me to work on?\u001b[7;1HI can see there's substantial uncommitted work in the tree — modified detection-engine/agent-registry files, new CLI acceptance tooling (`scripts/cli-acceptance-report.cjs`, `docs/cli-acceptance-matrix.md`, `docs/release-1.0-criteria.md`), and a large set of new agent fixtures. Let me know if you want me to pick up any of that, run the tests, or something else entirely.\r\n\u001b[?25h"}
+{"kind":"assert","state":"error"}

@@ -1,0 +1,5 @@
+{"kind":"meta","agent":"pi","version":"1.5.0","name":"real-permission-waiting","description":"真实 Pi 1.5.0 原生 ctx.ui.confirm 等待断点：agent_start/running 后进入 ui_prompt_start/waiting；源自 captures/pi-permission-confirm-hooks4-20261109.jsonl，正文已脱敏","evidence":"real","scenario":"permission"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"pi.agent_start","status":"running","at":5145}
+{"kind":"hook","event":"pi.ui_prompt_start","status":"waiting","at":5168}
+{"kind":"assert","state":"awaiting-input"}

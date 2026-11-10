@@ -154,9 +154,27 @@ function createDetector(agentType = "generic", emit = () => {}) {
     outputAt = now;
     const clean = stripAnsi(oscParser.feed(data));
     runtime.lastOutputAt = now;
+    const errorOutput = tailLines(clean, 4);
     // A native lifecycle event owns this turn until input, launch or another
-    // native event. TUI redraws and silence cannot reverse that evidence.
-    if (runtime.hookStatus) return;
+    // native event. A permission/confirmation dialog is the one exception:
+    // some TUI versions render it without emitting a native waiting event.
+    if (runtime.hookStatus) {
+      if (runtime.hookStatus !== "waiting"
+        && config.id !== "opencode"
+        && config.patterns.error.some((pattern) => pattern.test(errorOutput))) {
+        runtime.hookStatus = "failed";
+        runtime.pending = null;
+        transition("error", 0.92, "output", clean.trim().slice(-160));
+        return;
+      }
+      const dialog = tailLines(clean, 8);
+      if (config.patterns.waitingInput.some((pattern) => pattern.test(dialog))) {
+        runtime.hookStatus = "waiting";
+        runtime.armed = true;
+        transition("awaiting-input", 0.88, "output", clean.trim().slice(-160));
+      }
+      return;
+    }
     const recent = (runtime.signalTail + clean).slice(-EVIDENCE_TAIL);
     runtime.signalTail = recent.slice(-SIGNAL_TAIL);
     const evidence = tailLines(recent, COMPLETION_LINES);

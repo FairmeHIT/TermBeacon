@@ -36,6 +36,29 @@ test("marks timed-out captures for review without treating them as fixtures", ()
   assert.deepEqual(summary.reviewReasons, ["missing-exit"]);
 });
 
+test("counts redacted command-line task markers as task inputs", () => {
+  const records = parseCapture([
+    JSON.stringify({ kind: "meta", schemaVersion: 1, agent: "claude", command: "claude -p" }),
+    JSON.stringify({ kind: "input", at: 0, data: "[task]\r", source: "task-label", label: "TASK-01" }),
+    JSON.stringify({ kind: "exit", at: 100, exitCode: 0 }),
+  ].join("\n"));
+  const summary = summarizeCapture(records);
+  assert.equal(summary.taskInputs, 1);
+  assert.equal(summary.fixtureEligible, true);
+});
+
+test("summarizes complete reconnect evidence without exposing terminal text", () => {
+  const records = parseCapture([
+    JSON.stringify({ kind: "meta", schemaVersion: 1, agent: "pi", version: "1.5.0", command: "pi" }),
+    JSON.stringify({ kind: "reconnect", phase: "detached", source: "window", at: 100 }),
+    JSON.stringify({ kind: "reconnect", phase: "attached", source: "window", at: 200 }),
+    JSON.stringify({ kind: "exit", at: 300, exitCode: 0 }),
+  ].join("\n"));
+  const summary = summarizeCapture(records);
+  assert.deepEqual(summary.reconnectPhases, ["detached", "attached"]);
+  assert.equal(summary.reconnectEvidence, true);
+});
+
 test("rejects malformed capture lines and parses flags", () => {
   assert.throws(() => parseCapture('{"kind":"meta"}\nnot-json'), /line 2/);
   assert.deepEqual(parseArgs(["--json", "a.jsonl", "b.jsonl"]), { json: true, files: ["a.jsonl", "b.jsonl"] });

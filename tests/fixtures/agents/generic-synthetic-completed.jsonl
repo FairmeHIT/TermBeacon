@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"generic","evidence":"synthetic","name":"synthetic-completed","description":"Detector state coverage for a generic completion event"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"shell.completed","status":"completed","at":100}
+{"kind":"assert","state":"completed-unseen"}

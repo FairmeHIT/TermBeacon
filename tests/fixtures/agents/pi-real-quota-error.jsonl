@@ -1,0 +1,6 @@
+{"kind":"meta","agent":"pi","version":"1.5.0","name":"real-quota-error","description":"真实 Pi 1.5.0 重试任务尝试：可用模型路由返回 Insufficient Balance，任务未进入工具重试；原始 capture 在 captures/pi-retry-v4-pro-real-20261109-163054.jsonl，request id 已移除","evidence":"real","scenario":"error"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"pi.agent_start","status":"running","at":1499}
+{"kind":"output","data":"402: {\"message\":\"Insufficient Balance\",\"type\":\"insufficient_balance_error\",\"code\":\"invalid_request_error\"}\r\n","at":2220}
+{"kind":"exit","exitCode":1,"at":3304}
+{"kind":"assert","state":"error"}

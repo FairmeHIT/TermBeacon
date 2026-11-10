@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"generic","evidence":"synthetic","name":"synthetic-awaiting","description":"Detector state coverage for a generic confirmation prompt"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"output","data":"Allow this action? [Yes/No]","at":100}
+{"kind":"assert","state":"awaiting-input"}

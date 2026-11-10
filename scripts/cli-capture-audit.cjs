@@ -31,6 +31,14 @@ function summarizeCapture(records, file = undefined) {
   const inputs = records.filter((record) => record.kind === "input");
   const exits = records.filter((record) => record.kind === "exit");
   const errors = records.filter((record) => record.kind === "error");
+  const reconnectSources = [...new Set(records
+    .filter((record) => record.kind === "reconnect")
+    .map((record) => record.source)
+    .filter((source) => typeof source === "string"))];
+  const reconnectPhases = [...new Set(records
+    .filter((record) => record.kind === "reconnect" && record.source === "window")
+    .map((record) => record.phase)
+    .filter((phase) => typeof phase === "string"))];
   const timestamps = records.map((record) => record.at).filter((value) => Number.isFinite(value));
   const outputBytes = outputs.reduce((sum, record) => sum + Buffer.byteLength(String(record.data || ""), "utf8"), 0);
   const inputBytes = inputs.reduce((sum, record) => sum + Buffer.byteLength(String(record.data || ""), "utf8"), 0);
@@ -58,8 +66,11 @@ function summarizeCapture(records, file = undefined) {
     outputBytes,
     inputRecords: inputs.length,
     inputBytes,
-    taskInputs: inputs.filter((record) => record.source === "task").length,
+    taskInputs: inputs.filter((record) => record.source === "task" || record.source === "task-label").length,
     titleSignals,
+    reconnectSources,
+    reconnectPhases,
+    reconnectEvidence: reconnectPhases.includes("detached") && reconnectPhases.includes("attached"),
     exits: exits.map((record) => ({ exitCode: record.exitCode, signal: record.signal })),
     errors: errors.length,
     naturalExit,

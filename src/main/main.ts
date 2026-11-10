@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, dialog, ipcMain, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
@@ -644,6 +644,7 @@ ipcMain.handle("cli:docs", async (_event, id) => {
   await shell.openExternal(cliCatalog[id].docs);
 });
 ipcMain.handle("platform:info", () => platformInfo());
+ipcMain.handle("clipboard:read-text", () => clipboard.readText());
 ipcMain.handle("session:resume-spec", async (_event, request) => {
   const spec = getResumeSpec(request || {});
   if (!spec.supported) return spec;

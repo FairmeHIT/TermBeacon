@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"claude","evidence":"synthetic","name":"synthetic-error","description":"Detector state coverage for native failure event"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"Stop","status":"failed","at":100}
+{"kind":"assert","state":"error"}

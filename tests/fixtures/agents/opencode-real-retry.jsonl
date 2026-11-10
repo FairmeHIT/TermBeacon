@@ -1,0 +1,6 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","name":"real-retry","description":"真实 OpenCode 2.2.1 任务：第一次命令失败后再次执行成功；原始 capture 在 captures/opencode-opencode-retry-real-20261109-152558.jsonl，正文已脱敏","evidence":"real","scenario":"retry"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"session.prompt","status":"running","at":1800}
+{"kind":"output","data":"$ exit 1\r\n(no output)\r\n> build · wb-cn:deepseek-v4.1-flash\r\n$ echo retry-ok\r\nretry-ok\r\n","at":5000}
+{"kind":"hook","event":"session.execution.succeeded","status":"completed","at":6500}
+{"kind":"assert","state":"completed-unseen"}

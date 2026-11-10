@@ -200,10 +200,55 @@ test("bare failed in ordinary log output does not become an error", () => {
   assert.equal(updates.at(-1).current, "working");
 });
 
+test("model-unavailable output enters error", () => {
+  const { detector, updates } = makeAgent("pi");
+  detector.input("run task\r");
+  detector.output('Error: Model "definitely-not-a-real-model" not found.\r\n', 1000);
+  assert.equal(updates.at(-1).current, "error");
+});
+
+test("Claude unrecognized model output enters error", () => {
+  const updates = [];
+  const detector = createDetector("claude", (update) => updates.push(update));
+  detector.input("task\r");
+  detector.output("Claude Code doesn't recognize the model \"definitely-not-a-real-model\".\r\n", 1000);
+  detector.output("[claude-code:unrecognized_model] {\"model\":\"definitely-not-a-real-model\"}\r\n", 2000);
+  assert.equal(updates.at(-1).current, "error");
+});
+
+test("provider insufficient balance output enters error", () => {
+  const { detector, updates } = makeAgent("pi");
+  detector.input("task\r");
+  detector.output("402: {\"message\":\"Insufficient Balance\",\"type\":\"insufficient_balance_error\"}\r\n", 1000);
+  assert.equal(updates.at(-1).current, "error");
+});
+
+test("native Pi running turns become error on a provider failure", () => {
+  const { detector, updates } = makeAgent("pi");
+  detector.hook("pi.agent_start", "running");
+  detector.output("402: {\"message\":\"Insufficient Balance\",\"type\":\"insufficient_balance_error\"}\r\n", 1000);
+  assert.equal(updates.at(-1).current, "error");
+});
+
 test("Claude-style permission dialog enters awaiting-input", () => {
   const { detector, updates } = make();
   detector.input("read file\r");
   detector.output("Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n", 1000);
+  assert.equal(updates.at(-1).current, "awaiting-input");
+});
+
+test("OpenCode grant-permission question enters awaiting-input", () => {
+  const { detector, updates } = makeAgent("opencode");
+  detector.input("run task\r");
+  detector.output("Questions\r\nThe `ls` listing above is complete. Do you grant permission to proceed?\r\n1. Grant permission\r\n2. Deny permission\r\n", 1000);
+  assert.equal(updates.at(-1).current, "awaiting-input");
+});
+
+test("permission output can upgrade a native running turn", () => {
+  const { detector, updates } = makeAgent("opencode");
+  detector.input("run task\r");
+  detector.hook("session.execution.started", "running");
+  detector.output("Questions\r\nDo you grant permission to proceed?\r\n1. Grant permission\r\n2. Deny permission\r\n", 1000);
   assert.equal(updates.at(-1).current, "awaiting-input");
 });
 

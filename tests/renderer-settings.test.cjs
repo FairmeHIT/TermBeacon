@@ -29,9 +29,9 @@ test("settings icon uses a conventional gear", () => {
 });
 
 test("sidebar controls expose collapse and a visible new-terminal action", () => {
-  assert.match(app, /title="隐藏工作栏"/);
-  assert.match(app, /title="展开工作栏"/);
-  assert.match(app, /aria-label="新建终端"><PlusIcon\s*\/>/);
+  assert.match(app, /title=\{t\("隐藏工作栏"\)\}/);
+  assert.match(app, /title=\{t\("展开工作栏"\)\}/);
+  assert.match(app, /aria-label=\{t\("新建终端"\)\}><PlusIcon\s*\/>/);
   const footer = app.match(/<div className="sidebar-footer">([\s\S]*?)<\/div>/)?.[1];
   assert.match(footer, /className="sidebar-tool sidebar-toggle"/);
   const toggle = styles.match(/\.sidebar-toggle\s*\{([\s\S]*?)\}/)?.[1];
@@ -47,8 +47,8 @@ test("workspaces and terminals render as distinct labeled sections", () => {
   // Both sections live in the sidebar with their own headers and add actions.
   assert.match(app, /<section className="sidebar-section workspaces-section">/);
   assert.match(app, /<section className="sidebar-section terminals-section">/);
-  assert.match(app, /<span className="sidebar-section-title">工作区<\/span>/);
-  assert.match(app, /<span className="sidebar-section-title">终端<\/span>/);
+  assert.match(app, /<span className="sidebar-section-title">\{t\("工作区"\)\}<\/span>/);
+  assert.match(app, /<span className="sidebar-section-title">\{t\("终端"\)\}<\/span>/);
   // The sections are visually separated, not one blended column.
   const separators = styles.match(/\.terminals-section\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(separators, "terminals section styles must exist");
@@ -62,7 +62,7 @@ test("workspaces and terminals render as distinct labeled sections", () => {
   assert.ok(item, "workspace item styles must exist");
   assert.match(item, /grid-template-columns:\s*16px minmax\(0, 1fr\) auto/);
   assert.doesNotMatch(item, /height:\s*26px/, "workspace items are cards, not one-row chips");
-  assert.match(app, /aria-label="添加工作区（选择本地文件夹）"><PlusIcon/);
+  assert.match(app, /aria-label=\{t\("添加工作区（选择本地文件夹）"\)\}><PlusIcon/);
   assert.match(app, /ref=\{workspaceStrip\}/);
 });
 
@@ -135,6 +135,17 @@ test("TUI output keeps native LF handling", () => {
   assert.doesNotMatch(app, /convertEol:\s*true/);
 });
 
+test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
+  assert.match(app, /readClipboardText\(\): Promise<string>/);
+  assert.match(app, /term\.attachCustomKeyEventHandler\(\(event\) =>/);
+  assert.match(app, /if \(event\.type !== "keydown"\) return true/);
+  assert.match(app, /event\.ctrlKey \|\| event\.metaKey/);
+  assert.match(app, /key === "insert" && event\.shiftKey/);
+  assert.match(app, /window\.termbeacon\.readClipboardText\(\)/);
+  assert.match(app, /term\.paste\(text\)/);
+  assert.match(fs.readFileSync(path.join(__dirname, "../src/main/preload.cjs"), "utf8"), /readClipboardText: \(\) => ipcRenderer\.invoke\("clipboard:read-text"\)/);
+});
+
 test("alternate-screen repaint output is isolated from scrollback", () => {
   const screen = fs.readFileSync(path.join(__dirname, "../src/renderer/terminal-screen.ts"), "utf8");
   assert.match(screen, /1049/);
@@ -184,6 +195,13 @@ test("workspace titles mirror the folder name until the user renames them", () =
   // Hydration only re-derives names for unpinned workspaces with a folder.
   assert.match(app, /workspace\.namePinned \|\| !workspace\.cwd/);
   assert.match(app, /folderNameFromPath\(workspace\.cwd\)/);
+});
+
+test("generated terminal titles translate without changing pinned names", () => {
+  const display = app.match(/function displayTerminalTitle\(terminal: TerminalInstance\): string \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(display, "displayTerminalTitle must exist");
+  assert.match(display, /if \(terminal\.titlePinned\) return terminal\.title/);
+  assert.match(display, /终端\|Terminal/);
 });
 
 test("Claude task titles stay in the sidebar while OSC status labels are ignored", () => {

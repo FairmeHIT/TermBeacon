@@ -1,0 +1,4 @@
+{"kind":"meta","agent":"generic","evidence":"synthetic","name":"synthetic-error","description":"Detector state coverage for a generic error line"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"output","data":"Error: command failed","at":100}
+{"kind":"assert","state":"error"}

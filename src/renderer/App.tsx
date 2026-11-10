@@ -40,6 +40,7 @@ declare global {
       openCliDocs(id: AgentCliId): Promise<void>;
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
+      readClipboardText(): Promise<string>;
       pickCwd(): Promise<string | null>;
       loadHistory(terminalId: string): Promise<string>;
       appendHistory(terminalId: string, data: string): Promise<boolean>;
@@ -108,15 +109,16 @@ const shellLabel: Record<string, string> = {
   "/bin/zsh": "Zsh",
 };
 
-function terminalCliLabel(terminal: TerminalInstance): string {
-  return agentLabel[terminal.agentType] || shellLabel[terminal.shell || DEFAULT_SHELL] || terminal.shell || "Shell";
+function terminalCliLabel(terminal: TerminalInstance, translate: (source: string) => string): string {
+  const source = agentLabel[terminal.agentType] || shellLabel[terminal.shell || DEFAULT_SHELL] || terminal.shell || "Shell";
+  return translate(source);
 }
 
-function terminalStateLabel(terminal: TerminalInstance): string {
-  if (terminal.recoveryState === "recovering") return "正在恢复";
-  if (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") return "可恢复";
-  if (terminal.recoveryState === "unsupported") return "无法恢复";
-  return stateLabel[terminal.state];
+function terminalStateLabel(terminal: TerminalInstance, translate: (source: string) => string): string {
+  if (terminal.recoveryState === "recovering") return translate("正在恢复");
+  if (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") return translate("可恢复");
+  if (terminal.recoveryState === "unsupported") return translate("无法恢复");
+  return translate(stateLabel[terminal.state]);
 }
 
 function isClaudeStatusTitle(title: string): boolean {
@@ -124,7 +126,7 @@ function isClaudeStatusTitle(title: string): boolean {
 }
 
 function isGeneratedTerminalTitle(title: string): boolean {
-  return /^终端\s+\d+$/.test(title.trim()) || isClaudeStatusTitle(title);
+  return /^(?:终端|Terminal)\s+\d+$/i.test(title.trim()) || isClaudeStatusTitle(title);
 }
 
 type Theme = "dark" | "light";
@@ -240,7 +242,7 @@ function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
 
 // Mirrors src/main/title-utils.cjs (kept inline here because the renderer
 // bundle cannot reliably import CommonJS modules from the main process tree).
-function EditableTitle({ title, onCommit }: { title: string; onCommit: (next: string) => void }) {
+function EditableTitle({ title, onCommit, renameHint = "双击重命名" }: { title: string; onCommit: (next: string) => void; renameHint?: string }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -250,7 +252,7 @@ function EditableTitle({ title, onCommit }: { title: string; onCommit: (next: st
       inputRef.current.select();
     }
   }, [editing]);
-  if (!editing) return <strong title="双击重命名" onDoubleClick={() => { setDraft(title); setEditing(true); }}>{title}</strong>;
+  if (!editing) return <strong title={renameHint} onDoubleClick={() => { setDraft(title); setEditing(true); }}>{title}</strong>;
   function commit() {
     setEditing(false);
     const next = normalizeTitleInput(draft);
@@ -278,6 +280,8 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLocale, setSettingsLocale] = useState<SettingsLocale>(() => readSettingsLocale(window.localStorage));
   useEffect(() => { saveSettingsLocale(window.localStorage, settingsLocale); }, [settingsLocale]);
+  const t = (source: string, values?: Record<string, string | number>) => settingsText(settingsLocale, source, values);
+  useEffect(() => { document.documentElement.lang = settingsLocale === "en" ? "en" : "zh-CN"; }, [settingsLocale]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.localStorage.getItem("termbeacon-sidebar-collapsed") === "true");
   const [hostDown, setHostDown] = useState(false);
   const [hostMessage, setHostMessage] = useState("");
@@ -340,6 +344,19 @@ function App() {
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
   const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
+
+  function displayTerminalTitle(terminal: TerminalInstance): string {
+    if (terminal.titlePinned) return terminal.title;
+    const match = /^(?:终端|Terminal)\s+(\d+)$/i.exec(terminal.title.trim());
+    return match ? t("终端 {index}", { index: match[1] }) : terminal.title;
+  }
+
+  function displayWorkspaceName(workspace: Workspace): string {
+    if (workspace.namePinned) return workspace.name;
+    if (workspace.name === "默认工作区") return t("默认工作区");
+    const match = /^工作区\s+(\d+)$/.exec(workspace.name.trim());
+    return match ? t("工作区 {index}", { index: match[1] }) : workspace.name;
+  }
 
   function flushPendingHistory() {
     const pending = new Map(pendingHistory.current);
@@ -561,10 +578,10 @@ function App() {
       setHostDown(true);
       setHostMessage(event.message || "PTY Host 已断开");
       setTasks((items) => items.map((task) => task.state === "working" || task.state === "awaiting-input"
-        ? { ...task, state: "error", finishedAt: event.at, error: event.message || "PTY host 已断开", summary: event.message || "PTY host 已断开" }
+        ? { ...task, state: "error", finishedAt: event.at, error: event.message || "PTY Host 已断开", summary: event.message || "PTY Host 已断开" }
         : task));
       setTerminals((items) => items.map((item) => item.alive
-        ? { ...item, alive: false, state: "error", lastOutputSummary: event.message || "PTY host 已断开" }
+        ? { ...item, alive: false, state: "error", lastOutputSummary: event.message || "PTY Host 已断开" }
         : item));
     });
     const disposeTitle = window.termbeacon.onTitle((event) => {
@@ -667,6 +684,20 @@ function App() {
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
+      term.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") return true;
+        const key = event.key.toLowerCase();
+        const pasteShortcut = key === "v"
+          ? (event.ctrlKey || event.metaKey) && !event.altKey
+          : key === "insert" && event.shiftKey && !event.altKey && !event.metaKey;
+        if (!pasteShortcut) return true;
+        event.preventDefault();
+        event.stopPropagation();
+        void window.termbeacon.readClipboardText().then((text) => {
+          if (typeof text === "string" && text) term.paste(text);
+        }).catch(() => undefined);
+        return false;
+      });
       term.onData((data) => {
         const buffer = inputBuffers.current.get(terminal.id) || "";
         const submitted = data.includes("\r") || data.includes("\n");
@@ -1081,7 +1112,7 @@ function App() {
   function removeTerminal(id: string) {
     const target = terminals.find((item) => item.id === id);
     if (!target) return;
-    if (!window.confirm(`删除终端「${target.title}」？正在运行的进程会被停止。`)) return;
+    if (!window.confirm(t("删除终端「{title}」？正在运行的进程会被停止。", { title: displayTerminalTitle(target) }))) return;
     window.termbeacon.forget(id);
     const view = terminalViews.current.get(id);
     if (view) {
@@ -1170,7 +1201,8 @@ function App() {
     if (workspaces.length < 2) return;
     const target = workspaces.find((workspace) => workspace.id === id);
     if (!target) return;
-    if (!window.confirm(`删除工作区「${target.name}」及其中的 ${target.terminalIds.length} 个终端？${target.cwd ? `\n（目录：${target.cwd}）` : ""}`)) return;
+    const directory = target.cwd ? `\n(${t("目录")}: ${target.cwd})` : "";
+    if (!window.confirm(t("删除工作区「{name}」及其中的 {count} 个终端？{directory}", { name: displayWorkspaceName(target), count: target.terminalIds.length, directory }))) return;
     target.terminalIds.forEach((terminalId) => {
       window.termbeacon.forget(terminalId);
     });
@@ -1237,47 +1269,47 @@ function App() {
       <div className="brand-row"><div className="brand-lockup"><BrandMark /><div className="brand">TermBeacon</div></div></div>
       <section className="sidebar-section workspaces-section">
         <div className="sidebar-section-header">
-          <span className="sidebar-section-title">工作区</span>
-          <button className="workspace-add" onClick={addWorkspace} title="添加工作区（选择本地文件夹）" aria-label="添加工作区（选择本地文件夹）"><PlusIcon /></button>
+          <span className="sidebar-section-title">{t("工作区")}</span>
+          <button className="workspace-add" onClick={addWorkspace} title={t("添加工作区（选择本地文件夹）")} aria-label={t("添加工作区（选择本地文件夹）")}><PlusIcon /></button>
         </div>
         <div className="workspace-list" ref={workspaceStrip}>
-          {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.cwd ? `${workspace.name}（${workspace.cwd}）` : workspace.name}>
+          {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.cwd ? `${displayWorkspaceName(workspace)} (${workspace.cwd})` : displayWorkspaceName(workspace)}>
             <span className="workspace-glyph" aria-hidden="true">
               <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
             </span>
             <span className="workspace-copy">
-              <EditableTitle title={workspace.name} onCommit={(next) => renameWorkspace(workspace.id, next)} />
-              <small>{workspace.cwd || "未设置目录"}</small>
+              <EditableTitle title={displayWorkspaceName(workspace)} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
+              <small>{workspace.cwd || t("未设置目录")}</small>
             </span>
-            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title={`删除工作区「${workspace.name}」`} role="button" aria-label={`删除工作区「${workspace.name}」`}>×</span>}
+            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })} role="button" aria-label={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })}>×</span>}
           </button>)}
         </div>
       </section>
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
-          <span className="sidebar-section-title">终端</span>
-          <button className="workspace-add" onClick={addTerminal} title="新建终端" aria-label="新建终端"><PlusIcon /></button>
+          <span className="sidebar-section-title">{t("终端")}</span>
+          <button className="workspace-add" onClick={addTerminal} title={t("新建终端")} aria-label={t("新建终端")}><PlusIcon /></button>
         </div>
         <div className="terminal-list">
         {workspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item ${terminal.id === activeId ? "active" : ""}`} onClick={() => selectTerminal(terminal.id)}>
           <span className={`status-dot ${stateClass[terminal.state]}`} />
-          <span className="terminal-copy"><EditableTitle title={terminal.title} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal)} · {terminalStateLabel(terminal)}</small></span>
+          <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
-          {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title="恢复 CLI 会话">恢复</span>}
-          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title="删除终端">×</span>
+          {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
+          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
         </button>)}
         </div>
       </section>
       {hostDown && <div className="host-alert">
-        <span>{hostMessage || "PTY Host 已断开"}</span>
-        <button onClick={restartHost}>重启 PTY Host</button>
+        <span>{hostMessage ? settingsText(settingsLocale, hostMessage) : t("PTY Host 已断开")}</span>
+        <button onClick={restartHost}>{t("重启 PTY Host")}</button>
       </div>}
       <div className="sidebar-footer">
-        <button className="sidebar-tool sidebar-toggle" onClick={toggleSidebar} title="隐藏工作栏" aria-label="隐藏工作栏"><SidebarToggleIcon collapsed={false} /></button>
-        <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title="打开设置" aria-label="打开设置"><SettingsIcon /></button>
-        <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"}><ThemeIcon theme={theme} /></button>
+        <button className="sidebar-tool sidebar-toggle" onClick={toggleSidebar} title={t("隐藏工作栏")} aria-label={t("隐藏工作栏")}><SidebarToggleIcon collapsed={false} /></button>
+        <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title={t("打开设置")} aria-label={t("打开设置")}><SettingsIcon /></button>
+        <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={t(theme === "dark" ? "切换到浅色主题" : "切换到深色主题")} aria-label={t(theme === "dark" ? "切换到浅色主题" : "切换到深色主题")}><ThemeIcon theme={theme} /></button>
       </div>
-      <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title="拖动调整侧栏宽度" />
+      <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title={t("拖动调整侧栏宽度")} />
       </>}
     </aside>
     {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={theme} onTheme={setTheme} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
@@ -1291,10 +1323,10 @@ function App() {
       }}
       onBack={() => setSettingsOpen(false)} onLaunch={launchCli} />}
     <section className={`workspace ${settingsOpen ? "settings-hidden" : ""}`} aria-hidden={settingsOpen}>
-      {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title="展开工作栏" aria-label="展开工作栏"><SidebarToggleIcon collapsed /></button>}
-      {active && !active.alive && <button className="terminal-restart" onClick={() => restartTerminal(active.id)} title="终端已停止，点击重启">重启终端</button>}
-      {updateState?.type === "downloaded" && <div className="update-banner">新版本 {updateState.version || "已下载"} 已准备好。<button onClick={() => void window.termbeacon.installUpdate()}>重启并安装</button></div>}
-      {updateState?.type === "downloading" && <div className="update-progress">正在下载更新 {Math.round(updateState.percent || 0)}%</div>}
+      {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title={t("展开工作栏")} aria-label={t("展开工作栏")}><SidebarToggleIcon collapsed /></button>}
+      {active && !active.alive && <button className="terminal-restart" onClick={() => restartTerminal(active.id)} title={t("终端已停止，点击重启")}>{t("重启终端")}</button>}
+      {updateState?.type === "downloaded" && <div className="update-banner">{t("新版本 {version} 已准备好。", { version: updateState.version || t("已下载") })}<button onClick={() => void window.termbeacon.installUpdate()}>{t("重启并安装")}</button></div>}
+      {updateState?.type === "downloading" && <div className="update-progress">{t("正在下载更新 {percent}%", { percent: Math.round(updateState.percent || 0) })}</div>}
       <div className="terminal-stage" ref={terminalStage}>{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>
   </main>;

@@ -1,0 +1,7 @@
+{"kind":"meta","agent":"opencode","version":"2.2.1","name":"real-reconnect-user-verified","description":"用户人工验收：TermBeacon 0.1.14 Windows x64 安装版中，OpenCode 任务完成后关闭 TermBeacon，再重新打开，状态恢复正常，不再显示 Working。本条不保留原始终端文本。","evidence":"real","scenario":"reconnect","source":"user-verification","termbeaconVersion":"0.1.14"}
+{"kind":"input","data":"[task]\r","at":0,"source":"user-verification"}
+{"kind":"hook","event":"session.prompt","status":"running","at":1,"source":"user-verification"}
+{"kind":"hook","event":"session.execution.succeeded","status":"completed","at":2,"source":"user-verification"}
+{"kind":"reconnect","source":"window","phase":"detached","reason":"TermBeacon closed","verification":"user-confirmed"}
+{"kind":"reconnect","source":"window","phase":"attached","reason":"TermBeacon reopened","verification":"user-confirmed"}
+{"kind":"assert","state":"completed-unseen","verification":"user-confirmed"}

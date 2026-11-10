@@ -1,0 +1,8 @@
+{"kind":"meta","agent":"claude","version":"2.1.319","name":"real-permission-auto","description":"真实 Claude Code 2.1.319 manual-mode 工具任务：PreToolUse/PostToolUse 生命周期完成，网关对安全的目录读取自动放行；原始 capture 在 captures/claude-claude-permission-real-20261109-150909.jsonl，正文已脱敏","evidence":"real","scenario":"permission"}
+{"kind":"input","data":"[task]\r","at":0}
+{"kind":"hook","event":"UserPromptSubmit","status":"running","at":64462}
+{"kind":"hook","event":"PreToolUse","status":"running","at":68333}
+{"kind":"hook","event":"PostToolUse","status":"running","at":69315}
+{"kind":"output","data":"The directory listing ran successfully.\r\nCLAUDE_PERMISSION_DONE\r\n","at":70624}
+{"kind":"hook","event":"Stop","status":"completed","at":70756}
+{"kind":"assert","state":"completed-unseen"}

@@ -43,6 +43,42 @@ test("requires explicit sanitization and a valid expected state", () => {
   });
 });
 
+test("can mark a reviewed capture as real evidence and keep only lifecycle events", () => {
+  const records = [
+    { kind: "meta", agent: "claude", version: "2.1.319", name: "task" },
+    { kind: "input", data: "secret\r", at: 1 },
+    { kind: "output", data: "private model response", at: 2 },
+    { kind: "hook", event: "Stop", status: "completed", at: 3 },
+  ];
+  const fixture = toFixture(records, { sanitized: true, evidence: "real", hooksOnly: true, expected: "completed-unseen" });
+  assert.equal(fixture[0].evidence, "real");
+  assert.equal(fixture.some((record) => record.kind === "output"), false);
+  assert.equal(fixture.some((record) => record.kind === "hook"), true);
+});
+
+test("accepts Pi captures for real lifecycle evidence", () => {
+  const records = [
+    { kind: "meta", agent: "pi", version: "1.5.0", name: "pi-task" },
+    { kind: "input", data: "task\r", at: 1, source: "task" },
+    { kind: "hook", event: "pi.agent_start", status: "running", at: 2 },
+    { kind: "hook", event: "pi.agent_settled", status: "completed", at: 3 },
+  ];
+  const fixture = toFixture(records, { sanitized: true, evidence: "real", hooksOnly: true, expected: "completed-unseen" });
+  assert.equal(fixture[0].agent, "pi");
+  assert.equal(fixture[0].evidence, "real");
+});
+
+test("preserves explicit reconnect evidence markers", () => {
+  const records = [
+    { kind: "meta", agent: "opencode", version: "2.2.1", name: "reconnect" },
+    { kind: "reconnect", phase: "detached", source: "window", at: 20 },
+    { kind: "hook", event: "session.status", status: "running", at: 30 },
+    { kind: "reconnect", phase: "attached", source: "window", state: "working", at: 40 },
+  ];
+  const fixture = toFixture(records, { sanitized: true, evidence: "real", scenario: "reconnect", expected: "working" });
+  assert.deepEqual(fixture.filter((record) => record.kind === "reconnect"), records.filter((record) => record.kind === "reconnect"));
+});
+
 test("writes a fixture without retaining raw capture-only fields", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tb-fixture-"));
   try {
