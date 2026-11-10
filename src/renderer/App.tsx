@@ -9,7 +9,7 @@ import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, setting
 import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
-import { splitScreenOutput } from "./terminal-screen";
+import { normalizePiCursorOutput, splitScreenOutput } from "./terminal-screen";
 import "./styles.css";
 
 const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInterrupted, restoreAttachedTasks, restoredTerminalRecovery } = taskHistoryUtils as {
@@ -498,9 +498,14 @@ function App() {
         }
         consumedLocal.current.set(event.terminalId, Math.max(seen, event.sequence));
       }
-      const screen = splitScreenOutput(event.data, alternateScreenByTerminal.current.get(event.terminalId) ?? false);
+      const initialAlternate = alternateScreenByTerminal.current.get(event.terminalId) ?? false;
+      const screen = splitScreenOutput(event.data, initialAlternate);
       alternateScreenByTerminal.current.set(event.terminalId, screen.alternate);
-      view?.write(event.data, () => window.termbeacon.acknowledgeOutput(receipt));
+      const agentType = agentTypeByTerminal.current.get(event.terminalId);
+      const renderData = agentType === "pi"
+        ? normalizePiCursorOutput(event.data, initialAlternate).normalData
+        : event.data;
+      view?.write(renderData, () => window.termbeacon.acknowledgeOutput(receipt));
       activityAt.current.set(event.terminalId, event.at);
       if (!event.replay && screen.normalData) {
         const pending = pendingHistory.current.get(event.terminalId) || { chunks: [], start: 0, length: 0 };

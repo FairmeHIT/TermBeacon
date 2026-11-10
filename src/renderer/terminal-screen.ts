@@ -12,6 +12,43 @@ export type ScreenOutput = {
 const ALTERNATE_MODES = new Set([47, 1047, 1049]);
 const PRIVATE_MODE = /\x1b\[\?([0-9;]+)([hl])/g;
 
+/**
+ * Pi draws its focused input cursor as reverse video and deliberately leaves
+ * the hardware cursor at the end of the row. Keep that hardware cursor hidden
+ * while Pi owns the alternate screen so xterm does not show a blinking block
+ * in the lower-right corner. The normal-screen cursor is restored on exit.
+ */
+export function normalizePiCursorOutput(data: string, initialAlternate = false): ScreenOutput {
+  if (!data) return { normalData: "", alternate: initialAlternate };
+
+  let alternate = initialAlternate;
+  let cursor = 0;
+  let renderData = "";
+  PRIVATE_MODE.lastIndex = 0;
+
+  for (const match of data.matchAll(PRIVATE_MODE)) {
+    const index = match.index ?? 0;
+    renderData += data.slice(cursor, index);
+    const modes = match[1].split(";").map((value) => Number(value));
+    const switchesScreen = modes.some((mode) => ALTERNATE_MODES.has(mode));
+    if (switchesScreen) alternate = match[2] === "h";
+
+    // Pi emits a real cursor show (`CSI ?25h`) after drawing its fake cursor.
+    // Drop only that mode while the alternate screen is active. If a combined
+    // private-mode sequence contains other modes, preserve those modes.
+    if (alternate && !switchesScreen && match[2] === "h" && modes.includes(25)) {
+      const retained = modes.filter((mode) => mode !== 25);
+      if (retained.length > 0) renderData += `\x1b[?${retained.join(";")}h`;
+    } else {
+      renderData += match[0];
+    }
+    cursor = index + match[0].length;
+  }
+
+  renderData += data.slice(cursor);
+  return { normalData: renderData, alternate };
+}
+
 export function splitScreenOutput(data: string, initialAlternate = false): ScreenOutput {
   if (!data) return { normalData: "", alternate: initialAlternate };
 

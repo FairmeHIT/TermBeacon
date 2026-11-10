@@ -24,9 +24,10 @@ function harness() {
   const acknowledgements = [], receipts = [], writes = [], timers = [];
   const ref = () => ({ current: new Map() });
   const context = vm.createContext({
-    terminalViews: ref(), consumedLocal: ref(), outputStreams: ref(), activityAt: ref(),
+    terminalViews: ref(), consumedLocal: ref(), outputStreams: ref(), activityAt: ref(), agentTypeByTerminal: ref(),
     alternateScreenByTerminal: ref(), pendingHistory: ref(), historyFlushTimer: { current: null },
     splitScreenOutput: screenModule.exports.splitScreenOutput,
+    normalizePiCursorOutput: screenModule.exports.normalizePiCursorOutput,
     window: {
       termbeacon: { acknowledgeOutput: (event, consumed = true) => { receipts.push(event); acknowledgements.push({ sequence: event.sequence, consumed }); } },
       setTimeout: (fn, delay) => { timers.push({ fn, delay }); return timers.length; },
@@ -63,6 +64,25 @@ test("new PTY incarnations reset local sequence deduplication", () => {
   emit(1, "new shell", { streamId: "stream2" });
   assert.equal(writes.length, 2);
   assert.equal(writes[1].data, "new shell");
+});
+
+test("Pi hardware cursor stays hidden inside the alternate screen", () => {
+  const { context, emit, writes } = harness();
+  context.agentTypeByTerminal.current.set("t1", "pi");
+  emit(1, "\x1b[?1049h\x1b[?25l\x1b[29;1Hinput\x1b[?25h");
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].data, /\x1b\[\?1049h/);
+  assert.doesNotMatch(writes[0].data, /\x1b\[\?25h/);
+  assert.equal(context.alternateScreenByTerminal.current.get("t1"), true);
+});
+
+test("Pi restores the normal-screen cursor after leaving the alternate screen", () => {
+  const { context, emit, writes } = harness();
+  context.agentTypeByTerminal.current.set("t1", "pi");
+  context.alternateScreenByTerminal.current.set("t1", true);
+  emit(1, "\x1b[?1049l\x1b[?25h");
+  assert.equal(writes[0].data, "\x1b[?1049l\x1b[?25h");
+  assert.equal(context.alternateScreenByTerminal.current.get("t1"), false);
 });
 
 test("pending history stays bounded when flush timers are throttled", () => {
