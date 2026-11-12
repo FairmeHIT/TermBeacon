@@ -187,6 +187,14 @@ test("terminals created in a workspace start in the workspace folder", () => {
   assert.match(addTerminal, /isValidCwd\(workspaceCwd\) \? workspaceCwd : DEFAULT_CWD/);
 });
 
+test("removing the last terminal restores focus to the replacement xterm", () => {
+  const removeTerminal = app.match(/function removeTerminal\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(removeTerminal, "removeTerminal must exist");
+  assert.match(removeTerminal, /setActiveId\(replacement\.id\);[\s\S]*focusTerminalView\(replacement\.id\);/);
+  assert.match(removeTerminal, /const nextActiveId = id === activeId \? remaining\[0\] : activeId/);
+  assert.match(removeTerminal, /if \(nextActiveId\) focusTerminalView\(nextActiveId\);/);
+});
+
 test("workspace titles mirror the folder name until the user renames them", () => {
   // Renaming pins the name so a folder change cannot clobber it.
   const renameWorkspace = app.match(/function renameWorkspace\(id: string, name: string\) \{([\s\S]*?)\n  \}/)?.[1];

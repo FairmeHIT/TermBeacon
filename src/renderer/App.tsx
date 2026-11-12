@@ -1154,11 +1154,16 @@ function App() {
       setTerminals((items) => [...items.filter((item) => item.id !== id), replacement]);
       setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
       setActiveId(replacement.id);
+      // The delete button keeps focus after the click. Restore focus to the
+      // replacement xterm once React has mounted it so typing reaches the PTY.
+      focusTerminalView(replacement.id);
       return;
     }
-    if (id === activeId) setActiveId(remaining[0]);
+    const nextActiveId = id === activeId ? remaining[0] : activeId;
+    if (nextActiveId) setActiveId(nextActiveId);
     setTerminals((items) => items.filter((item) => item.id !== id));
     setWorkspaces((items) => items.map((workspace) => workspace.id === owner?.id ? { ...workspace, terminalIds: remaining } : workspace));
+    if (nextActiveId) focusTerminalView(nextActiveId);
   }
 
   function selectWorkspace(id: string) {
