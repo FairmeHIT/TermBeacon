@@ -737,7 +737,18 @@ function App() {
       terminalViews.current.set(terminal.id, term);
       fitAddons.current.set(terminal.id, fit);
       const node = terminalNodes.current.get(terminal.id);
-      if (node) term.open(node);
+      if (node) {
+        term.open(node);
+        // A replacement terminal can be created in the same React commit as
+        // the delete action. Focus again after xterm has opened its textarea;
+        // the earlier delete-handler focus request may have run too soon.
+        if (terminal.id === activeId && !settingsOpen) {
+          term.focus();
+          requestAnimationFrame(() => {
+            if (terminalViews.current.get(terminal.id) === term && node.style.display !== "none") term.focus();
+          });
+        }
+      }
       // Fit before creating the PTY so the shell and any TUI app launched in
       // it starts with the real cols/rows. A hardcoded 120x32 leaves a window
       // where the app paints with wrong coordinates until the first resize.
@@ -812,7 +823,7 @@ function App() {
         }
       })();
     });
-  }, [terminals, hydrated, platformInfo.shell]);
+  }, [terminals, hydrated, platformInfo.shell, activeId, settingsOpen]);
 
   useEffect(() => {
     if (!hydrated) return;

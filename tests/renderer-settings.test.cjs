@@ -193,6 +193,11 @@ test("removing the last terminal restores focus to the replacement xterm", () =>
   assert.match(removeTerminal, /setActiveId\(replacement\.id\);[\s\S]*focusTerminalView\(replacement\.id\);/);
   assert.match(removeTerminal, /const nextActiveId = id === activeId \? remaining\[0\] : activeId/);
   assert.match(removeTerminal, /if \(nextActiveId\) focusTerminalView\(nextActiveId\);/);
+  const mount = app.match(/const node = terminalNodes\.current\.get\(terminal\.id\);([\s\S]*?)\/\/ Fit before creating the PTY/)?.[1];
+  assert.ok(mount, "terminal mount focus block must exist");
+  assert.match(mount, /term\.open\(node\)/);
+  assert.match(mount, /terminal\.id === activeId && !settingsOpen/);
+  assert.match(mount, /term\.focus\(\)/);
 });
 
 test("workspace titles mirror the folder name until the user renames them", () => {
