@@ -1,13 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentCliId, CliAction, CliPlan, CliProgress, CliScan, ShellType } from "../shared/types";
 import { settingsText, type SettingsLocale } from "./settings-i18n";
+import type { ThemeSetting } from "./App";
 import "./settings.css";
+
+const THEME_OPTIONS: Array<{ value: ThemeSetting; label: string }> = [
+  { value: "system", label: "跟随系统" },
+  { value: "dark", label: "深色" },
+  { value: "light", label: "浅色" },
+  { value: "midnight", label: "午夜蓝" },
+  { value: "forest", label: "森林绿" },
+  { value: "sepia", label: "暖纸米色" },
+];
 
 type Props = {
   locale: SettingsLocale;
   onLocale: (locale: SettingsLocale) => void;
-  theme: "dark" | "light";
-  onTheme: (theme: "dark" | "light") => void;
+  theme: ThemeSetting;
+  onTheme: (theme: ThemeSetting) => void;
   shell: ShellType;
   shellOptions: { value: ShellType; label: string }[];
   onShell: (shell: ShellType) => void;
@@ -148,8 +158,8 @@ export default function SettingsPage(props: Props) {
         {section === "general" ? <div className="general-settings">
           <section className="preference-section"><h2>{t("外观")}</h2><p>{t("选择适合当前环境的主题。")}</p>
             <div className="appearance-options" role="group" aria-label={t("主题")}>
-              {(["dark", "light"] as const).map((theme) => <button key={theme} className={`appearance-option ${props.theme === theme ? "selected" : ""}`} aria-pressed={props.theme === theme} onClick={() => props.onTheme(theme)}>
-                <span className={`appearance-preview ${theme}`} aria-hidden="true"><i /><span><b /><b /><b /></span></span><span>{t(theme === "dark" ? "深色" : "浅色")}<span className="appearance-check" aria-hidden="true">{props.theme === theme ? "✓" : ""}</span></span>
+              {THEME_OPTIONS.map((option) => <button key={option.value} className={`appearance-option ${props.theme === option.value ? "selected" : ""}`} aria-pressed={props.theme === option.value} onClick={() => props.onTheme(option.value)}>
+                <span className={`appearance-preview ${option.value}`} aria-hidden="true"><i /><span><b /><b /><b /></span></span><span>{t(option.label)}<span className="appearance-check" aria-hidden="true">{props.theme === option.value ? "✓" : ""}</span></span>
               </button>)}
             </div>
           </section>

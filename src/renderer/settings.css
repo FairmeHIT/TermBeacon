@@ -34,7 +34,7 @@
 .general-settings { max-width: 760px; }
 .preference-section { padding-bottom: 30px; }
 .preference-section > p, .preference-row p { margin: 7px 0 0; color: var(--muted-strong); font-size: 12px; }
-.appearance-options { display: flex; gap: 16px; margin-top: 22px; }
+.appearance-options { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 22px; }
 .appearance-option { width: 174px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-soft); }
 .appearance-option.selected { border-color: var(--accent); }
 .appearance-option > span:last-child { display: flex; justify-content: space-between; padding: 10px 7px 6px; font-size: 12px; }
@@ -49,6 +49,22 @@
 .appearance-preview.light > i { background: #f3f5f7; border-color: #e2e6eb; }
 .appearance-preview.light b { background: #d2d9e1; }
 .appearance-preview.light b:first-child { background: #68899e; }
+.appearance-preview.system { background: linear-gradient(90deg, #101215 0 50%, #ffffff 50% 100%); }
+.appearance-preview.system > i { background: linear-gradient(90deg, #191c21 0 50%, #f3f5f7 50% 100%); border-color: #4a5260; }
+.appearance-preview.system b { background: #6b7686; }
+.appearance-preview.system b:first-child { background: #7d94a8; }
+.appearance-preview.midnight { background: #0a1022; border-color: #233055; }
+.appearance-preview.midnight > i { background: #0f1730; border-color: #233055; }
+.appearance-preview.midnight b { background: #3d4c78; }
+.appearance-preview.midnight b:first-child { background: #7c9ff5; }
+.appearance-preview.forest { background: #0d1410; border-color: #26332b; }
+.appearance-preview.forest > i { background: #111a15; border-color: #26332b; }
+.appearance-preview.forest b { background: #3c4f44; }
+.appearance-preview.forest b:first-child { background: #6fbf97; }
+.appearance-preview.sepia { background: #f4ecdc; border-color: #ddd0b6; }
+.appearance-preview.sepia > i { background: #f9f3e6; border-color: #e9dec4; }
+.appearance-preview.sepia b { background: #cfc2a4; }
+.appearance-preview.sepia b:first-child { background: #9a6b2f; }
 .preference-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 26px 0; border-top: 1px solid var(--border); }
 .preference-row > div { min-width: 0; }
 .preference-row select { flex-shrink: 0; min-width: min(200px, 100%); max-width: min(260px, 100%); min-height: 35px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel-bg); color: var(--text-soft); font-size: 12px; }

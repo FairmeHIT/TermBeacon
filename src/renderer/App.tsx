@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent, PtyCwdEvent, PtyErrorEvent, PtyExitEvent, PtyHostExitEvent, PtyHostReadyEvent, PtyOutputEvent, PtyOutputReceipt, PtySessionEvent, PtyTitleEvent, RecoveryState, ShellType, StateSnapshotEvent, StateUpdateEvent, TaskRecord, TaskState, TerminalInstance, Workspace } from "../shared/types";
 import SettingsPage from "./SettingsPage";
@@ -40,6 +41,7 @@ declare global {
       openCliDocs(id: AgentCliId): Promise<void>;
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
+      setNativeTheme(theme: "dark" | "light"): Promise<boolean>;
       readClipboardText(): Promise<string>;
       confirm(request: { message: string; detail?: string; okLabel?: string; cancelLabel?: string }): Promise<boolean>;
       pickCwd(): Promise<string | null>;
@@ -130,11 +132,24 @@ function isGeneratedTerminalTitle(title: string): boolean {
   return /^(?:终端|Terminal)\s+\d+$/i.test(title.trim()) || isClaudeStatusTitle(title);
 }
 
-type Theme = "dark" | "light";
+// The persisted setting. "system" follows the OS and resolves to dark/light.
+export type ThemeSetting = "system" | "dark" | "light" | "midnight" | "forest" | "sepia";
+// The concrete palette actually applied to the DOM and terminals.
+type Theme = Exclude<ThemeSetting, "system">;
+
+const THEME_SETTINGS: ThemeSetting[] = ["system", "dark", "light", "midnight", "forest", "sepia"];
+const DARK_THEMES: Theme[] = ["dark", "midnight", "forest"];
+
+function isThemeSetting(value: unknown): value is ThemeSetting {
+  return typeof value === "string" && THEME_SETTINGS.includes(value as ThemeSetting);
+}
 
 const terminalThemes: Record<Theme, { background: string; foreground: string; cursor: string }> = {
   dark: { background: "#101215", foreground: "#d7dce3", cursor: "#8ab8ed" },
   light: { background: "#ffffff", foreground: "#29313b", cursor: "#2563a8" },
+  midnight: { background: "#0a1022", foreground: "#ccd6e8", cursor: "#8fb0f2" },
+  forest: { background: "#0d1410", foreground: "#cfdad2", cursor: "#8cc7a5" },
+  sepia: { background: "#faf4e6", foreground: "#43392a", cursor: "#9a6b2f" },
 };
 
 declare global {
@@ -216,7 +231,7 @@ function BrandMark() {
 }
 
 function ThemeIcon({ theme }: { theme: Theme }) {
-  return theme === "dark"
+  return DARK_THEMES.includes(theme)
     ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.4 15.7A8.8 8.8 0 0 1 8.3 3.6a8.8 8.8 0 1 0 12.1 12.1Z" /></svg>
     : <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>;
 }
@@ -273,11 +288,20 @@ function App() {
   const [hydrated, setHydrated] = useState(false);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(FALLBACK_PLATFORM);
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
-  const [theme, setTheme] = useState<Theme>(() => {
+  const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     const saved = window.localStorage.getItem("termbeacon-theme");
-    if (saved === "light" || saved === "dark") return saved;
-    return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+    return isThemeSetting(saved) ? saved : "system";
   });
+  const [systemPrefersLight, setSystemPrefersLight] = useState(() => Boolean(window.matchMedia?.("(prefers-color-scheme: light)")?.matches));
+  useEffect(() => {
+    const query = window.matchMedia?.("(prefers-color-scheme: light)");
+    if (!query || typeof query.addEventListener !== "function") return;
+    const listener = (event: MediaQueryListEvent) => setSystemPrefersLight(event.matches);
+    query.addEventListener("change", listener);
+    return () => query.removeEventListener("change", listener);
+  }, []);
+  // "system" resolves through the OS preference; every other setting is concrete.
+  const theme: Theme = themeSetting === "system" ? (systemPrefersLight ? "light" : "dark") : themeSetting;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLocale, setSettingsLocale] = useState<SettingsLocale>(() => readSettingsLocale(window.localStorage));
   useEffect(() => { saveSettingsLocale(window.localStorage, settingsLocale); }, [settingsLocale]);
@@ -672,9 +696,11 @@ function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("termbeacon-theme", theme);
+    window.localStorage.setItem("termbeacon-theme", themeSetting);
+    // Keep the native window frame (title bar) in sync with the app theme.
+    window.termbeacon.setNativeTheme(DARK_THEMES.includes(theme) ? "dark" : "light").catch(() => { /* the frame just stays as-is */ });
     terminalViews.current.forEach((term) => { term.options.theme = terminalThemes[theme]; });
-  }, [theme]);
+  }, [theme, themeSetting]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -691,6 +717,13 @@ function App() {
         scrollback: 20000,
         theme: terminalThemes[theme],
       });
+      // xterm's built-in width tables only cover Unicode 6, so emoji added
+      // later (e.g. ✅ U+2705) are treated as one cell wide and the renderer
+      // clips them to a single cell — only the left half shows. The Unicode 11
+      // provider marks them as two cells wide so they render in full.
+      const unicode11 = new Unicode11Addon();
+      term.loadAddon(unicode11);
+      term.unicode.activeVersion = "11";
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.attachCustomKeyEventHandler((event) => {
@@ -1346,12 +1379,12 @@ function App() {
       <div className="sidebar-footer">
         <button className="sidebar-tool sidebar-toggle" onClick={toggleSidebar} title={t("隐藏工作栏")} aria-label={t("隐藏工作栏")}><SidebarToggleIcon collapsed={false} /></button>
         <button className={`sidebar-tool ${settingsOpen ? "active" : ""}`} onClick={() => setSettingsOpen((open) => !open)} title={t("打开设置")} aria-label={t("打开设置")}><SettingsIcon /></button>
-        <button className="sidebar-tool theme-tool" onClick={() => setTheme((current) => current === "dark" ? "light" : "dark")} title={t(theme === "dark" ? "切换到浅色主题" : "切换到深色主题")} aria-label={t(theme === "dark" ? "切换到浅色主题" : "切换到深色主题")}><ThemeIcon theme={theme} /></button>
+        <button className="sidebar-tool theme-tool" onClick={() => setThemeSetting(DARK_THEMES.includes(theme) ? "light" : "dark")} title={t(DARK_THEMES.includes(theme) ? "切换到浅色主题" : "切换到深色主题")} aria-label={t(DARK_THEMES.includes(theme) ? "切换到浅色主题" : "切换到深色主题")}><ThemeIcon theme={theme} /></button>
       </div>
       <div className="sidebar-resizer" onPointerDown={beginSidebarResize} title={t("拖动调整侧栏宽度")} />
       </>}
     </aside>
-    {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={theme} onTheme={setTheme} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
+    {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={themeSetting} onTheme={setThemeSetting} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
       version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}

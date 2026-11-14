@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, nativeTheme, screen, shell } from "electron";
 import type { MessageBoxOptions } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -645,6 +645,12 @@ ipcMain.handle("cli:docs", async (_event, id) => {
   await shell.openExternal(cliCatalog[id].docs);
 });
 ipcMain.handle("platform:info", () => platformInfo());
+// Sync the native window frame (title bar, menus, dialogs) with the theme the
+// renderer picked, so a dark UI does not sit under a light system title bar.
+ipcMain.handle("theme:set", (_event, theme) => {
+  nativeTheme.themeSource = theme === "light" ? "light" : "dark";
+  return nativeTheme.shouldUseDarkColors;
+});
 ipcMain.handle("clipboard:read-text", () => clipboard.readText());
 ipcMain.handle("session:resume-spec", async (_event, request) => {
   const spec = getResumeSpec(request || {});

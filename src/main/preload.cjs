@@ -174,6 +174,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
     return () => ipcRenderer.removeListener("cli:progress", handler);
   },
   getPlatformInfo: () => ipcRenderer.invoke("platform:info"),
+  setNativeTheme: (theme) => ipcRenderer.invoke("theme:set", theme),
   readClipboardText: () => ipcRenderer.invoke("clipboard:read-text"),
   confirm: (request) => ipcRenderer.invoke("dialog:confirm", request),
   pickCwd: () => ipcRenderer.invoke("cwd:pick"),

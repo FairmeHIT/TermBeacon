@@ -7,6 +7,21 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Apply the saved theme before React mounts so startup does not flash
+      // the dark default when another palette is active.
+      (function () {
+        try {
+          var palettes = { dark: "#101215", light: "#ffffff", midnight: "#0a1022", forest: "#0d1410", sepia: "#f4ecdc" };
+          var saved = localStorage.getItem("termbeacon-theme");
+          var theme = saved && Object.prototype.hasOwnProperty.call(palettes, saved)
+            ? saved
+            : (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.backgroundColor = palettes[theme];
+        } catch (error) { /* first run: the dark defaults in styles.css apply */ }
+      })();
+    </script>
     <script type="module" src="/main.tsx"></script>
   </body>
 </html>
