@@ -188,7 +188,7 @@ test("terminals created in a workspace start in the workspace folder", () => {
 });
 
 test("removing the last terminal restores focus to the replacement xterm", () => {
-  const removeTerminal = app.match(/function removeTerminal\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  const removeTerminal = app.match(/async function removeTerminal\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(removeTerminal, "removeTerminal must exist");
   assert.match(removeTerminal, /setActiveId\(replacement\.id\);[\s\S]*focusTerminalView\(replacement\.id\);/);
   assert.match(removeTerminal, /const nextActiveId = id === activeId \? remaining\[0\] : activeId/);
@@ -198,6 +198,36 @@ test("removing the last terminal restores focus to the replacement xterm", () =>
   assert.match(mount, /term\.open\(node\)/);
   assert.match(mount, /terminal\.id === activeId && !settingsOpen/);
   assert.match(mount, /term\.focus\(\)/);
+});
+
+test("confirmations use the native dialog instead of window.confirm", () => {
+  // Electron's built-in confirm leaves document.hasFocus() false on Windows, so
+  // every keystroke is dropped after dismissing it until the user switches
+  // windows. All confirmations must go through the main-process message box.
+  assert.doesNotMatch(app, /window\.confirm\(/);
+  assert.match(app, /window\.termbeacon\.confirm\(\{/);
+  assert.match(app, /const confirmed = await window\.termbeacon\.confirm\(\{[\s\S]*?cancelLabel: t\("取消"\)/);
+  assert.match(app, /onRestartHost=\{async \(\) => \{[\s\S]*?window\.termbeacon\.confirm\(\{/);
+  const preload = fs.readFileSync(path.join(__dirname, "../src/main/preload.cjs"), "utf8");
+  assert.match(preload, /confirm: \(request\) => ipcRenderer\.invoke\("dialog:confirm", request\)/);
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/main.ts"), "utf8");
+  const handler = main.match(/ipcMain\.handle\("dialog:confirm", async \(_event, request\) => \{([\s\S]*?)\n\}\);/)?.[1];
+  assert.ok(handler, "dialog:confirm handler must exist");
+  assert.match(handler, /BrowserWindow\.fromWebContents\(_event\.sender\) \?\? mainWindow/);
+  assert.match(handler, /noLink: true/);
+  assert.match(handler, /return result\.response === 0;/);
+});
+
+test("hydration points activeId at the seeded terminal on first launch", () => {
+  // On a fresh profile App renders with a throwaway terminal from useState. If
+  // hydration seeds the workspace with a different one but leaves activeId
+  // stale, deleting the only terminal skips the replacement branch and leaves
+  // the workspace empty -- the sidebar loses its last terminal.
+  const hydrate = app.match(/if \(state\.terminals\.length === 0\) \{([\s\S]*?)\n      \} else \{/)?.[1];
+  assert.ok(hydrate, "empty-state hydration branch must exist");
+  assert.match(hydrate, /const freshTerminalId = freshTerminal\?\.id;/);
+  assert.match(hydrate, /terminalIds: freshTerminalId \? \[freshTerminalId\] : \[\]/);
+  assert.match(hydrate, /if \(freshTerminalId\) setActiveId\(freshTerminalId\);/);
 });
 
 test("workspace titles mirror the folder name until the user renames them", () => {

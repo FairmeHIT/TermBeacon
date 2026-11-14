@@ -1,4 +1,5 @@
 import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
+import type { MessageBoxOptions } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
@@ -655,6 +656,27 @@ ipcMain.handle("cwd:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+// window.confirm/alert in Electron never report the window as focused again on
+// Windows, so after a confirmation every keystroke is dropped until the user
+// switches to another app and back. A native message box owned by the main
+// process keeps the renderer's focus intact and behaves the same for the user.
+ipcMain.handle("dialog:confirm", async (_event, request) => {
+  const message = typeof request?.message === "string" ? request.message : "";
+  if (!message) return false;
+  const owner = BrowserWindow.fromWebContents(_event.sender) ?? mainWindow;
+  const options: MessageBoxOptions = {
+    type: "question",
+    buttons: [request?.okLabel, request?.cancelLabel].filter((label): label is string => typeof label === "string" && label.length > 0),
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+    message,
+  };
+  if (options.buttons!.length < 2) options.buttons = ["确定", "取消"];
+  if (typeof request?.detail === "string" && request.detail) options.detail = request.detail;
+  const result = owner ? await dialog.showMessageBox(owner, options) : await dialog.showMessageBox(options);
+  return result.response === 0;
 });
 ipcMain.handle("state:save", async (_event, state: PersistedState) => {
   // The renderer is the only writer, but validating here keeps a corrupt or

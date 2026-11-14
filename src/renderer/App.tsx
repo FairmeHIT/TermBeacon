@@ -41,6 +41,7 @@ declare global {
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
       readClipboardText(): Promise<string>;
+      confirm(request: { message: string; detail?: string; okLabel?: string; cancelLabel?: string }): Promise<boolean>;
       pickCwd(): Promise<string | null>;
       loadHistory(terminalId: string): Promise<string>;
       appendHistory(terminalId: string, data: string): Promise<boolean>;
@@ -453,6 +454,9 @@ function App() {
         setWorkspaces(restored.map((workspace) => workspace.id === restoredActiveWorkspaceId
           ? { ...workspace, terminalIds: freshTerminalId ? [freshTerminalId] : [] }
           : workspace));
+        // activeId still points at the throwaway terminal from useState. Leaving
+        // it stale made "delete the only terminal" skip the replacement branch.
+        if (freshTerminalId) setActiveId(freshTerminalId);
       } else {
         setWorkspaces(restored);
         const workspaceTerminalIds = restored.find((workspace) => workspace.id === restoredActiveWorkspaceId)?.terminalIds ?? [];
@@ -906,7 +910,7 @@ function App() {
       }
       if (key === "w") {
         event.preventDefault();
-        if (activeId) removeTerminal(activeId);
+        if (activeId) void removeTerminal(activeId);
         return;
       }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1125,10 +1129,18 @@ function App() {
     setActiveId(terminal.id);
   }
 
-  function removeTerminal(id: string) {
+  async function removeTerminal(id: string) {
     const target = terminals.find((item) => item.id === id);
     if (!target) return;
-    if (!window.confirm(t("删除终端「{title}」？正在运行的进程会被停止。", { title: displayTerminalTitle(target) }))) return;
+    // A native message box instead of window.confirm: the built-in dialog never
+    // restores the renderer's focus state on Windows, so the terminal would
+    // silently swallow every keystroke until the user switched windows.
+    const confirmed = await window.termbeacon.confirm({
+      message: t("删除终端「{title}」？正在运行的进程会被停止。", { title: displayTerminalTitle(target) }),
+      okLabel: t("删除"),
+      cancelLabel: t("取消"),
+    });
+    if (!confirmed) return;
     window.termbeacon.forget(id);
     const view = terminalViews.current.get(id);
     if (view) {
@@ -1218,12 +1230,18 @@ function App() {
     setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, name, namePinned: true } : workspace));
   }
 
-  function removeWorkspace(id: string) {
+  async function removeWorkspace(id: string) {
     if (workspaces.length < 2) return;
     const target = workspaces.find((workspace) => workspace.id === id);
     if (!target) return;
-    const directory = target.cwd ? `\n(${t("目录")}: ${target.cwd})` : "";
-    if (!window.confirm(t("删除工作区「{name}」及其中的 {count} 个终端？{directory}", { name: displayWorkspaceName(target), count: target.terminalIds.length, directory }))) return;
+    const directory = target.cwd ? t("目录：{path}", { path: target.cwd }) : "";
+    const confirmed = await window.termbeacon.confirm({
+      message: t("删除工作区「{name}」及其中的 {count} 个终端？", { name: displayWorkspaceName(target), count: target.terminalIds.length }),
+      detail: directory || undefined,
+      okLabel: t("删除"),
+      cancelLabel: t("取消"),
+    });
+    if (!confirmed) return;
     target.terminalIds.forEach((terminalId) => {
       window.termbeacon.forget(terminalId);
     });
@@ -1302,7 +1320,7 @@ function App() {
               <EditableTitle title={displayWorkspaceName(workspace)} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
               <small>{workspace.cwd || t("未设置目录")}</small>
             </span>
-            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })} role="button" aria-label={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })}>×</span>}
+            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })} role="button" aria-label={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })}>×</span>}
           </button>)}
         </div>
       </section>
@@ -1317,7 +1335,7 @@ function App() {
           <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
           {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
-          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
+          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
         </button>)}
         </div>
       </section>
@@ -1338,7 +1356,12 @@ function App() {
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}
       onRestartHost={async () => {
-        if (!window.confirm(settingsText(settingsLocale, "重启终端服务将关闭所有终端进程，包括正在运行的 Agent。请先完成或保存任务。确定重启？"))) return;
+        const confirmed = await window.termbeacon.confirm({
+          message: settingsText(settingsLocale, "重启终端服务将关闭所有终端进程，包括正在运行的 Agent。请先完成或保存任务。确定重启？"),
+          okLabel: settingsText(settingsLocale, "重启服务"),
+          cancelLabel: settingsText(settingsLocale, "取消"),
+        });
+        if (!confirmed) return;
         const ok = await window.termbeacon.restartHost({ force: true });
         if (!ok) throw new Error("终端服务重启失败，请稍后重试。");
       }}

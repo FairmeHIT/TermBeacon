@@ -175,6 +175,7 @@ contextBridge.exposeInMainWorld("termbeacon", {
   },
   getPlatformInfo: () => ipcRenderer.invoke("platform:info"),
   readClipboardText: () => ipcRenderer.invoke("clipboard:read-text"),
+  confirm: (request) => ipcRenderer.invoke("dialog:confirm", request),
   pickCwd: () => ipcRenderer.invoke("cwd:pick"),
   loadHistory: (terminalId) => ipcRenderer.invoke("history:load", terminalId),
   appendHistory: (terminalId, data) => ipcRenderer.invoke("history:append", terminalId, data),
