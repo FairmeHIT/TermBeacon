@@ -454,20 +454,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .workspace-add:hover { color: var(--accent); border-color: var(--border); background: var(--panel-soft); }
 
-/* The hidden group: a quiet row at the bottom of the workspace block that
-   expands into the same cards the visible list uses. It stays visible when
-   empty so collapsing a workspace is discoverable, not a hidden gesture. */
+/* The hidden group: a quiet chevron at the bottom of the workspace block that
+   expands into the same cards the visible list uses. It is icon-only so the
+   block stays compact; the chevron flips when the group is open. */
 .workspace-hidden-toggle {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   width: 100%;
   margin-top: 4px;
-  padding: 5px 8px;
+  padding: 4px 0;
   color: var(--muted);
-  font-size: 11px;
-  text-align: left;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
@@ -485,26 +483,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-width: 1.8;
+  transition: transform .12s ease;
 }
-.workspace-hidden-toggle .workspace-toggle-lamp { flex: 0 0 auto; margin: 0; }
-.workspace-hidden-label {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.workspace-hidden-count {
-  flex: 0 0 auto;
-  min-width: 15px;
-  padding: 0 4px;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 14px;
-  text-align: center;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-}
+.workspace-hidden-toggle.expanded svg { transform: rotate(180deg); }
 .workspace-hidden-list {
   flex: 0 1 auto;
   /* A percentage cap would be ignored here (the section's height is content
@@ -512,7 +493,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   max-height: 160px;
   margin-top: 2px;
 }
-.workspace-hidden-empty { margin: 2px 0 0; padding: 4px 8px; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .workspace-item-hidden { opacity: .72; }
 .workspace-item-hidden:hover,
 .workspace-item-hidden:focus-visible { opacity: 1; }

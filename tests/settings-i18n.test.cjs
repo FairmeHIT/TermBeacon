@@ -65,12 +65,9 @@ test("settings update messages include localized retries, downloads, and nested 
   assert.match(describeSettingsUpdate("en", null, false), /Development mode/);
 });
 
-test("hidden workspace labels translate", () => {
-  assert.equal(text("en", "隐藏的工作区"), "Hidden workspaces");
+test("hidden workspace controls translate", () => {
   assert.equal(text("en", "展开隐藏的工作区"), "Show hidden workspaces");
   assert.equal(text("en", "收起隐藏的工作区"), "Hide hidden workspaces");
-  assert.equal(text("en", "暂无隐藏的工作区"), "No hidden workspaces");
   assert.equal(text("en", "收起工作区「{name}」", { name: "infra" }), "Move \"infra\" to hidden workspaces");
   assert.equal(text("en", "取消隐藏「{name}」", { name: "infra" }), "Unhide \"infra\"");
-  assert.equal(text("zh-CN", "隐藏的工作区"), "隐藏的工作区");
 });

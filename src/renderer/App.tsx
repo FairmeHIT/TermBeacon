@@ -482,13 +482,6 @@ function App() {
     () => orderWorkspaces(workspaces, { now: Date.now(), activeId: activeWorkspace?.id }),
     [workspaces, activeWorkspace],
   );
-  // A collapsed group must still report activity: the lamp is the most urgent
-  // state among its members, so a finished task in a hidden workspace is never
-  // invisible.
-  const hiddenWorkspaceLamp = useMemo(
-    () => WORKSPACE_LAMP_PRIORITY.find((lamp) => hiddenWorkspaces.some((workspace) => workspaceLampStates.get(workspace.id) === lamp)),
-    [hiddenWorkspaces, workspaceLampStates],
-  );
 
   function displayTerminalTitle(terminal: TerminalInstance): string {
     if (terminal.titlePinned) return terminal.title;
@@ -1613,16 +1606,12 @@ function App() {
         </div>
         {/* The hidden group sits at the bottom of the workspace block: the list
             above stays the place you work from, and collapsed workspaces remain
-            one click away instead of disappearing. */}
-        <button className={`workspace-hidden-toggle ${hiddenWorkspacesOpen ? "expanded" : ""}`} onClick={() => setHiddenWorkspacesOpen((open) => !open)} aria-expanded={hiddenWorkspacesOpen} aria-controls="hidden-workspaces" title={hiddenWorkspacesOpen ? t("收起隐藏的工作区") : t("展开隐藏的工作区")}>
-          {hiddenWorkspaceLamp && <span className={`workspace-toggle-lamp status-dot ${stateClass[hiddenWorkspaceLamp]}`} role="img" aria-label={t(stateLabel[hiddenWorkspaceLamp])} />}
-          <span className="workspace-hidden-label">{t("隐藏的工作区")}</span>
-          {hiddenWorkspaces.length > 0 && <span className="workspace-hidden-count">{hiddenWorkspaces.length}</span>}
-          <ChevronIcon open={hiddenWorkspacesOpen} />
+            one click away instead of disappearing. The toggle is just a
+            centered chevron so the block stays quiet. */}
+        <button className={`workspace-hidden-toggle ${hiddenWorkspacesOpen ? "expanded" : ""}`} onClick={() => setHiddenWorkspacesOpen((open) => !open)} aria-expanded={hiddenWorkspacesOpen} aria-controls="hidden-workspaces" title={hiddenWorkspacesOpen ? t("收起隐藏的工作区") : t("展开隐藏的工作区")} aria-label={hiddenWorkspacesOpen ? t("收起隐藏的工作区") : t("展开隐藏的工作区")}>
+          <ChevronIcon open />
         </button>
-        {hiddenWorkspacesOpen && (hiddenWorkspaces.length > 0
-          ? <div className="workspace-list workspace-hidden-list" id="hidden-workspaces">{hiddenWorkspaces.map((workspace) => workspaceRow(workspace, true))}</div>
-          : <p className="workspace-hidden-empty" id="hidden-workspaces">{t("暂无隐藏的工作区")}</p>)}
+        {hiddenWorkspacesOpen && <div className="workspace-list workspace-hidden-list" id="hidden-workspaces">{hiddenWorkspaces.map((workspace) => workspaceRow(workspace, true))}</div>}
       </section>
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">

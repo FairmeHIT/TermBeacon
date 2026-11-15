@@ -457,7 +457,9 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   assert.match(section, /aria-controls="hidden-workspaces"/);
   assert.match(section, /visibleWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, false\)\)/);
   assert.match(section, /hiddenWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, true\)\)/);
-  assert.match(section, /暂无隐藏的工作区/);
+  // The toggle is icon-only: no visible label, just the centered chevron.
+  assert.doesNotMatch(section, /workspace-hidden-label|workspace-hidden-count|workspace-toggle-lamp/);
+  assert.match(section, /<ChevronIcon open \/>/);
   // Both lists reuse one card so a workspace does not change shape on the way
   // down, and the active row never offers to hide itself.
   assert.match(app, /function workspaceRow\(workspace: Workspace, hidden: boolean\)/);
@@ -466,6 +468,7 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   const toggle = styles.match(/\.workspace-hidden-toggle\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(toggle, "hidden toggle styles must exist");
   assert.match(toggle, /cursor:\s*pointer/);
+  assert.match(toggle, /justify-content:\s*center/);
   const hiddenList = styles.match(/\.workspace-hidden-list\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(hiddenList, "hidden list styles must exist");
   assert.match(hiddenList, /max-height/);
