@@ -724,6 +724,11 @@ function App() {
         // TUI applications use LF together with cursor movement sequences.
         // Converting every LF to CRLF shifts the cursor and corrupts redraws.
         convertEol: false,
+        // The Unicode 11 width addon sets term.unicode.activeVersion, which is
+        // gated behind xterm's proposed API. Without this flag loading the addon
+        // throws during the terminal-mount effect and unmounts the whole app,
+        // leaving a blank window after the first paint.
+        allowProposedApi: true,
         cursorBlink: true,
         fontFamily: "Cascadia Mono, Consolas, monospace",
         fontSize: 14,

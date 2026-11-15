@@ -135,6 +135,14 @@ test("TUI output keeps native LF handling", () => {
   assert.doesNotMatch(app, /convertEol:\s*true/);
 });
 
+test("Unicode 11 width tables are enabled with xterm's proposed API", () => {
+  assert.match(app, /new Unicode11Addon\(\)/);
+  assert.match(app, /unicode\.activeVersion = "11"/);
+  // xterm throws while loading the addon unless proposed APIs are allowed.
+  // That exception unmounted the whole app and left a blank window.
+  assert.match(app, /allowProposedApi:\s*true/);
+});
+
 test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
   assert.match(app, /readClipboardText\(\): Promise<string>/);
   assert.match(app, /term\.attachCustomKeyEventHandler\(\(event\) =>/);
