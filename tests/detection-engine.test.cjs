@@ -378,6 +378,33 @@ test("native completion immediately clears a tool grace period", () => {
   assert.equal(detector.runtime.state, "completed-unseen");
 });
 
+test("OSC 7501 working and idle drive a high-confidence native turn", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.agentStatus({ state: "working", app: "codex" });
+  assert.equal(detector.runtime.state, "working");
+  detector.agentStatus({ state: "idle", app: "codex" });
+  assert.equal(detector.runtime.state, "completed-unseen");
+  assert.equal(updates.at(-1).source, "hook");
+  assert.equal(updates.at(-1).confidence, 0.95);
+});
+
+test("OpenCode OSC 7501 clear completes an active native turn", () => {
+  const { detector } = makeAgent("opencode");
+  detector.input("run task\r", 1000);
+  detector.agentStatus({ state: "working", app: "opencode", id: "ses_abc" });
+  detector.agentStatus({ state: "clear", app: "opencode", id: "ses_abc" });
+  detector.agentStatus({ state: "idle", app: "opencode" });
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
+test("startup OSC 7501 idle does not mark an unused terminal completed", () => {
+  const { detector, updates } = makeAgent("codex");
+  detector.output("\x1b]7501;state=idle:app=codex\x07", 1000);
+  detector.tick(10000);
+  assert.equal(detector.runtime.state, "ready");
+  assert.equal(updates.length, 0);
+});
+
 test("repeated native completion does not relight a viewed task", () => {
   const { detector } = makeAgent("opencode");
   detector.hook("session.idle", "completed");

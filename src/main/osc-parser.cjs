@@ -23,6 +23,10 @@ const MAX_PENDING_LENGTH = 512;
 // Title/cwd values are UI strings; keep them short and strip control chars.
 const MAX_VALUE_LENGTH = 120;
 
+// Agent status reports can carry a base64-encoded task title. Keep the bound
+// generous enough for those payloads while still discarding runaway OSC data.
+const MAX_AGENT_STATUS_LENGTH = 2048;
+
 function sanitizeValue(value) {
   return value
     // eslint-disable-next-line no-control-regex
@@ -50,7 +54,34 @@ function decodeFileUri(uri, platform = process.platform) {
   return path;
 }
 
-function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () => {}) {
+function parseAgentStatus(value) {
+  const fields = {};
+  for (const field of value.split(":")) {
+    const separator = field.indexOf("=");
+    if (separator <= 0) continue;
+    const key = field.slice(0, separator);
+    if (!["state", "app", "id", "title"].includes(key)) continue;
+    fields[key] = field.slice(separator + 1);
+  }
+  if (!fields.state) return undefined;
+  return {
+    state: fields.state,
+    app: fields.app,
+    id: fields.id,
+    title: fields.title,
+  };
+}
+
+function pendingLimit(code) {
+  return code === "7501" ? MAX_AGENT_STATUS_LENGTH : MAX_PENDING_LENGTH;
+}
+
+function codeAfter(buffer, index) {
+  const separator = buffer.indexOf(";", index);
+  return separator >= 0 ? buffer.slice(index, separator) : "";
+}
+
+function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () => {}, onAgentStatus = () => {}) {
   let pending = "";
   let discarding = false;
 
@@ -62,6 +93,11 @@ function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () =
     if (code === "9") {
       const progress = text.slice(semicolon + 1).match(/^4;(\d+);?(\d+)?$/);
       if (progress) onProgress({ state: Number(progress[1]), progress: progress[2] === undefined ? undefined : Number(progress[2]) });
+      return;
+    }
+    if (code === "7501") {
+      const status = parseAgentStatus(text.slice(semicolon + 1));
+      if (status) onAgentStatus(status);
       return;
     }
     const value = sanitizeValue(text.slice(semicolon + 1));
@@ -106,13 +142,15 @@ function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () =
         continue;
       }
       if (!end) {
-        if (discarding || buffer.length - intro > MAX_PENDING_LENGTH) {
+        const code = codeAfter(buffer, after);
+        if (discarding || buffer.length - intro > pendingLimit(code)) {
           discarding = true;
           if (buffer.endsWith("\x1b")) pending = "\x1b";
         } else pending = buffer.slice(intro);
         break;
       }
-      if (!discarding && end.index - intro <= MAX_PENDING_LENGTH) finish(buffer.slice(after, end.index));
+      const code = codeAfter(buffer, after);
+      if (!discarding && end.index - intro <= pendingLimit(code)) finish(buffer.slice(after, end.index));
       discarding = false;
       index = end.index + end.length;
     }
@@ -125,4 +163,4 @@ function createOscParser(onTitle = () => {}, onCwd = () => {}, onProgress = () =
   return { feed, reset };
 }
 
-module.exports = { createOscParser, sanitizeValue, decodeFileUri };
+module.exports = { createOscParser, parseAgentStatus, sanitizeValue, decodeFileUri };

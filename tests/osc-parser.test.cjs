@@ -1,12 +1,14 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { createOscParser, sanitizeValue, decodeFileUri } = require("../src/main/osc-parser.cjs");
+const { createOscParser, parseAgentStatus, sanitizeValue, decodeFileUri } = require("../src/main/osc-parser.cjs");
 
 function recorder() {
-  const events = { titles: [], cwds: [] };
+  const events = { titles: [], cwds: [], agentStatuses: [] };
   const parser = createOscParser(
     (title) => events.titles.push(title),
     (cwd) => events.cwds.push(cwd),
+    undefined,
+    (status) => events.agentStatuses.push(status),
   );
   return { parser, events };
 }
@@ -116,4 +118,48 @@ test("a complete oversized sequence is also rejected", () => {
   const { parser, events } = recorder();
   parser.feed("\x1b]0;" + "a".repeat(600) + "\x07\x1b]0;valid\x07");
   assert.deepStrictEqual(events.titles, ["valid"]);
+});
+
+test("parses OSC 7501 agent status fields in any order", () => {
+  const { parser, events } = recorder();
+  parser.feed("\x1b]7501;app=codex:title=" + Buffer.from("任务").toString("base64") + ":state=working\x1b\\");
+  parser.feed("\x1b]7501;state=clear:id=ses_abc:app=opencode\x07");
+  assert.deepStrictEqual(events.agentStatuses, [
+    { state: "working", app: "codex", id: undefined, title: Buffer.from("任务").toString("base64") },
+    { state: "clear", app: "opencode", id: "ses_abc", title: undefined },
+  ]);
+});
+
+test("OSC 7501 sequences survive split chunks and both terminators", () => {
+  for (const terminator of ["\x07", "\x1b\\"]) {
+    const { parser, events } = recorder();
+    const sequence = `\x1b]7501;state=idle:app=codex${terminator}`;
+    for (let index = 1; index < sequence.length; index += 1) {
+      parser.feed(sequence.slice(0, index));
+      assert.deepStrictEqual(events.agentStatuses, []);
+    }
+    parser.feed(sequence.slice(sequence.length - 1));
+    assert.deepStrictEqual(events.agentStatuses, [{ state: "idle", app: "codex", id: undefined, title: undefined }]);
+  }
+});
+
+test("OSC 7501 supports longer base64 titles but still rejects runaway payloads", () => {
+  const { parser, events } = recorder();
+  const title = "a".repeat(1200);
+  parser.feed(`\x1b]7501;state=working:app=opencode:title=${title}\x07`);
+  assert.equal(events.agentStatuses.length, 1);
+  assert.equal(events.agentStatuses[0].title, title);
+
+  parser.feed(`\x1b]7501;state=working:title=${"b".repeat(3000)}`);
+  parser.feed("Error: Done\x07");
+  parser.feed("\x1b]7501;state=idle:app=opencode\x07");
+  assert.equal(events.agentStatuses.length, 2);
+  assert.equal(events.agentStatuses.at(-1).state, "idle");
+});
+
+test("parseAgentStatus requires a state and keeps known fields only", () => {
+  assert.deepEqual(parseAgentStatus("state=working:app=codex"), { state: "working", app: "codex", id: undefined, title: undefined });
+  assert.equal(parseAgentStatus("app=codex"), undefined);
+  assert.equal(parseAgentStatus("?"), undefined);
+  assert.deepEqual(parseAgentStatus("state=clear:other=x:id=ses_1"), { state: "clear", app: undefined, id: "ses_1", title: undefined });
 });

@@ -151,6 +151,20 @@ function createDetector(agentType = "generic", emit = () => {}) {
     }
   }
 
+  function agentStatus(status) {
+    if (!status || typeof status.state !== "string") return;
+    if (status.state === "working") {
+      hook("agent.osc", "running");
+      return;
+    }
+    if (status.state === "idle" || status.state === "clear") {
+      // Some CLIs emit a baseline clear/idle while booting. A task that was
+      // never armed should stay ready instead of becoming completed-unseen.
+      if (!runtime.armed && !runtime.hookStatus) return;
+      hook("agent.osc", "completed");
+    }
+  }
+
   function title(value) {
     runtime.title = value;
     if (runtime.hookStatus) return;
@@ -353,7 +367,7 @@ function createDetector(agentType = "generic", emit = () => {}) {
     return true;
   }
 
-  return { runtime, input, launch, output, tick, viewed, exit, hook, config };
+  return { runtime, input, launch, output, tick, viewed, exit, hook, config, agentStatus };
 }
 
 module.exports = { createDetector, stripAnsi, stripInputSequences, parseOscProgress, parseOscTitle };

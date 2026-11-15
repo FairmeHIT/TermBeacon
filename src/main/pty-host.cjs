@@ -269,13 +269,13 @@ function makeDetector(terminalId, agentType) {
 // Both the output sniffer and a CLI's own hook can label a terminal. The agent
 // type selects the detector's pattern set, so switching either way rebuilds it
 // while preserving whatever the hooks already reported.
-function adoptAgent(terminalId, agent) {
+function adoptAgent(terminalId, agent, { direct = false } = {}) {
   if (!AGENT_TYPES.has(agent) || agent === "generic" || agentTypes.get(terminalId) === agent) return;
   const previous = detectors.get(terminalId);
   const current = makeDetector(terminalId, agent);
   // Hooks may arrive before the banner. Preserve their authoritative state
   // when the output sniffer upgrades a generic detector.
-  if (previous?.runtime?.hookStatus) {
+  if (previous?.runtime?.hookStatus && !direct) {
     Object.assign(current.runtime, previous.runtime);
     seedState(terminalId, current.runtime?.state);
   }
@@ -299,6 +299,12 @@ function adoptAgent(terminalId, agent) {
   send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
 }
 
+function agentFromOscStatus(status) {
+  if (typeof status?.app !== "string") return undefined;
+  const app = status.app.toLowerCase();
+  return app === "opencode" || app === "codex" ? app : undefined;
+}
+
 // The renderer no longer asks the user to pick an agent type; identifying the
 // CLI from its own banner keeps the dropdown (and a whole row of controls) out
 // of the UI while still giving the detector the right pattern set.
@@ -313,6 +319,30 @@ function makeOscParser(terminalId) {
   const parser = createOscParser(
     (title) => send({ type: "pty:title", terminalId, title, at: Date.now() }),
     (cwd) => send({ type: "pty:cwd", terminalId, cwd, at: Date.now() }),
+    undefined,
+    (status) => {
+      const reportedAgent = agentFromOscStatus(status);
+      const currentAgent = agentTypes.get(terminalId) || "generic";
+      const detector = detectors.get(terminalId);
+      // A hook/plugin owns the current native turn. Another app's OSC report
+      // is likely a nested CLI sharing this PTY, so it must not steal the
+      // identity, state, or session id.
+      if (detector?.runtime?.hookStatus && reportedAgent && reportedAgent !== currentAgent) return;
+      if (reportedAgent && reportedAgent !== currentAgent) {
+        // OSC 7501 is emitted by the foreground CLI itself. It is stronger
+        // than a sniffed command echo and can repair a stale agent label.
+        adoptAgent(terminalId, reportedAgent, { direct: true });
+        detectors.get(terminalId)?.launch?.();
+      }
+      detectors.get(terminalId)?.agentStatus?.(status);
+      const owningAgent = agentTypes.get(terminalId) || "generic";
+      if (typeof status.id === "string" && status.id
+        && (!reportedAgent || reportedAgent === owningAgent)
+        && sessionIdFitsAgent(owningAgent, status.id)) {
+        sessionIds.set(terminalId, status.id);
+        send({ type: "session:update", terminalId, sessionId: status.id, at: Date.now() });
+      }
+    },
   );
   oscParsers.set(terminalId, parser);
   return parser;

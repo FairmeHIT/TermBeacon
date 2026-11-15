@@ -38,3 +38,10 @@ test("only a generic shell launch is rewritten", () => {
   assert.equal(withOpenCodeStandalone("claude\r", "claude", "generic"), "claude\r");
   assert.equal(isAgentLaunchInput("opencode run task", "generic"), true);
 });
+
+test("an explicit agent command is still a launch after a stale agent label", () => {
+  assert.equal(isAgentLaunchInput("codex", "codex"), true);
+  assert.equal(isAgentLaunchInput("opencode", "opencode"), true);
+  assert.equal(isAgentLaunchInput("npm test", "codex"), false);
+  assert.equal(isAgentLaunchInput("claude\r", "unknown-agent"), false);
+});

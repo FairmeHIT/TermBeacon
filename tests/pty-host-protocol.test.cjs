@@ -302,6 +302,46 @@ test("PTY host switches output to the detected agent and clears generic launch s
   assert.equal(stateUpdates.at(-1).source, "agent");
 });
 
+test("OSC 7501 corrects a stale agent identity and completes the live turn", () => {
+  const { dataPort, spawned, messages } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  // The stale state observed in the bug: the terminal stayed labelled opencode
+  // while Codex was actually in the foreground.
+  spawned[0].dataCallback("PS D:\\work> opencode\r\n");
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "run task\r" } });
+  spawned[0].dataCallback("\x1b]7501;state=working:app=codex\x1b\\");
+  spawned[0].dataCallback("\x1b]7501;state=idle:app=codex\x07");
+
+  const agentEvents = messages.filter((message) => message.type === "pty:agent");
+  assert.equal(agentEvents.at(-1).agentType, "codex");
+  const stateUpdates = messages.filter((message) => message.type === "state:update");
+  assert.equal(stateUpdates.at(-1).current, "completed-unseen");
+  assert.equal(stateUpdates.at(-1).source, "hook");
+});
+
+test("OSC 7501 labels an unlabelled terminal and stores its session id", () => {
+  const { dataPort, spawned, messages } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  spawned[0].dataCallback("\x1b]7501;state=idle:id=ses_abc:app=opencode\x07");
+
+  assert.equal(messages.find((message) => message.type === "pty:agent")?.agentType, "opencode");
+  assert.equal(messages.find((message) => message.type === "session:update")?.sessionId, "ses_abc");
+  const stateUpdates = messages.filter((message) => message.type === "state:update");
+  assert.equal(stateUpdates.length, 0, "a startup idle report must not create completed-unseen");
+});
+
+test("a nested CLI's OSC 7501 cannot steal a hook-owned terminal identity", () => {
+  const { dataPort, spawned, messages, emitHook } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "session.status", status: "running", agent: "opencode", sessionId: "ses_main" });
+  spawned[0].dataCallback("\x1b]7501;state=idle:app=codex\x07");
+
+  assert.equal(messages.filter((message) => message.type === "pty:agent").at(-1).agentType, "opencode");
+  assert.equal(messages.find((message) => message.type === "session:update")?.sessionId, "ses_main");
+  const stateUpdates = messages.filter((message) => message.type === "state:update");
+  assert.equal(stateUpdates.at(-1).current, "working");
+});
+
 test("PTY host injects the hook bridge env into each session", () => {
   const { dataPort, spawnedOptions } = createHarness();
   dataPort.emit("message", { data: createMessage("t1") });

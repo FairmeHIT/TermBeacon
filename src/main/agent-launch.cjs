@@ -1,11 +1,21 @@
 const AGENT_COMMANDS = ["opencode", "claude", "codex", "pi"];
+const KNOWN_AGENT_TYPES = new Set(["generic", ...AGENT_COMMANDS]);
 
 function isAgentLaunchInput(value, agentType) {
-  if (agentType !== "generic" || typeof value !== "string") return false;
+  if (typeof value !== "string") return false;
+  // A terminal can retain a stale label after an earlier CLI exits. Let an
+  // explicit agent command at the shell still take the launch path, so its
+  // banner does not light up as a completed task before identity updates.
+  if (!KNOWN_AGENT_TYPES.has(agentType)) return false;
   const normalized = value.trimStart().toLowerCase();
   if (!normalized) return false;
-  return AGENT_COMMANDS.some((command) => normalized === command
-    || normalized.startsWith(`${command} `));
+  return AGENT_COMMANDS.some((command) =>
+    (normalized === command
+      || normalized.startsWith(`${command} `))
+  // A fresh generic shell is the common launch path. A terminal that still
+  // carries an old agent label after returning to the shell must not treat
+  // the next typed command as a task; only the same or a new agent launch.
+    && (agentType === "generic" || agentType === command));
 }
 
 function withOpenCodeStandalone(data, candidate, agentType) {
