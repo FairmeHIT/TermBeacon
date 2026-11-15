@@ -85,6 +85,8 @@ const english: Record<string, string> = {
   "用于之后新建的终端。": "Used for new terminals.",
   "新建终端默认启动": "New terminal launches",
   "点击“新建终端”时启动的程序。": "The program launched when you click \"New terminal\".",
+  "Codex 启动 profile": "Codex launch profile",
+  "由 TermBeacon 启动 Codex 时追加 -p。留空使用 Codex 默认配置。": "Appended as -p when TermBeacon launches Codex. Leave empty to use Codex defaults.",
   "普通 Shell": "Plain shell",
   "启动默认 Agent 失败：{message}": "Could not launch the default agent: {message}",
   "应用更新": "App updates",

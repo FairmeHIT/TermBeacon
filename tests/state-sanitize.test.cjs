@@ -52,6 +52,32 @@ test("preserves a valid default new terminal agent and drops invalid values", ()
   assert.equal(invalid.defaultNewTerminalAgent, undefined);
 });
 
+test("preserves a valid default Codex profile and drops blank or non-string values", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultCodexProfile: " bifrost ",
+  });
+  assert.equal(result.defaultCodexProfile, "bifrost");
+
+  const invalid = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultCodexProfile: 42,
+  });
+  assert.equal(invalid.defaultCodexProfile, undefined);
+
+  const blank = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultCodexProfile: "   ",
+  });
+  assert.equal(blank.defaultCodexProfile, undefined);
+});
+
 test("preserves workspace folder paths and manual name pins", () => {
   const result = sanitizeState({
     schemaVersion: 1,

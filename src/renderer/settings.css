@@ -1,10 +1,11 @@
 .app-shell.settings-mode { grid-template-columns: minmax(0, 1fr); }
 .settings-mode > .sidebar, .workspace.settings-hidden { display: none; }
 .settings-page { display: grid; grid-template-columns: 184px minmax(0, 1fr); min-height: 0; min-width: 0; height: 100%; background: var(--app-bg); color: var(--text); }
-.settings-page button, .settings-page select { font: inherit; }
+.settings-page button, .settings-page select, .settings-page input { font: inherit; }
 .settings-page button { cursor: pointer; }
 .settings-page button:disabled { cursor: default; opacity: .45; }
 .settings-page button:focus-visible, .settings-page summary:focus-visible, .settings-page select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.settings-page input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .settings-nav { display: flex; flex-direction: column; gap: 6px; padding: 22px 14px; border-right: 1px solid var(--border); background: var(--panel-bg); }
 .settings-nav > button { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 9px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--muted-strong); font-size: 12px; text-align: left; }
 .settings-nav > button:hover { background: var(--panel-soft); color: var(--text); }
@@ -68,6 +69,7 @@
 .preference-row { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 26px 0; border-top: 1px solid var(--border); }
 .preference-row > div { min-width: 0; }
 .preference-row select { flex-shrink: 0; min-width: min(200px, 100%); max-width: min(260px, 100%); min-height: 35px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel-bg); color: var(--text-soft); font-size: 12px; }
+.preference-row input { flex-shrink: 0; width: min(220px, 100%); min-height: 35px; padding: 6px 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel-bg); color: var(--text-soft); font-size: 12px; }
 .settings-version { margin-left: 9px; font-size: 11px; color: var(--muted); font-weight: 400; }
 .cli-layout { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 32px; align-items: start; }
 .cli-list { display: flex; flex-direction: column; gap: 6px; }

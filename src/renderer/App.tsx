@@ -48,7 +48,7 @@ declare global {
       scanCli(): Promise<CliScan>;
       planCli(request: { id: AgentCliId; action: CliAction }): Promise<CliPlan>;
       executeCli(request: { token: string }): Promise<unknown>;
-      getCliLaunchSpec(request: { id: AgentCliId; shell: ShellType }): Promise<{ command: string }>;
+      getCliLaunchSpec(request: { id: AgentCliId; shell: ShellType; codexProfile?: string }): Promise<{ command: string }>;
       openCliDocs(id: AgentCliId): Promise<void>;
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
@@ -261,6 +261,7 @@ const IS_WINDOWS = FALLBACK_PLATFORM.isWindows;
 
 const DEFAULT_SHELL: ShellType = FALLBACK_PLATFORM.shell as ShellType;
 const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex";
+const DEFAULT_CODEX_PROFILE = "";
 const NEW_TERMINAL_AGENT_OPTIONS: Array<{ value: AgentType; label: string }> = [
   { value: "generic", label: "普通 Shell" },
   { value: "codex", label: "Codex" },
@@ -281,6 +282,10 @@ function isSupportedShell(value: unknown): value is ShellType {
 
 function isSupportedNewTerminalAgent(value: unknown): value is AgentType {
   return NEW_TERMINAL_AGENT_OPTIONS.some((option) => option.value === value);
+}
+
+function normalizeCodexProfile(value: unknown): string {
+  return typeof value === "string" ? value.trim().slice(0, 100) : "";
 }
 
 function isValidCwd(path: unknown): path is string {
@@ -396,6 +401,7 @@ function App() {
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(FALLBACK_PLATFORM);
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
   const [defaultNewTerminalAgent, setDefaultNewTerminalAgent] = useState<AgentType>(DEFAULT_NEW_TERMINAL_AGENT);
+  const [defaultCodexProfile, setDefaultCodexProfile] = useState<string>(DEFAULT_CODEX_PROFILE);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     const saved = window.localStorage.getItem("termbeacon-theme");
     return isThemeSetting(saved) ? saved : "system";
@@ -552,8 +558,10 @@ function App() {
       const runtimeDefaultShell = isSupportedShell(info.shell) ? info.shell : DEFAULT_SHELL;
       const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : runtimeDefaultShell;
       const restoredDefaultNewTerminalAgent = isSupportedNewTerminalAgent(state.defaultNewTerminalAgent) ? state.defaultNewTerminalAgent : DEFAULT_NEW_TERMINAL_AGENT;
+      const restoredDefaultCodexProfile = normalizeCodexProfile(state.defaultCodexProfile);
       setDefaultShell(restoredDefaultShell);
       setDefaultNewTerminalAgent(restoredDefaultNewTerminalAgent);
+      setDefaultCodexProfile(restoredDefaultCodexProfile);
       const restoredAt = Date.now();
       restoredTerminalIds.current = new Set(state.terminals.map((terminal) => terminal.id));
       previouslyActiveTasks.current = new Map((state.tasks ?? [])
@@ -1081,6 +1089,7 @@ function App() {
         tasks,
         defaultShell,
         defaultNewTerminalAgent,
+        defaultCodexProfile,
         sidebarWidth,
       };
       const serialized = JSON.stringify(state);
@@ -1091,7 +1100,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, sidebarWidth, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexProfile, sidebarWidth, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1343,7 +1352,11 @@ function App() {
   }
 
   async function launchCli(id: AgentCliId, cwd: string = activeWorkspace?.cwd || DEFAULT_CWD) {
-    const spec = await window.termbeacon.getCliLaunchSpec({ id, shell: defaultShell });
+    const spec = await window.termbeacon.getCliLaunchSpec({
+      id,
+      shell: defaultShell,
+      codexProfile: id === "codex" ? defaultCodexProfile : undefined,
+    });
     const terminal = newTerminal(terminals.length + 1, defaultShell, cwd);
     terminal.agentType = id;
     terminal.title = agentLabel[id];
@@ -1684,6 +1697,7 @@ function App() {
     </aside>
     {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={themeSetting} onTheme={setThemeSetting} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
       newTerminalAgent={defaultNewTerminalAgent} newTerminalAgentOptions={NEW_TERMINAL_AGENT_OPTIONS} onNewTerminalAgent={setDefaultNewTerminalAgent}
+      codexProfile={defaultCodexProfile} onCodexProfile={setDefaultCodexProfile}
       version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}

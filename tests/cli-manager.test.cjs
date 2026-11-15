@@ -147,6 +147,16 @@ test("managed environment has a single Windows PATH key and command quoting pres
   assert.throws(() => shellCommand("C:\\%TEMP%\\cli.exe", [], "cmd.exe"), /PowerShell/);
 });
 
+test("Codex launch can inject the configured profile", async (t) => {
+  const { manager } = await fixture(t);
+  const launch = await manager.launch({ id: "codex", shell: "powershell.exe", codexProfile: " bifrost " });
+  assert.match(launch.command, /'-p' 'bifrost'$/);
+  const plain = await manager.launch({ id: "codex", shell: "powershell.exe" });
+  assert.doesNotMatch(plain.command, /-p/);
+  const explicit = await manager.launch({ id: "codex", shell: "powershell.exe", args: ["resume", "--last"] });
+  assert.doesNotMatch(explicit.command, /-p/);
+});
+
 test("npm shims resolve to a direct process invocation instead of evaluating batch code", async (t) => {
   const { home } = await fixture(t);
   const shim = path.join(home, "test.cmd");

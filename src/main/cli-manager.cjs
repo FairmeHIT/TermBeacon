@@ -234,7 +234,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
     } catch (error) { progress("error", error.message); throw error; }
     finally { busy.delete(id); scanPending = undefined; }
   }
-  async function launch({ id, shell = "cmd.exe", args } = {}) {
+  async function launch({ id, shell = "cmd.exe", codexProfile, args } = {}) {
     checkedId(id);
     const state = await manifest();
     const record = state.agents[id];
@@ -245,7 +245,10 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
       try { await fs.access(executable); } catch { throw new Error("托管启动入口缺失，请执行标准化重装修复"); }
     } else executable = (await find(CATALOG[id].command, { env, home, platform, exclude: [root] }))[0];
     if (!executable) throw new Error("未找到可启动的 CLI，请先安装或重新检测");
-    const cliArgs = args || (id === "opencode" ? ["--standalone"] : []);
+    const cliArgs = args || [
+      ...(id === "opencode" ? ["--standalone"] : []),
+      ...(id === "codex" && typeof codexProfile === "string" && codexProfile.trim() ? ["-p", codexProfile.trim()] : []),
+    ];
     if (!Array.isArray(cliArgs) || cliArgs.some((arg) => typeof arg !== "string" || /[\r\n\x00]/.test(arg))) throw new Error("CLI 参数无效");
     return { command: shellCommand(executable, cliArgs, shell), executable };
   }
