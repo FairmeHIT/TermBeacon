@@ -20,6 +20,7 @@ const { createOscParser } = require("./osc-parser.cjs");
 const { createAgentSniffer } = require("./agent-sniff.cjs");
 const { createHookServer } = require("./hook-server.cjs");
 const { sessionIdFitsAgent } = require("./session-resume.cjs");
+const { resolveCodexHome, collectSessions, findStartedSession, findRecentSession } = require("./codex-sessions.cjs");
 const { managedEnvironment } = require("./cli-runtime.cjs");
 const { buildCliAppearanceEnv } = require("./cli-appearance.cjs");
 const { summarize } = require("./summary-utils.cjs");
@@ -46,6 +47,20 @@ const killRequests = new Set();
 const buffers = new Map();
 const pendingSessionCreates = new Map();
 const pausedSessions = new Map();
+// Terminal folder and most recent Codex launch. Together they let the host
+// attribute a rollout file to the terminal that owns it when the CLI hook never
+// reports the session id.
+const terminalCwds = new Map();
+const codexLaunches = new Map();
+const codexProbeTimers = new Map();
+const codexSessionCache = new Map();
+// A rollout that can belong to a terminal was written after its launch, so
+// files older than this window cannot match and need not be read.
+const CODEX_SCAN_LOOKBACK_MS = 5 * 60 * 1000;
+// A CLI started by hand is detected from its banner, which arrives some time
+// after the process started. Allow for that boot time when matching the rollout
+// start time against the banner anchor.
+const CODEX_BANNER_TOLERANCE_MS = 15 * 1000;
 // Last known detector state per live terminal. The renderer reloads (dev HMR,
 // window reload, app restart) while this host keeps the PTY alive, and the
 // state only ever reaches the UI through transient messages. Keep a snapshot so
@@ -248,6 +263,11 @@ function publishState(terminalId, update) {
   const at = typeof update.at === "number" ? update.at : Date.now();
   stateSnapshots.set(terminalId, { terminalId, state: update.current, summary, at });
   send({ type: "state:update", terminalId, ...update, summary, at });
+  // Codex creates the rollout lazily on the first turn, and appends to an
+  // existing one after a resume. Both make a turn the moment the file (and the
+  // session id) can be discovered, and completion proves it has been flushed.
+  if (update.current === "working") noteCodexTurn(terminalId);
+  else if (update.current === "completed-unseen") scheduleCodexProbe(terminalId);
 }
 
 // A freshly created detector is idle. Seeding the snapshot means a reconnecting
@@ -259,6 +279,131 @@ function seedState(terminalId, state) {
 function sendStateSnapshot() {
   const entries = [...stateSnapshots.values()].map((entry) => ({ ...entry }));
   send({ type: "state:snapshot", entries, at: Date.now() });
+}
+
+// Codex is the only CLI whose session ids were captured from a hook event that
+// may simply never arrive (untrusted or missing hooks). Fall back to the
+// rollout file Codex writes under $CODEX_HOME/sessions, which encodes the same
+// thread id, and bind it to the terminal that launched it.
+function forgetCodexTracking(terminalId) {
+  terminalCwds.delete(terminalId);
+  codexLaunches.delete(terminalId);
+  clearCodexTimers(terminalId);
+}
+
+function clearCodexTimers(terminalId) {
+  const timers = codexProbeTimers.get(terminalId);
+  if (!timers) return;
+  for (const timer of timers) clearTimeout(timer);
+  codexProbeTimers.delete(terminalId);
+}
+
+function discoverCodexSession(terminalId) {
+  if (agentTypes.get(terminalId) !== "codex" || sessionIds.has(terminalId)) return;
+  const launch = codexLaunches.get(terminalId);
+  const cwd = launch?.cwd || terminalCwds.get(terminalId);
+  if (!cwd) return;
+  const now = Date.now();
+  let sessions;
+  try {
+    // A match always has a fresh mtime: a new rollout is created on the first
+    // turn and a resumed rollout is appended to on the next one. Restricting the
+    // scan keeps a probe from stat-ing days of history.
+    sessions = collectSessions({ codexHome: resolveCodexHome(), now, cache: codexSessionCache, minMtimeMs: now - CODEX_SCAN_LOOKBACK_MS });
+  } catch {
+    return;
+  }
+  // A session id can belong to exactly one terminal. Skipping ids already
+  // reported by a hook keeps a probe from stealing a sibling's conversation.
+  const claimed = new Set();
+  for (const [id, sessionId] of sessionIds) {
+    if (id !== terminalId) claimed.add(sessionId);
+  }
+  let match;
+  // A rollout only belongs to this terminal once the terminal has actually
+  // started a turn: Codex creates it on the first turn of a new session and
+  // appends to the old file after a resume. Without that anchor an idle sibling
+  // in the same folder could hand its fresh rollout to this terminal.
+  if (launch && Number.isFinite(launch.turnAt)) {
+    match = findRecentSession(sessions, { cwd, since: launch.turnAt, excludeIds: claimed });
+    if (!match && !launch.resume && Number.isFinite(launch.at)) {
+      // The rollout's session_meta start time is the exact process clock, which
+      // is more precise than mtime when the first turn came right after launch.
+      // A launch written by TermBeacon precedes the process, so a rollout older
+      // than that write belongs to another terminal; a hand-started CLI is
+      // anchored to its banner instead, which arrives after the process started.
+      match = findStartedSession(sessions, {
+        cwd,
+        launchedAt: launch.at,
+        excludeIds: claimed,
+        toleranceMs: launch.written ? undefined : CODEX_BANNER_TOLERANCE_MS,
+      });
+    }
+  }
+  if (!match) return;
+  sessionIds.set(terminalId, match.id);
+  sessionAgents.set(terminalId, "codex");
+  send({ type: "session:update", terminalId, agentType: "codex", sessionId: match.id, at: Date.now() });
+}
+
+function scheduleCodexDiscovery(terminalId, delays = [1500, 5000, 15000]) {
+  if (agentTypes.get(terminalId) !== "codex" || sessionIds.has(terminalId)) return;
+  // A pending batch already probes the same launch; adding another would only
+  // multiply timers while an agent cycles through turns.
+  if (codexProbeTimers.has(terminalId)) return;
+  const timers = new Set();
+  codexProbeTimers.set(terminalId, timers);
+  for (const delay of delays) {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (!timers.size) codexProbeTimers.delete(terminalId);
+      discoverCodexSession(terminalId);
+    }, delay);
+    timer.unref?.();
+    timers.add(timer);
+  }
+}
+
+// Codex creates a rollout on the first turn of a new session and appends to the
+// existing one after a resume. Both leave a fresh mtime, which is a much better
+// anchor than the moment the command was typed.
+function noteCodexTurn(terminalId) {
+  const launch = codexLaunches.get(terminalId);
+  if (!launch) return;
+  launch.turnAt = Date.now();
+  scheduleCodexProbe(terminalId);
+}
+
+// A turn just ended, so the rollout has been flushed. Probe again with the turn
+// start as the anchor; this covers a turn that began before any probe could see
+// the file.
+function scheduleCodexProbe(terminalId) {
+  const launch = codexLaunches.get(terminalId);
+  if (!launch || !Number.isFinite(launch.turnAt)) return;
+  // A new anchor supersedes the previous batch.
+  clearCodexTimers(terminalId);
+  scheduleCodexDiscovery(terminalId);
+}
+
+// The renderer writes the CLI command before the process exists, so the write
+// time is the closest clock we have to the rollout's session_meta timestamp.
+function noteCodexLaunch(terminalId, data) {
+  if (typeof data !== "string") return;
+  // PowerShell prefixes `&` before the quoted program; cmd starts with it.
+  const tokens = data.replace(/["']/g, " ").trim().split(/\s+/);
+  const ampersand = tokens[0] === "&";
+  const head = ampersand ? tokens[1] : tokens[0];
+  if (!head || !/(?:^|[\\/])codex(?:\.(?:cmd|exe|ps1))?$/i.test(head)) return;
+  codexLaunches.set(terminalId, {
+    at: Date.now(),
+    cwd: terminalCwds.get(terminalId),
+    // `codex resume [id]` appends to an existing rollout; a plain launch will
+    // create a new one. The first argument decides which.
+    resume: tokens[ampersand ? 2 : 1] === "resume",
+    // The process starts after this write, so it cannot already own an older
+    // rollout.
+    written: true,
+  });
 }
 
 function makeDetector(terminalId, agentType) {
@@ -302,9 +447,14 @@ function adoptAgent(terminalId, agent, { direct = false } = {}) {
     });
   }
   // A session id that belongs to the previous CLI cannot be resumed by the new
-  // one; drop it so the renderer falls back to the latest session.
+  // one; drop it so the renderer falls back to the agent's own default recovery.
   forgetForeignSession(terminalId, agent);
   send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
+  // A CLI started by hand (not through TermBeacon) has no launch record. The
+  // banner time is close enough to the process start to seed one.
+  if (agent === "codex" && !codexLaunches.has(terminalId)) {
+    codexLaunches.set(terminalId, { at: Date.now(), cwd: terminalCwds.get(terminalId), resume: false, written: false });
+  }
 }
 
 function agentFromOscStatus(status) {
@@ -326,7 +476,10 @@ function makeOscParser(terminalId) {
   // meaningful without the user renaming terminals by hand.
   const parser = createOscParser(
     (title) => send({ type: "pty:title", terminalId, title, at: Date.now() }),
-    (cwd) => send({ type: "pty:cwd", terminalId, cwd, at: Date.now() }),
+    (cwd) => {
+      terminalCwds.set(terminalId, cwd);
+      send({ type: "pty:cwd", terminalId, cwd, at: Date.now() });
+    },
     undefined,
     (status) => {
       const reportedAgent = agentFromOscStatus(status);
@@ -443,6 +596,7 @@ function createSession(message, hookWaited = false) {
 
   creating.delete(request.terminalId);
   sessions.set(request.terminalId, session);
+  terminalCwds.set(request.terminalId, request.cwd);
   startTickLoop();
   if (outputFlow.paused) {
     pausedSessions.set(request.terminalId, Date.now());
@@ -498,6 +652,7 @@ function createSession(message, hookWaited = false) {
     sessionIds.delete(request.terminalId);
     sessionAgents.delete(request.terminalId);
     pausedSessions.delete(request.terminalId);
+    forgetCodexTracking(request.terminalId);
     // A dead terminal must not be resurrected by a later snapshot.
     stateSnapshots.delete(request.terminalId);
     // Keep the buffer after exit so a reconnecting renderer can still replay
@@ -536,10 +691,11 @@ function handleMessage(message) {
       oscParsers.delete(terminalId);
       agentTypes.delete(terminalId);
       sessionIds.delete(terminalId);
-    sessionAgents.delete(terminalId);
+      sessionAgents.delete(terminalId);
       stateSnapshots.delete(terminalId);
       killRequests.delete(terminalId);
       pausedSessions.delete(terminalId);
+      forgetCodexTracking(terminalId);
       bufferRelease(terminalId);
       outputFlow.forget(terminalId);
       stopTickLoopWhenIdle();
@@ -581,8 +737,12 @@ function handleMessage(message) {
       const detector = detectors.get(request.terminalId);
       if (!session || !detector) throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
       session.write(request.data);
-      if (message.launch === true) detector.launch?.();
-      else detector.input(request.data);
+      if (message.launch === true) {
+        detector.launch?.();
+        noteCodexLaunch(request.terminalId, request.data);
+      } else {
+        detector.input(request.data);
+      }
       detector.tick();
     } catch (error) {
       sendError("pty:write", error, message.requestId, message?.terminalId);

@@ -19,7 +19,7 @@ TermBeacon 的"工作中 / 已完成 / 等待输入 / 异常"来自 `pty-host` �
 
 每次操作先显示固定版本、实际安装命令和变更预览。下载和版本检查通过后，才切换 `~/.termbeacon/agents/bin/` 中的入口；新建终端会把这个目录加入 PATH。已有系统安装、凭据和正在运行的会话保留。更新或重装会保留前一托管版本，并支持回退和切回系统安装。Claude 托管入口会关闭后台自动更新，版本由管理器维护。
 
-状态接入和 CLI 安装是不同操作：已安装 CLI 可以单独修复 Hook / 扩展，不必重装。写入前备份配置，检查内容是否为当前版本；“接入已配置”仅表示文件检查通过，仍需重新启动 CLI 并通过真实任务验证。Codex 当前使用标题与输出推断。
+状态接入和 CLI 安装是不同操作：已安装 CLI 可以单独修复 Hook / 扩展，不必重装。写入前备份配置，检查内容是否为当前版本；“接入已配置”仅表示文件检查通过，仍需重新启动 CLI 并通过真实任务验证。Codex 使用原生 Hook，并在 Hook 不可用时用 rollout 文件推断会话归属。
 
 源码开发环境也可以运行：
 
@@ -27,10 +27,11 @@ TermBeacon 的"工作中 / 已完成 / 等待输入 / 异常"来自 `pty-host` �
 npm ci
 npm run hooks:install
 npm run hooks:configure:claude
+npm run hooks:configure:codex
 npm run preflight:cli
 ```
 
-`preflight:cli` 是文件与可执行文件检查，不会调用模型。`--json` 输出机器可读结果，`--strict` 检查本机已安装且支持原生事件的 CLI；其中任一接入不匹配或版本探测失败时返回非零退出码。只安装 Codex 时原生事件验收仍未就绪。它与设置页共用探测和配置内容检查，覆盖自定义配置目录及 Pi 扩展。
+`preflight:cli` 是文件与可执行文件检查，不会调用模型。`--json` 输出机器可读结果，`--strict` 检查本机已安装且支持原生事件的 CLI；其中任一接入不匹配或版本探测失败时返回非零退出码。它与设置页共用探测和配置内容检查，覆盖自定义配置目录及 Pi 扩展。
 
 ---
 
@@ -147,7 +148,11 @@ Hook HTTP 最多尝试 3 次，每次超时 800ms，重试间隔 100ms / 250ms�
 
 ## 4. Codex
 
-当前集成使用 Codex 的 OSC 0/2 标题：Braille spinner（`⠋⠙⠹…`）表示工作，静止标题表示空闲（2.5s 确认窗口）。标题和 OSC 9;4 进度均使用流式解析，支持任意跨块位置、同块多条序列及 BEL / ST 终止符，OSC 内容不会误当作普通完成/报错文本。这仍是依赖 CLI 标题格式的推断，版本升级后需要重新验证。
+Codex 原生 Hook 会写入 `~/.codex/hooks.json`（或 `CODEX_HOME/hooks.json`），上报 `SessionStart`、`UserPromptSubmit` 和 `Stop` 三类生命周期事件。设置页、`npm run hooks:configure:codex` 和 `node scripts/hooks-install.cjs --configure-codex` 共用同一合并实现：写入前备份原文件，保留用户已有的其他 Hook，并替换旧版 TermBeacon 命令。配置后需要重启 Codex 会话使 Hook 生效。
+
+终端恢复 Codex 时优先使用 Hook 上报的会话 ID；没有会话 ID 时，`codex-sessions.cjs` 会读取 `$CODEX_HOME/sessions/YYYY/MM/DD/` 下的 rollout 文件，按工作目录、启动时间和文件 mtime 把会话绑定到启动它的终端。绑定成功后恢复命令使用 `codex resume <session-id>`，并保留该终端配置的启动参数；无法确认会话归属时打开 `codex resume` 选择器，不再使用会误恢复同目录其他会话的 `--last`。
+
+OSC 0/2 标题仍作为原生事件缺失时的兜底：Braille spinner（`⠋⠙⠹…`）表示工作，静止标题表示空闲（2.5s 确认窗口）。标题和 OSC 9;4 进度均使用流式解析，支持任意跨块位置、同块多条序列及 BEL / ST 终止符，OSC 内容不会误当作普通完成/报错文本。
 
 ---
 

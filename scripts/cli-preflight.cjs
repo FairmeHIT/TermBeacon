@@ -16,11 +16,11 @@ function containsTermBeaconHook(value) {
   return false;
 }
 
-function inspectPreflight({ discovered, opencodePlugin, claudeSettings, piExtension = false, hookClient }) {
+function inspectPreflight({ discovered, opencodePlugin, claudeSettings, codexHooks = false, piExtension = false, hookClient }) {
   const installed = Object.values(discovered).filter((item) => item && item.installed);
   const readyForOutputCalibration = installed.length > 0 && Boolean(hookClient);
-  const nativeAgents = Object.entries(discovered).filter(([id, item]) => id !== "codex" && item?.installed);
-  const configured = { opencode: opencodePlugin, claude: claudeSettings, pi: piExtension };
+  const nativeAgents = Object.entries(discovered).filter(([, item]) => item?.installed);
+  const configured = { opencode: opencodePlugin, claude: claudeSettings, codex: codexHooks, pi: piExtension };
   return {
     cli: Object.fromEntries(Object.entries(discovered).map(([id, item]) => [id, {
       installed: Boolean(item?.installed),
@@ -33,6 +33,7 @@ function inspectPreflight({ discovered, opencodePlugin, claudeSettings, piExtens
     hookClient,
     opencodePlugin,
     claudeSettings,
+    codexHooks,
     piExtension,
     readyForOutputCalibration,
     readyForInteractiveCalibration: readyForOutputCalibration && nativeAgents.length > 0 && nativeAgents.every(([id, item]) => configured[id] && !item.error),
@@ -59,6 +60,7 @@ async function main() {
     hookClient: fs.existsSync(path.join(__dirname, "termbeacon-hook.cjs")),
     opencodePlugin: discovered.opencode.integration.state === "configured",
     claudeSettings: discovered.claude.integration.state === "configured",
+    codexHooks: discovered.codex.integration.state === "configured",
     piExtension: discovered.pi.integration.state === "configured",
   });
   if (args.json) {
@@ -71,6 +73,7 @@ async function main() {
     console.log(`- hook client: ${result.hookClient ? "ready" : "missing"}`);
     console.log(`- opencode plugin: ${result.opencodePlugin ? "installed" : "not installed"}`);
     console.log(`- Claude Hook settings: ${result.claudeSettings ? "configured" : "not configured"}`);
+    console.log(`- Codex Hook settings: ${result.codexHooks ? "configured" : "not configured"}`);
     console.log(`- Pi extension: ${result.piExtension ? "configured" : "not configured"}`);
     console.log(`- output calibration: ${result.readyForOutputCalibration ? "ready" : "blocked"}`);
     console.log(`- interactive Hook calibration: ${result.readyForInteractiveCalibration ? "ready" : "blocked"}`);

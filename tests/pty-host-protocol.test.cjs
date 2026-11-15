@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const vm = require("node:vm");
 
@@ -41,7 +42,13 @@ function createHarness({ spawn, detection, hookPort = 12345, env = {} } = {}) {
     spawnedOptions.push(options);
     return session;
   };
-  const fakeFs = { statSync: () => ({ isDirectory: () => true }) };
+  const fakeFs = {
+    statSync: (...args) => fs.statSync(...args),
+    readdirSync: (...args) => fs.readdirSync(...args),
+    openSync: (...args) => fs.openSync(...args),
+    readSync: (...args) => fs.readSync(...args),
+    closeSync: (...args) => fs.closeSync(...args),
+  };
   const fakeDetection = detection || { createDetector: () => ({ output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }) };
   const fakeHookServer = {
     start: () => Promise.resolve(12345),
@@ -81,6 +88,15 @@ function createHarness({ spawn, detection, hookPort = 12345, env = {} } = {}) {
     tickCallback = callback;
     return { unref() {} };
   };
+  // Background probes (Codex rollout discovery) must run on demand: keep their
+  // callbacks instead of firing real timers mid-assertion.
+  const pendingTimeouts = new Set();
+  const fakeSetTimeout = (callback) => {
+    const handle = { callback, unref() {} };
+    pendingTimeouts.add(handle);
+    return handle;
+  };
+  const fakeClearTimeout = (handle) => pendingTimeouts.delete(handle);
   const context = vm.createContext({
     require: fakeRequire,
     process: fakeProcess,
@@ -96,6 +112,8 @@ function createHarness({ spawn, detection, hookPort = 12345, env = {} } = {}) {
     Buffer,
     setInterval: fakeSetInterval,
     clearInterval: () => { tickCallback = null; },
+    setTimeout: fakeSetTimeout,
+    clearTimeout: fakeClearTimeout,
   });
   vm.runInContext(hostSource, context, { filename: "pty-host.cjs" });
   parentPort.emit("message", { data: { type: "connect" }, ports: [dataPort] });
@@ -109,7 +127,7 @@ function createHarness({ spawn, detection, hookPort = 12345, env = {} } = {}) {
     parentPort.emit("message", { data: { type: "connect" }, ports: [nextPort] });
     return nextMessages;
   };
-  return { dataPort, messages, spawned, spawnedOptions, reattach, context, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload) };
+  return { dataPort, messages, spawned, spawnedOptions, reattach, context, tick: () => tickCallback?.(), emitHook: (payload) => hookHandler?.(payload), runTimers: () => { const pending = [...pendingTimeouts]; pendingTimeouts.clear(); for (const handle of pending) handle.callback(); } };
 }
 
 function createMessage(terminalId, shell = "cmd.exe") {
@@ -595,4 +613,45 @@ test("forget cancels a PTY creation waiting for the hook server", async () => {
   dataPort.emit("message", { data: { type: "pty:forget", terminalId: "t1" } });
   await Promise.resolve();
   assert.equal(spawned.length, 0);
+});
+
+test("a Codex turn binds its own rollout session id to that terminal", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "termbeacon-codex-host-"));
+  const previousCodexHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = home;
+  t.after(() => {
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const { dayDirectories } = require("../src/main/codex-sessions.cjs");
+  const directory = dayDirectories(home, { days: 1 })[0];
+  fs.mkdirSync(directory, { recursive: true });
+  const id = "01a1dfcc-c23e-7b92-96cb-86f07a0f15b9";
+
+  const { dataPort, spawned, messages, runTimers } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  // The renderer writes the launch command before the CLI exists.
+  dataPort.emit("message", { data: { type: "pty:write", terminalId: "t1", data: "\"codex.cmd\" \"--yolo\"", launch: true } });
+  // The first turn is when Codex creates the rollout file.
+  spawned[0].dataCallback("\x1b]7501;state=working:app=codex\x07");
+  const startedAt = Date.now();
+  fs.writeFileSync(path.join(directory, `rollout-2026-11-15T12-00-00-${id}.jsonl`), `${JSON.stringify({
+    timestamp: new Date(startedAt).toISOString(),
+    type: "session_meta",
+    payload: {
+      id,
+      session_id: id,
+      timestamp: new Date(startedAt).toISOString(),
+      cwd: process.cwd(),
+      source: "vscode",
+      originator: "codex-tui",
+    },
+  })}\n`, "utf8");
+  runTimers();
+
+  const updates = messages.filter((message) => message.type === "session:update");
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].sessionId, id);
+  assert.equal(updates[0].agentType, "codex");
 });

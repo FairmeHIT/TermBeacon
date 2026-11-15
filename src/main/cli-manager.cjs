@@ -6,7 +6,7 @@ const { managedRoot, managedBin, runFile, findCommands, invocation, shellCommand
 const integration = require("./integration-config.cjs");
 
 const CATALOG = {
-  codex: { name: "Codex", command: "codex", package: "@openai/codex", docs: "https://developers.openai.com/codex/cli/", description: "OpenAI 的终端编程助手", signal: "终端标题与输出推断；暂未接入原生生命周期事件。" },
+  codex: { name: "Codex", command: "codex", package: "@openai/codex", docs: "https://developers.openai.com/codex/cli/", description: "OpenAI 的终端编程助手", signal: "原生 Hook：会话启动、任务开始与任务完成。" },
   opencode: { name: "OpenCode", command: "opencode", package: "@opencode/cli", docs: "https://opencode.ai/docs", description: "开放的终端编程助手", signal: "OpenCode 2 插件事件；从 TermBeacon 启动时使用独立服务。" },
   claude: { name: "Claude Code", command: "claude", package: "@anthropic-ai/claude-code", docs: "https://code.claude.com/docs/en/setup", description: "Anthropic 的终端编程助手", signal: "原生 Hook：任务开始、权限请求与主任务完成。" },
   pi: { name: "Pi", command: "pi", package: "@earendil-works/pi-coding-agent", docs: "https://github.com/earendil-works/pi", description: "可扩展的终端编程助手", signal: "Pi 1 扩展事件；使用 agent_settled 确认最终空闲。" },
@@ -118,7 +118,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
       await packageEntry(safeRelease(state.agents[id].previous, id), id);
     }
     if (action === "update" && info.source !== "managed") throw new Error("先执行标准化安装，再由 TermBeacon 管理更新");
-    if (action === "integrate" && (!info.installed || id === "codex")) throw new Error("此 CLI 暂不支持配置原生状态接入");
+    if (action === "integrate" && !info.installed) throw new Error("此 CLI 暂不支持配置原生状态接入");
     if (action === "integrate" && ((id === "opencode" && Number(versionNumber(info.version)?.split(".")[0]) < 2) || (id === "pi" && Number(versionNumber(info.version)?.split(".")[0]) < 1))) throw new Error("当前版本过旧，请先执行标准化安装或更新");
     let packageVersion;
     let command;
@@ -135,7 +135,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
       if (current[0] < min[0] || current[0] === min[0] && current[1] < min[1]) throw new Error(`${meta.name} 需要 Node.js ${min.join(".")} 或更新版本`);
       command = `npm install --global --prefix "${path.join(root, id, "releases", release)}" --registry https://registry.npmjs.org --no-fund --no-audit ${meta.package}@${packageVersion}${id === "pi" ? " --ignore-scripts" : ""}`;
       changes.push(`在 ${path.join(root, id, "releases")} 创建独立安装，固定版本 ${packageVersion}。`, "安装完成并验证版本后切换入口；原托管版本保留。", "系统已有安装、登录凭据和项目配置保留。", "新启动的 CLI 使用托管版本；已运行的会话继续运行。");
-      if (id !== "codex") changes.push("配置 TermBeacon 状态接入；变更前备份已有配置。");
+      changes.push("配置 TermBeacon 状态接入；变更前备份已有配置。");
     } else if (action === "integrate") {
       changes.push("安装或修复 TermBeacon 的 Hook / 扩展；变更前备份已有配置。", "重启对应 CLI 后生效。");
     } else changes.push(`将新启动的 ${meta.name} 切换到${action === "rollback" ? `上一托管版本 ${state.agents[id].previous.version}` : action === "use-system" ? "系统" : "托管"}安装。`, "已运行的会话继续运行。");
@@ -203,7 +203,8 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
         const cmd = /\.[cm]?js$/i.test(installed.entry) ? { file: saved.dependencies.node, args: [installed.entry] } : { file: installed.entry, args: [] };
         const detectedVersion = versionNumber(await run(cmd.file, [...cmd.args, "--version"], { env, timeout: 15000 }));
         if (detectedVersion !== packageVersion) throw new Error(`版本验证失败，期望 ${packageVersion}，实际 ${detectedVersion || "未知"}；当前入口保持原版本。`);
-        if (id !== "codex") { progress("integrating", "正在配置状态接入…"); integrationResult = integration.configureAgent({ id, assets, home, env }); }
+        progress("integrating", "正在配置状态接入…");
+        integrationResult = integration.configureAgent({ id, assets, home, env });
         progress("activating", "正在切换 CLI 入口…");
         record = { source: "managed", release, version: packageVersion, node: saved.dependencies.node, updatedAt: Date.now(), ...(before?.release ? { previous: { release: before.release, version: before.version, node: before.node } } : {}) };
         await commit(id, record, () => writeLauncher(id, installed.entry, saved.dependencies.node));
@@ -255,7 +256,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
   return { scan, plan, execute, launch };
 }
 
-module.exports = { createCliManager, CATALOG, registryPackage, versionNumber };
+module.exports = { createCliManager, CATALOG, registryPackage, versionNumber, parseCodexArgs };
 
 function parseCodexArgs(value) {
   if (typeof value !== "string" || !value.trim()) return [];

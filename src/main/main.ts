@@ -19,8 +19,9 @@ const { FreshGitHubProvider, checkForUpdatesWithRetry, formatUpdateError } = req
   checkForUpdatesWithRetry: <T>(check: () => Promise<T>, options?: { onRetry?: (attempt: number, total: number) => void }) => Promise<T>;
   formatUpdateError: (error: unknown) => string;
 };
-const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") as {
+const { createCliManager, CATALOG: cliCatalog, parseCodexArgs } = require("./cli-manager.cjs") as {
   CATALOG: Record<string, { docs: string }>;
+  parseCodexArgs: (value: string | undefined) => string[];
   createCliManager: (options: { assets: unknown; onProgress: (event: CliProgress) => void }) => {
     scan(): Promise<CliScan>;
     plan(request: unknown): Promise<CliPlan>;
@@ -61,7 +62,7 @@ const { getResumeSpec } = require("./session-resume.cjs") as {
   getResumeSpec: (request: { agentType?: string; sessionId?: string; sessionAgent?: string; cwd?: string; shell?: string }) => { supported: boolean; args?: string[]; [key: string]: unknown };
 };
 const { resolveAssets } = require("./integration-config.cjs") as {
-  resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null };
+  resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null; codexHookCommand?: string | null };
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -733,7 +734,15 @@ ipcMain.handle("clipboard:read-text", () => clipboard.readText());
 ipcMain.handle("session:resume-spec", async (_event, request) => {
   const spec = getResumeSpec(request || {});
   if (!spec.supported) return spec;
-  const launch = await agentManager().launch({ id: request.agentType, shell: request.shell, args: spec.args });
+  // A resume command is a fresh CLI process; it needs the same provider and
+  // permission flags as a normal launch, or `codex resume` starts against a
+  // different profile than the session was created with. A malformed saved
+  // argument string must not block recovery, so it degrades to no extra flags.
+  let extra: string[] = [];
+  if (spec.agentType === "codex") {
+    try { extra = parseCodexArgs(request?.codexArgs); } catch { extra = []; }
+  }
+  const launch = await agentManager().launch({ id: request.agentType, shell: request.shell, args: [...(spec.args || []), ...extra] });
   return { ...spec, command: launch.command };
 });
 ipcMain.handle("cwd:pick", async () => {

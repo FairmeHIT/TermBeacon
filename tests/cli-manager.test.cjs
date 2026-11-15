@@ -77,6 +77,23 @@ test("standard install uses pinned official packages, verifies before activation
   }
 });
 
+test("Codex can integrate native hooks and standard install configures them", async (t) => {
+  const { manager, home, assets } = await fixture(t);
+  await apply(manager, "codex", "install");
+  const hooksPath = path.join(home, ".codex", "hooks.json");
+  const parsed = JSON.parse(await fs.readFile(hooksPath, "utf8"));
+  assert.deepEqual(Object.keys(parsed.hooks), ["SessionStart", "UserPromptSubmit", "Stop"]);
+  assert.match(parsed.hooks.SessionStart[0].hooks[0].command, /--agent codex$/);
+  const agent = (await manager.scan()).agents.find((item) => item.id === "codex");
+  assert.equal(agent.integration.state, "configured");
+  const parsedBefore = JSON.parse(await fs.readFile(hooksPath, "utf8"));
+  parsedBefore.hooks.SessionStart[0].hooks[0].command = "node old-termbeacon-hook.cjs";
+  await fs.writeFile(hooksPath, JSON.stringify(parsedBefore));
+  assert.equal(agentIntegrationStatus({ id: "codex", home, assets }).state, "outdated");
+  await apply(manager, "codex", "integrate");
+  assert.equal(agentIntegrationStatus({ id: "codex", home, assets }).state, "configured");
+});
+
 test("download failure and version mismatch keep the previous manifest and launcher intact", async (t) => {
   const { manager, state, home } = await fixture(t);
   await apply(manager, "codex", "install");

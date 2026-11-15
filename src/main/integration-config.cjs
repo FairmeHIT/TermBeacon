@@ -11,6 +11,7 @@ function resolveAssets({ packaged = false, resourcesPath = process.resourcesPath
     statusReporter: path.join(root, "shared", "status-reporter.js"),
     hookScript: packaged ? path.join(root, "termbeacon-hook.cjs") : path.join(appPath, "scripts", "termbeacon-hook.cjs"),
     hookCommand: packaged ? `"${executablePath.replace(/\\/g, "/")}" --hook --agent claude` : null,
+    codexHookCommand: packaged ? `"${executablePath.replace(/\\/g, "/")}" --hook --agent codex` : null,
   };
 }
 
@@ -20,6 +21,10 @@ function resolvePluginTarget({ home = os.homedir(), env = process.env } = {}) {
 
 function resolveClaudeSettings({ home = os.homedir(), env = process.env } = {}) {
   return path.join(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), "settings.json");
+}
+
+function resolveCodexHooks({ home = os.homedir(), env = process.env } = {}) {
+  return path.join(env.CODEX_HOME || path.join(home, ".codex"), "hooks.json");
 }
 
 function installOpencodePlugin({ assets, home = os.homedir(), env = process.env } = {}) {
@@ -66,6 +71,7 @@ function installExtension(source, target, assets) {
 function resolvePiTarget({ home = os.homedir(), env = process.env } = {}) { return path.join(env.PI_CODING_AGENT_DIR || path.join(home, ".pi", "agent"), "extensions", "termbeacon", "index.js"); }
 function configureAgent({ id, assets, home = os.homedir(), env = process.env } = {}) {
   if (id === "claude") return configureClaude({ assets, target: resolveClaudeSettings({ home, env }) });
+  if (id === "codex") return configureCodex({ assets, target: resolveCodexHooks({ home, env }) });
   if (id === "opencode") return installOpencodePlugin({ assets, home, env });
   if (id === "pi") {
     if (!assets?.piExtension || !fs.existsSync(assets.piExtension)) throw new Error("TermBeacon Pi 扩展资源不存在");
@@ -75,15 +81,14 @@ function configureAgent({ id, assets, home = os.homedir(), env = process.env } =
 }
 
 function agentIntegrationStatus({ id, assets, home = os.homedir(), env = process.env } = {}) {
-  if (id === "codex") return { state: "inferred", label: "推断检测", detail: "使用终端标题与输出推断，可能存在延迟或误判。" };
-  const target = id === "claude" ? resolveClaudeSettings({ home, env }) : id === "pi" ? resolvePiTarget({ home, env }) : resolvePluginTarget({ home, env });
+  const target = id === "claude" ? resolveClaudeSettings({ home, env }) : id === "codex" ? resolveCodexHooks({ home, env }) : id === "pi" ? resolvePiTarget({ home, env }) : resolvePluginTarget({ home, env });
   if (!fs.existsSync(target)) return { state: "missing", label: "未配置接入", path: target, detail: "配置后需重新启动对应 CLI，运行期间通过本机事件桥接更新状态。" };
   try {
     let current;
-    if (id === "claude") {
+    if (id === "claude" || id === "codex") {
       const settings = parseJsonFile(target);
-      const desired = assets?.hookCommand || (assets?.hookScript && hookCommand(assets.hookScript));
-      current = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "SessionEnd"].every((event) =>
+      const desired = id === "codex" ? assets?.codexHookCommand || (assets?.hookScript && hookCommand(assets.hookScript, id)) : assets?.hookCommand || (assets?.hookScript && hookCommand(assets.hookScript));
+      current = hookEvents(id).every((event) =>
         settings.hooks?.[event]?.some((group) => group.hooks?.some((hook) => isTermBeaconHook(hook) && hook.command === desired)));
     } else {
       const source = id === "pi" ? assets?.piExtension : assets?.opencodePlugin;
@@ -110,15 +115,25 @@ function isTermBeaconHook(value) {
   return command.includes("termbeacon-hook.cjs") || /(?:^|[\\/"'])termbeacon(?:\.exe)?["']?\s+--hook(?:\s|$)/.test(command);
 }
 
-function hookCommand(hookScript) {
+function hookCommand(hookScript, agent = "claude") {
   // Declaring the agent lets the PTY host tell this CLI's hook apart from one
   // launched inside it, so a nested CLI cannot claim the terminal's session id.
-  return `node "${hookScript.replace(/\\/g, "/")}" --agent claude`;
+  return `node "${hookScript.replace(/\\/g, "/")}" --agent ${agent}`;
+}
+
+function hookEvents(id) {
+  return id === "codex" ? ["SessionStart", "UserPromptSubmit", "Stop"] : ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "SessionEnd"];
 }
 
 function mergeClaudeSettings(existing, hookScript, configuredCommand) {
   const command = configuredCommand || hookCommand(hookScript);
-  const addition = { hooks: Object.fromEntries(["UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Notification", "Stop", "SessionEnd"].map((event) => [event, [{ hooks: [{ type: "command", command }] }]])) };
+  const addition = { hooks: Object.fromEntries(hookEvents("claude").map((event) => [event, [{ hooks: [{ type: "command", command }] }]])) };
+  return mergeClaudeHookGroups(existing, addition);
+}
+
+function mergeCodexHooks(existing, hookScript, configuredCommand) {
+  const command = configuredCommand || hookCommand(hookScript, "codex");
+  const addition = { hooks: Object.fromEntries(hookEvents("codex").map((event) => [event, [{ hooks: [{ type: "command", command }] }]])) };
   return mergeClaudeHookGroups(existing, addition);
 }
 
@@ -157,4 +172,19 @@ function configureClaude({ assets, target = resolveClaudeSettings(), backup = tr
   return { target, backupPath, hookScript: assets.hookScript };
 }
 
-module.exports = { resolveAssets, resolvePluginTarget, resolveClaudeSettings, resolvePiTarget, installOpencodePlugin, mergeClaudeSettings, mergeClaudeHookGroups, isTermBeaconHook, configureClaude, configureAgent, agentIntegrationStatus, installExtension, archiveLegacyOpencode };
+function configureCodex({ assets, target = resolveCodexHooks(), backup = true } = {}) {
+  if (!assets?.hookScript || !fs.existsSync(assets.hookScript)) throw new Error("TermBeacon Codex Hook 资源不存在");
+  const merged = mergeCodexHooks(parseJsonFile(target), assets.hookScript, assets.codexHookCommand);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  let backupPath;
+  if (backup && fs.existsSync(target)) {
+    backupPath = `${target}.bak-${Date.now()}`;
+    fs.copyFileSync(target, backupPath);
+  }
+  const temp = `${target}.tmp-${process.pid}`;
+  fs.writeFileSync(temp, `${JSON.stringify(merged, null, 2)}\n`, "utf8");
+  fs.renameSync(temp, target);
+  return { target, backupPath, hookScript: assets.hookScript };
+}
+
+module.exports = { resolveAssets, resolvePluginTarget, resolveClaudeSettings, resolveCodexHooks, resolvePiTarget, installOpencodePlugin, mergeClaudeSettings, mergeCodexHooks, mergeClaudeHookGroups, isTermBeaconHook, configureClaude, configureCodex, configureAgent, agentIntegrationStatus, installExtension, archiveLegacyOpencode };

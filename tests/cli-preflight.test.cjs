@@ -33,10 +33,10 @@ test("preflight reports installed CLIs and readiness separately from optional in
 });
 
 test("preflight checks installed native agents, including Pi, rather than requiring absent CLIs", () => {
-  const input = { discovered: { codex: { installed: true }, pi: { installed: true } }, hookClient: true, opencodePlugin: false, claudeSettings: false };
+  const input = { discovered: { codex: { installed: true }, pi: { installed: true } }, hookClient: true, opencodePlugin: false, claudeSettings: false, codexHooks: true };
   assert.equal(inspectPreflight(input).readyForInteractiveCalibration, false);
   const ready = inspectPreflight({ ...input, piExtension: true });
   assert.equal(ready.readyForInteractiveCalibration, true);
-  assert.equal(ready.cli.codex.readyForNativeCalibration, false);
+  assert.equal(ready.cli.codex.readyForNativeCalibration, true);
   assert.equal(ready.cli.pi.readyForNativeCalibration, true);
 });

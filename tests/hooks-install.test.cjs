@@ -3,7 +3,8 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { resolvePluginTarget, installPlugin, claudeSnippet, mergeClaudeSettings, configureClaude } = require("../scripts/hooks-install.cjs");
+const { spawnSync } = require("node:child_process");
+const { resolvePluginTarget, installPlugin, claudeSnippet, codexSnippet, claudeSettingsPath, codexHooksPath, mergeClaudeSettings, configureClaude, configureCodex, parseArgs } = require("../scripts/hooks-install.cjs");
 
 const repoRoot = path.join(__dirname, "..");
 const pluginSource = path.join(repoRoot, "hooks", "opencode", "termbeacon.js");
@@ -19,11 +20,11 @@ test("resolves the project plugin path under the working directory", () => {
 });
 
 test("source installers resolve the same custom config directories as Settings", () => {
-  const { claudeSettingsPath } = require("../scripts/hooks-install.cjs");
   const shared = require("../src/main/integration-config.cjs");
-  const options = { home: "C:/user", env: { OPENCODE_CONFIG_DIR: "C:/config/oc", CLAUDE_CONFIG_DIR: "C:/config/cc" } };
+  const options = { home: "C:/user", env: { OPENCODE_CONFIG_DIR: "C:/config/oc", CLAUDE_CONFIG_DIR: "C:/config/cc", CODEX_HOME: "C:/config/codex" } };
   assert.equal(resolvePluginTarget(options), shared.resolvePluginTarget(options));
   assert.equal(claudeSettingsPath(options), shared.resolveClaudeSettings(options));
+  assert.equal(codexHooksPath(options), shared.resolveCodexHooks(options));
 });
 
 test("installs a self-contained plugin package and is idempotent", () => {
@@ -51,6 +52,32 @@ test("prints a Claude snippet with the real absolute hook path", () => {
   assert.ok(snippet.includes(repoRoot.replace(/\\/g, "/")));
   const parsed = JSON.parse(snippet);
   assert.ok(parsed.hooks.Stop[0].hooks[0].command.includes("termbeacon-hook.cjs"));
+});
+
+test("prints a Codex snippet with only session lifecycle events", () => {
+  const snippet = codexSnippet();
+  const parsed = JSON.parse(snippet);
+  assert.deepEqual(Object.keys(parsed.hooks), ["SessionStart", "UserPromptSubmit", "Stop"]);
+  assert.match(parsed.hooks.SessionStart[0].hooks[0].command, /--agent codex$/);
+});
+
+test("Codex flag parsing does not trigger the OpenCode plugin installer", () => {
+  assert.deepEqual(parseArgs(["--configure-codex"]), { project: false, printClaude: false, printCodex: false, configureClaude: false, configureCodex: true, configurePi: false, home: undefined, settings: undefined });
+  assert.deepEqual(parseArgs(["--print-codex"]), { project: false, printClaude: false, printCodex: true, configureClaude: false, configureCodex: false, configurePi: false, home: undefined, settings: undefined });
+});
+
+test("Codex-only flags do not print Claude merge instructions", () => {
+  const script = path.join(repoRoot, "scripts", "hooks-install.cjs");
+  const cases = [
+    { flag: "--print-codex", marker: "hooks.json and --agent codex", expect: (out) => out.includes("hooks.json") && out.includes("--agent codex") },
+    { flag: "--configure-codex", marker: "Codex Hook settings merged", expect: (out) => out.includes("Codex Hook settings merged") },
+  ];
+  for (const { flag, marker, expect } of cases) {
+    const result = spawnSync(process.execPath, [script, flag, "--home", os.tmpdir()], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(!result.stdout.includes("Claude Code needs a manual settings.json merge"), result.stdout);
+    assert.ok(expect(result.stdout), `flag ${flag} stdout did not mention ${marker}`);
+  }
 });
 
 test("merges Claude hooks without duplicating existing TermBeacon commands", () => {
@@ -96,6 +123,27 @@ test("configureClaude leaves invalid JSON untouched", () => {
     assert.throws(() => configureClaude({ target, root: repoRoot }));
     assert.equal(fs.readFileSync(target, "utf8"), original);
     assert.equal(fs.readdirSync(home).filter((name) => name.includes(".bak-")).length, 0);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("configureCodex writes atomically, preserves user hooks, and backs up existing files", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tb-codex-install-"));
+  const target = path.join(home, ".codex", "hooks.json");
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "node user.cjs" }] }] } }), "utf8");
+    const result = configureCodex({ target });
+    assert.equal(result.target, target);
+    assert.ok(result.backupPath && fs.existsSync(result.backupPath));
+    const parsed = JSON.parse(fs.readFileSync(target, "utf8"));
+    assert.equal(parsed.hooks.SessionStart[0].hooks[0].command, "node user.cjs");
+    assert.match(parsed.hooks.SessionStart.at(-1).hooks[0].command, /termbeacon-hook\.cjs" --agent codex$/);
+    assert.equal(parsed.hooks.Stop[0].hooks[0].command, parsed.hooks.UserPromptSubmit[0].hooks[0].command);
+    configureCodex({ target, backup: false });
+    const second = JSON.parse(fs.readFileSync(target, "utf8"));
+    assert.deepEqual(second.hooks, parsed.hooks);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

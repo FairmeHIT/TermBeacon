@@ -49,6 +49,7 @@ const english: Record<string, string> = {
   "PTY Host 重启失败": "Could not restart PTY host",
   "该 CLI 不支持会话恢复": "This CLI does not support session resume",
   "保存的会话不属于当前 CLI，已改为恢复最近会话。": "The saved session belongs to another CLI, so the most recent session was resumed instead.",
+  "未记录该终端的 Codex 会话，已打开历史会话列表，请选择它原来的会话": "This terminal never reported its Codex session, so the session picker was opened. Choose the conversation this terminal was using.",
   "恢复命令失败": "Resume command failed",
   "隐藏工作栏": "Hide sidebar",
   "展开工作栏": "Show sidebar",

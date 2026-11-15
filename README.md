@@ -36,7 +36,7 @@ The image above is an illustrative UI preview. The application is an Electron de
 - **Task status reminders** - see `Working`, `Completed`, `Ready`, `Waiting for input`, `Error`, and `Stopped` at a glance.
 - **Completed-unseen state** - a finished task stays highlighted until you open that terminal, so background work does not disappear silently.
 - **Agent CLI management** - detect, install, update, reinstall, switch sources, and roll back Codex, OpenCode, Claude Code, and Pi from a dedicated settings page. Managed installs are isolated under your user directory.
-- **CLI status integrations** - native bridges for OpenCode, Claude Code, and Pi; inferred title/output detection for Codex.
+- **CLI status integrations** - native bridges for OpenCode, Claude Code, Pi, and Codex; terminal-specific session recovery binds a Codex session to the terminal that launched it.
 - **Default new terminal** - launch Codex directly from the new terminal action, or choose a plain shell, OpenCode, Claude Code, or Pi in Settings. Set Codex launch arguments, such as `--yolo` and a model, for new Codex terminals.
 - **Bilingual settings** - switch Settings between Simplified Chinese and English, with an immediately applied, saved preference.
 - **Persistent sessions** - restore window layout, workspace selection, task history, and terminal scrollback after restarting the app. Saved CLI sessions carry their owner, so TermBeacon resumes them with the matching CLI instead of passing one CLI's session id to another.
@@ -92,13 +92,14 @@ For the most accurate task status, install the optional bridges once in the envi
 ```powershell
 npm run hooks:install
 npm run hooks:configure:claude
+npm run hooks:configure:codex
 npm run preflight:cli
 ```
 
 - **opencode**: install the plugin, reload opencode, and use `opencode --standalone` so the plugin inherits the TermBeacon environment.
 - **Claude Code**: merge the generated Hook into `~/.claude/settings.json`; the configurator makes a timestamped backup before writing.
 - **Pi**: install its extension from Settings, or run `node scripts/hooks-install.cjs --configure-pi`.
-- **Codex**: title/output inference is available without a Hook. It can be delayed or inaccurate when CLI formats change.
+- **Codex**: native `SessionStart` / `UserPromptSubmit` / `Stop` Hooks are merged into `~/.codex/hooks.json`; session ids are also recovered from Codex rollout files so a resumed terminal opens its own session instead of guessing.
 - **Generic shells**: prompt, output, and exit signals provide a conservative fallback.
 
 The full setup, event mapping, troubleshooting guide, and protocol reference are in [`hooks/README.md`](hooks/README.md).
@@ -136,6 +137,7 @@ The host process owns PTYs independently from the window, so closing and reopeni
 | `npm test` | Run the Node test suite. |
 | `npm run doctor` | Check Node, npm, lockfile, and native dependency prerequisites. |
 | `npm run preflight:cli` | Inspect installed CLIs and Hook/plugin configuration without changing files. |
+| `npm run hooks:configure:codex` | Merge the TermBeacon Hook into `~/.codex/hooks.json` with a backup. |
 | `npm run acceptance:cli` | Generate the read-only CLI status acceptance report and fixture coverage. |
 | `npm run dist` | Build and verify the Windows installer without publishing. |
 | `npm run dist:publish` | Build, verify, and publish the Windows release after its source commit and tag are pushed. |

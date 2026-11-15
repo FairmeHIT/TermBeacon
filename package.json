@@ -21,6 +21,7 @@
     "acceptance:cli": "node scripts/cli-acceptance-report.cjs",
     "hooks:install": "node scripts/hooks-install.cjs",
     "hooks:configure:claude": "node scripts/hooks-install.cjs --configure-claude",
+    "hooks:configure:codex": "node scripts/hooks-install.cjs --configure-codex",
     "record:cli": "node scripts/cli-record.cjs",
     "audit:cli-capture": "node scripts/cli-capture-audit.cjs",
     "fixture:from-capture": "node scripts/cli-capture-to-fixture.cjs",

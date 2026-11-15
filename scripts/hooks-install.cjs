@@ -4,7 +4,9 @@
  *   node scripts/hooks-install.cjs                 # global: ~/.config/opencode/plugins
  *   node scripts/hooks-install.cjs --project       # ./.opencode/plugins
  *   node scripts/hooks-install.cjs --print-claude       # print a ready-to-paste snippet
+ *   node scripts/hooks-install.cjs --print-codex
  *   node scripts/hooks-install.cjs --configure-claude   # merge Claude settings with a backup
+ *   node scripts/hooks-install.cjs --configure-codex
  *
  * The plugin is a no-op outside TermBeacon: it only reports when the PTY
  * environment carries TERMBEACON_HOOK_PORT/TOKEN/TERMINAL_ID.
@@ -32,8 +34,16 @@ function claudeSnippet({ root = repoRoot } = {}) {
   return JSON.stringify(integration.mergeClaudeSettings({}, path.join(root, "scripts", "termbeacon-hook.cjs")), null, 2);
 }
 
+function codexSnippet({ root = repoRoot } = {}) {
+  return JSON.stringify(integration.mergeCodexHooks({}, path.join(root, "scripts", "termbeacon-hook.cjs")), null, 2);
+}
+
 function claudeSettingsPath({ home = os.homedir(), project = false, cwd = process.cwd(), env = process.env } = {}) {
   return project ? path.join(cwd, ".claude", "settings.json") : integration.resolveClaudeSettings({ home, env });
+}
+
+function codexHooksPath({ home = os.homedir(), env = process.env } = {}) {
+  return integration.resolveCodexHooks({ home, env });
 }
 
 function configureClaude({ target = claudeSettingsPath(), root = repoRoot, backup = true } = {}) {
@@ -41,13 +51,19 @@ function configureClaude({ target = claudeSettingsPath(), root = repoRoot, backu
   return { ...result, events: Object.keys(JSON.parse(claudeSnippet({ root })).hooks).length };
 }
 
+function configureCodex({ target = codexHooksPath(), root = repoRoot, backup = true } = {}) {
+  return integration.configureCodex({ assets: integration.resolveAssets({ appPath: root }), target, backup });
+}
+
 function parseArgs(argv) {
-  const args = { project: false, printClaude: false, configureClaude: false, configurePi: false, home: undefined, settings: undefined };
+  const args = { project: false, printClaude: false, printCodex: false, configureClaude: false, configureCodex: false, configurePi: false, home: undefined, settings: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (token === "--project") args.project = true;
     else if (token === "--print-claude") args.printClaude = true;
+    else if (token === "--print-codex") args.printCodex = true;
     else if (token === "--configure-claude") args.configureClaude = true;
+    else if (token === "--configure-codex") args.configureCodex = true;
     else if (token === "--configure-pi") args.configurePi = true;
     else if (token === "--home") args.home = argv[++index];
     else if (token === "--settings") args.settings = argv[++index];
@@ -62,7 +78,7 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  if (!args.printClaude && !args.configureClaude && !args.configurePi) {
+  if (!args.printClaude && !args.printCodex && !args.configureClaude && !args.configureCodex && !args.configurePi) {
     const result = installPlugin({ project: args.project, home: args.home });
     console.log(`[hooks-install] opencode plugin ${result.existed ? "updated" : "installed"}: ${result.target}`);
     console.log("[hooks-install] restart opencode so it picks up the plugin, then run: npm run preflight:cli");
@@ -77,7 +93,15 @@ function main() {
     console.log("");
     console.log("[hooks-install] merge this into ~/.claude/settings.json (or .claude/settings.json):");
     console.log(claudeSnippet());
-  } else if (!args.configureClaude && !args.configurePi) {
+  } else if (!args.printCodex && !args.configureCodex) {
+    console.log("[hooks-install] Claude Code needs a manual settings.json merge; run with --print-claude to print it.");
+  }
+
+  if (args.printCodex) {
+    console.log("");
+    console.log("[hooks-install] merge this into ~/.codex/hooks.json:");
+    console.log(codexSnippet());
+  } else if (!args.configureClaude && !args.configurePi && !args.configureCodex) {
     console.log("[hooks-install] Claude Code needs a manual settings.json merge; run with --print-claude to print it.");
   }
   if (args.configureClaude) {
@@ -91,8 +115,18 @@ function main() {
       process.exitCode = 1;
     }
   }
+  if (args.configureCodex) {
+    try {
+      const configured = configureCodex({ target: codexHooksPath({ home: args.home }) });
+      console.log(`[hooks-install] Codex Hook settings merged: ${configured.target}`);
+      if (configured.backupPath) console.log(`[hooks-install] backup: ${configured.backupPath}`);
+    } catch (error) {
+      console.error(`[hooks-install] Codex settings were not changed: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
+  }
 }
 
 if (require.main === module) main();
 
-module.exports = { resolvePluginTarget, installPlugin, claudeSnippet, claudeSettingsPath, mergeClaudeSettings, configureClaude, parseArgs };
+module.exports = { resolvePluginTarget, installPlugin, claudeSnippet, codexSnippet, claudeSettingsPath, codexHooksPath, mergeClaudeSettings, configureClaude, configureCodex, parseArgs };

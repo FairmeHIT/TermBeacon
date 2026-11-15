@@ -64,7 +64,7 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
-      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
+      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType; codexArgs?: string }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
       restartHost(request?: { force: boolean }): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -1284,7 +1284,7 @@ function App() {
   async function resumeTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
     if (!terminal || !terminal.alive || terminal.recoveryState === "recovering") return;
-    let spec: { supported: boolean; command?: string; reason?: string; mode?: string };
+    let spec: { supported: boolean; command?: string; reason?: string; mode?: string; note?: string };
     try {
       spec = await window.termbeacon.getResumeSpec({
         agentType: terminal.agentType,
@@ -1292,6 +1292,7 @@ function App() {
         sessionAgent: terminal.lastSessionAgent,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
+        codexArgs: terminal.agentType === "codex" ? defaultCodexArgs : undefined,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1313,10 +1314,11 @@ function App() {
       ? { ...task, recoveryState: "recovering" }
       : task));
     window.termbeacon.launch({ terminalId: id, data: `${spec.command}\r` });
-    // The stored id belonged to a different CLI, so the resume silently opened
-    // the latest conversation instead. Say so: otherwise the user believes the
-    // window contains the session it was showing when the app closed.
-    if (spec.mode === "latest" && terminal.lastSessionId) {
+    // Explain any substitution: a picker opened because this terminal never
+    // reported its session id, or a stored id was dropped as unusable.
+    if (spec.note) {
+      void window.termbeacon.showMessage({ message: t(spec.note) });
+    } else if (spec.mode === "latest" && terminal.lastSessionId) {
       void window.termbeacon.showMessage({ message: t("保存的会话不属于当前 CLI，已改为恢复最近会话。") });
     }
   }

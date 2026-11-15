@@ -7,7 +7,9 @@ const {
   resolveAssets,
   installOpencodePlugin,
   mergeClaudeSettings,
+  mergeCodexHooks,
   configureClaude,
+  configureCodex,
   configureAgent,
   agentIntegrationStatus,
 } = require("../src/main/integration-config.cjs");
@@ -33,10 +35,10 @@ test("integration honors explicit CLI configuration directories", (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tb-config-dirs-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const assets = resolveAssets({ appPath: path.resolve(__dirname, "..") });
-  const env = { OPENCODE_CONFIG_DIR: path.join(home, "oc"), CLAUDE_CONFIG_DIR: path.join(home, "cc"), PI_CODING_AGENT_DIR: path.join(home, "pi") };
-  for (const id of ["opencode", "claude", "pi"]) {
+  const env = { OPENCODE_CONFIG_DIR: path.join(home, "oc"), CLAUDE_CONFIG_DIR: path.join(home, "cc"), CODEX_HOME: path.join(home, "codex"), PI_CODING_AGENT_DIR: path.join(home, "pi") };
+  for (const id of ["opencode", "claude", "codex", "pi"]) {
     const result = configureAgent({ id, assets, home, env });
-    assert.equal(result.target.startsWith(env[{ opencode: "OPENCODE_CONFIG_DIR", claude: "CLAUDE_CONFIG_DIR", pi: "PI_CODING_AGENT_DIR" }[id]]), true);
+    assert.equal(result.target.startsWith(env[{ opencode: "OPENCODE_CONFIG_DIR", claude: "CLAUDE_CONFIG_DIR", codex: "CODEX_HOME", pi: "PI_CODING_AGENT_DIR" }[id]]), true);
     assert.equal(agentIntegrationStatus({ id, assets, home, env }).state, "configured");
   }
 });
@@ -93,6 +95,41 @@ test("Claude configuration writes an atomic file and keeps a backup", () => {
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("Codex hooks merge preserves user hooks, captures only the right events, and is idempotent", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tb-codex-"));
+  const target = path.join(home, ".codex", "hooks.json");
+  const assets = { hookScript: path.join(home, "termbeacon-hook.cjs") };
+  fs.writeFileSync(assets.hookScript, "hook");
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, JSON.stringify({ notifications: true, hooks: { SessionStart: [{ hooks: [{ type: "command", command: "node user.cjs" }] }] } }));
+    const result = configureCodex({ assets, target });
+    assert.ok(result.backupPath && fs.existsSync(result.backupPath));
+    const parsed = JSON.parse(fs.readFileSync(target, "utf8"));
+    assert.equal(parsed.notifications, true);
+    assert.deepEqual(Object.keys(parsed.hooks), ["SessionStart", "UserPromptSubmit", "Stop"]);
+    assert.equal(parsed.hooks.SessionStart[0].hooks[0].command, "node user.cjs");
+    assert.equal(parsed.hooks.SessionStart[1].hooks[0].command, `node "${assets.hookScript.replace(/\\/g, "/")}" --agent codex`);
+    assert.equal(parsed.hooks.UserPromptSubmit[0].hooks[0].command.includes("--agent codex"), true);
+    configureCodex({ assets, target, backup: false });
+    const second = JSON.parse(fs.readFileSync(target, "utf8"));
+    assert.deepEqual(second.hooks, parsed.hooks);
+    assert.equal(agentIntegrationStatus({ id: "codex", assets, home }).state, "configured");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Codex hooks replace only owned outdated commands", () => {
+  const existing = { hooks: { SessionStart: [{ hooks: [{ type: "command", command: 'node "C:/old/termbeacon-hook.cjs" --agent codex' }, { type: "command", command: "node user.cjs" }] }] } };
+  const once = mergeCodexHooks(existing, "C:/new/termbeacon-hook.cjs");
+  const twice = mergeCodexHooks(once, "C:/new/termbeacon-hook.cjs");
+  assert.equal(once.hooks.SessionStart.length, 2);
+  assert.deepEqual(once.hooks.SessionStart[0].hooks.map((hook) => hook.command), ["node user.cjs"]);
+  assert.equal(once.hooks.SessionStart[1].hooks[0].command, 'node "C:/new/termbeacon-hook.cjs" --agent codex');
+  assert.deepEqual(twice, once);
 });
 
 test("Claude migration removes owned child hooks and updates an old script path", () => {

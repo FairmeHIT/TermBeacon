@@ -33,9 +33,12 @@ function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.e
   const requested = normalizeSessionId(sessionId);
   const id = requested && sessionAgent === agentType && sessionIdFitsAgent(agentType, requested) ? requested : undefined;
   // The stored id belongs to another CLI (or predates the current adapter).
-  // Resuming the latest session is always better than a command the CLI
-  // rejects outright, so downgrade and explain the substitution.
-  const note = requested && !id ? `会话 ID 与 ${agentType} 不匹配，已改为恢复最近会话` : undefined;
+  // Passing it would make the CLI reject the whole resume command, so the id is
+  // dropped and the note explains why.
+  const notes = [];
+  // Codex has no "latest session" fallback any more (it opens a picker), so the
+  // note must not claim one; it only explains that the id was discarded.
+  if (requested && !id) notes.push(`会话 ID 与 ${agentType} 不匹配，已忽略该 ID`);
   let program;
   let args;
   let mode;
@@ -51,10 +54,19 @@ function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.e
     program = "pi";
     args = id ? ["--session", id] : ["--continue"];
     mode = id ? "session-id" : "latest";
-  } else {
+  } else if (id) {
     program = "codex";
-    args = id ? ["resume", id] : ["resume", "--last"];
-    mode = id ? "session-id" : "latest";
+    args = ["resume", id];
+    mode = "session-id";
+  } else {
+    // `codex resume --last` filters by the shell's current cwd and returns the
+    // newest conversation in the folder. Every terminal in one workspace would
+    // therefore reopen the same thread. The picker has no such fallback: the
+    // user (or a later captured id) decides which conversation belongs here.
+    program = "codex";
+    args = ["resume"];
+    mode = "picker";
+    notes.push("未记录该终端的 Codex 会话，已打开历史会话列表，请选择它原来的会话");
   }
   return {
     supported: true,
@@ -64,7 +76,7 @@ function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.e
     cwd: typeof cwd === "string" ? cwd : undefined,
     program,
     args,
-    ...(note ? { note } : {}),
+    ...(notes.length ? { note: notes.join("；") } : {}),
   };
 }
 
