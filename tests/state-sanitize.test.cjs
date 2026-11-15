@@ -172,3 +172,23 @@ test("normalizes legacy terminal fields and keeps the active terminal inside its
   assert.equal(result.terminals[1].lastActivityAt, 0);
   assert.equal(result.activeTerminalId, "t1");
 });
+
+test("keeps each workspace's remembered terminal only when it still belongs to it", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [
+      { id: "w1", name: "A", terminalIds: ["t1", "t2"], lastActiveTerminalId: "t2" },
+      { id: "w2", name: "B", terminalIds: [], lastActiveTerminalId: "t9" },
+      { id: "w3", name: "C", terminalIds: ["t3"], lastActiveTerminalId: 42 },
+    ],
+    terminals: [
+      validTerminal,
+      { ...validTerminal, id: "t2" },
+      { ...validTerminal, id: "t3" },
+    ],
+  });
+  assert.equal(result.workspaces[0].lastActiveTerminalId, "t2");
+  // Dangling or malformed references are dropped rather than fatal.
+  assert.equal(result.workspaces[1].lastActiveTerminalId, undefined);
+  assert.equal(result.workspaces[2].lastActiveTerminalId, undefined);
+});

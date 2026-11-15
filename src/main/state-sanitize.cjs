@@ -79,6 +79,11 @@ function sanitizeState(parsed) {
     const cwd = cleanText(workspace.cwd, MAX_CWD_LENGTH);
     if (cwd) next.cwd = cwd;
     if (workspace.namePinned === true) next.namePinned = true;
+    // Remember which terminal was last active per workspace, but only when it
+    // still belongs to this workspace after pruning.
+    if (typeof workspace.lastActiveTerminalId === "string" && workspaceTerminalIds.includes(workspace.lastActiveTerminalId)) {
+      next.lastActiveTerminalId = workspace.lastActiveTerminalId;
+    }
     workspaces.push(next);
   }
   const tasks = Array.isArray(parsed.tasks)

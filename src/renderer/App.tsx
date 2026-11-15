@@ -483,11 +483,11 @@ function App() {
         if (freshTerminalId) setActiveId(freshTerminalId);
       } else {
         setWorkspaces(restored);
-        const workspaceTerminalIds = restored.find((workspace) => workspace.id === restoredActiveWorkspaceId)?.terminalIds ?? [];
+        const activeWorkspaceRestored = restored.find((workspace) => workspace.id === restoredActiveWorkspaceId);
+        const workspaceTerminalIds = activeWorkspaceRestored?.terminalIds ?? [];
         const fallbackId = workspaceTerminalIds.find((id) => state.terminals.some((terminal) => terminal.id === id));
-        const savedActiveId = state.activeTerminalId && workspaceTerminalIds.includes(state.activeTerminalId)
-          ? state.activeTerminalId
-          : undefined;
+        const savedActiveId = [state.activeTerminalId, activeWorkspaceRestored?.lastActiveTerminalId]
+          .filter((candidate): candidate is string => Boolean(candidate && workspaceTerminalIds.includes(candidate)))[0];
         setActiveId(savedActiveId ?? fallbackId ?? state.terminals[0].id);
       }
       setActiveWorkspaceId(restoredActiveWorkspaceId);
@@ -693,6 +693,19 @@ function App() {
       strip.scrollTop += itemBox.bottom - stripBox.bottom;
     }
   }, [activeWorkspaceId, workspaces.length, sidebarWidth]);
+
+  // Track which terminal each workspace last had active so returning to a
+  // workspace restores it instead of jumping back to the first one. One effect
+  // covers every activation path (clicks, new terminals, keyboard nav, the
+  // replacement after a delete, and the restored value on startup).
+  useEffect(() => {
+    if (!hydrated) return;
+    setWorkspaces((items) => {
+      const owner = items.find((workspace) => workspace.terminalIds.includes(activeId));
+      if (!owner || owner.lastActiveTerminalId === activeId) return items;
+      return items.map((workspace) => workspace.id === owner.id ? { ...workspace, lastActiveTerminalId: activeId } : workspace);
+    });
+  }, [activeId, hydrated]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -1225,13 +1238,17 @@ function App() {
   function selectWorkspace(id: string) {
     setSettingsOpen(false);
     setActiveWorkspaceId(id);
-    const nextTerminalId = workspaces.find((workspace) => workspace.id === id)?.terminalIds[0];
-    if (nextTerminalId && terminals.some((terminal) => terminal.id === nextTerminalId)) {
+    const target = workspaces.find((workspace) => workspace.id === id);
+    const members = new Set(target?.terminalIds ?? []);
+    // Prefer the terminal this workspace had active last time; fall back to
+    // the first surviving member, then to any terminal in the workspace.
+    const remembered = target?.lastActiveTerminalId;
+    const nextTerminalId = [remembered, target?.terminalIds[0]]
+      .find((candidate) => candidate && members.has(candidate) && terminals.some((terminal) => terminal.id === candidate))
+      ?? terminals.find((terminal) => members.has(terminal.id))?.id;
+    if (nextTerminalId) {
       setActiveId(nextTerminalId);
       focusTerminalView(nextTerminalId);
-    } else {
-      const fallback = terminals.find((terminal) => workspaces.some((workspace) => workspace.id === id && workspace.terminalIds.includes(terminal.id)));
-      if (fallback) setActiveId(fallback.id);
     }
   }
 

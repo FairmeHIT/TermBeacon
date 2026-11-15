@@ -68,6 +68,8 @@ export interface Workspace {
   /** Local folder this workspace is anchored to; new terminals start here. */
   cwd?: string;
   terminalIds: string[];
+  /** Terminal this workspace last had active, so returning restores it. */
+  lastActiveTerminalId?: string;
 }
 
 export interface TaskRecord {
