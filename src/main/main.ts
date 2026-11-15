@@ -1,6 +1,6 @@
 import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, nativeTheme, screen, shell } from "electron";
 import type { MessageBoxOptions } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
@@ -91,6 +91,74 @@ let terminalHistory: ReturnType<typeof createHistoryStore> | undefined;
 let stateWriteTail: Promise<void> = Promise.resolve();
 let stateWriteSequence = 0;
 const MAX_HOST_MESSAGE_BYTES = 4 * 1024 * 1024;
+
+// Electron's nativeTheme only picks a light or dark frame. Windows 11 also
+// exposes the DWM caption colors, so palettes such as warm paper can tint the
+// standard title bar instead of leaving a white strip above the app. Windows 10
+// returns an error for these attributes; the light/dark frame remains intact.
+type CaptionColors = { caption?: unknown; text?: unknown; border?: unknown };
+let captionProcess: ChildProcess | null = null;
+let lastCaptionKey = "";
+
+function colorRef(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)) return undefined;
+  const color = Number.parseInt(value.slice(1), 16);
+  const red = (color >> 16) & 0xff;
+  const green = (color >> 8) & 0xff;
+  const blue = color & 0xff;
+  return (blue << 16) | (green << 8) | red;
+}
+
+function applyWindowsCaption(window: BrowserWindow, colors: CaptionColors) {
+  if (process.platform !== "win32") return;
+  const caption = colorRef(colors.caption);
+  const text = colorRef(colors.text);
+  const border = colorRef(colors.border);
+  if (caption === undefined || text === undefined) return;
+  let hwnd: bigint;
+  try {
+    const handle = window.getNativeWindowHandle();
+    hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+  } catch {
+    return;
+  }
+  const key = `${hwnd}:${caption}:${text}:${border ?? "none"}`;
+  if (key === lastCaptionKey) return;
+  lastCaptionKey = key;
+  // EncodedCommand avoids every quoting layer between Node, PowerShell and the
+  // inline C# here-string. Values are numeric and validated before interpolation.
+  const script = `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class TermBeaconDwm {
+  [DllImport("dwmapi.dll")]
+  public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+  [DllImport("user32.dll")]
+  public static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+}
+'@
+$h = [IntPtr]::new([long]${hwnd.toString()})
+$c = ${caption}
+$t = ${text}
+$b = ${border ?? -1}
+[void][TermBeaconDwm]::DwmSetWindowAttribute($h, 35, [ref]$c, 4)
+[void][TermBeaconDwm]::DwmSetWindowAttribute($h, 36, [ref]$t, 4)
+if ($b -ge 0) { [void][TermBeaconDwm]::DwmSetWindowAttribute($h, 34, [ref]$b, 4) }
+# The frame is not always invalidated by the attribute change alone.
+[void][TermBeaconDwm]::SetWindowPos($h, [IntPtr]::Zero, 0, 0, 0, 0, 0x0037)
+`;
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  try { captionProcess?.kill(); } catch { /* already exited */ }
+  const child = execFile("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded], {
+    windowsHide: true,
+    timeout: 5000,
+  }, (error) => {
+    if (captionProcess === child) captionProcess = null;
+    // Let a later theme switch retry after a transient PowerShell failure.
+    if (error) lastCaptionKey = "";
+  });
+  captionProcess = child;
+}
 
 interface PersistedState {
   schemaVersion: 1;
@@ -647,8 +715,11 @@ ipcMain.handle("cli:docs", async (_event, id) => {
 ipcMain.handle("platform:info", () => platformInfo());
 // Sync the native window frame (title bar, menus, dialogs) with the theme the
 // renderer picked, so a dark UI does not sit under a light system title bar.
-ipcMain.handle("theme:set", (_event, theme) => {
-  nativeTheme.themeSource = theme === "light" ? "light" : "dark";
+ipcMain.handle("theme:set", (event, request) => {
+  const theme = typeof request === "string" ? { mode: request } : request;
+  nativeTheme.themeSource = theme?.mode === "light" ? "light" : "dark";
+  const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  if (window && !window.isDestroyed()) applyWindowsCaption(window, theme ?? {});
   return nativeTheme.shouldUseDarkColors;
 });
 ipcMain.handle("clipboard:read-text", () => clipboard.readText());

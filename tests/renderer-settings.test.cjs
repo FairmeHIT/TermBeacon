@@ -143,6 +143,20 @@ test("Unicode 11 width tables are enabled with xterm's proposed API", () => {
   assert.match(app, /allowProposedApi:\s*true/);
 });
 
+test("native title bar colors follow every app theme", () => {
+  const chrome = app.match(/const themeChrome: Record<Theme, \{ caption: string; text: string; border: string \}> = \{([\s\S]*?)\n\};/)?.[1];
+  assert.ok(chrome, "themeChrome palette must exist");
+  for (const theme of ["dark", "light", "midnight", "forest", "sepia"]) {
+    assert.match(chrome, new RegExp(`${theme}: \\{ caption: "#[0-9a-f]{6}", text: "#[0-9a-f]{6}", border: "#[0-9a-f]{6}" \\}`));
+  }
+  assert.match(app, /setNativeTheme\(\{\s*\n\s*mode:[\s\S]*?\.\.\.themeChrome\[theme\]/);
+  // The main process must fall back gracefully when DWM rejects the call.
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/main.ts"), "utf8");
+  assert.match(main, /DwmSetWindowAttribute\(\$h, 35/);
+  assert.match(main, /DwmSetWindowAttribute\(\$h, 36/);
+  assert.match(main, /process\.platform !== "win32"/);
+});
+
 test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
   assert.match(app, /readClipboardText\(\): Promise<string>/);
   assert.match(app, /term\.attachCustomKeyEventHandler\(\(event\) =>/);

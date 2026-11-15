@@ -41,7 +41,7 @@ declare global {
       openCliDocs(id: AgentCliId): Promise<void>;
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
-      setNativeTheme(theme: "dark" | "light"): Promise<boolean>;
+      setNativeTheme(theme: { mode: "dark" | "light"; caption: string; text: string; border: string }): Promise<boolean>;
       readClipboardText(): Promise<string>;
       confirm(request: { message: string; detail?: string; okLabel?: string; cancelLabel?: string }): Promise<boolean>;
       pickCwd(): Promise<string | null>;
@@ -150,6 +150,18 @@ const terminalThemes: Record<Theme, { background: string; foreground: string; cu
   midnight: { background: "#0a1022", foreground: "#ccd6e8", cursor: "#8fb0f2" },
   forest: { background: "#0d1410", foreground: "#cfdad2", cursor: "#8cc7a5" },
   sepia: { background: "#faf4e6", foreground: "#43392a", cursor: "#9a6b2f" },
+};
+
+// The Windows title bar can only choose light or dark through nativeTheme, so
+// the main process receives these panel colors and paints the DWM caption with
+// them. Keeping the frame in the same palette avoids a white strip above the
+// app, most visibly with the warm-paper and colored dark themes.
+const themeChrome: Record<Theme, { caption: string; text: string; border: string }> = {
+  dark: { caption: "#15181c", text: "#e7eaf0", border: "#292e35" },
+  light: { caption: "#f8f9fb", text: "#20252c", border: "#dce1e7" },
+  midnight: { caption: "#0f1730", text: "#e3e9f8", border: "#233055" },
+  forest: { caption: "#111a15", text: "#e4ebe5", border: "#26332b" },
+  sepia: { caption: "#f9f3e6", text: "#3a3226", border: "#ddd0b6" },
 };
 
 declare global {
@@ -711,7 +723,10 @@ function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("termbeacon-theme", themeSetting);
     // Keep the native window frame (title bar) in sync with the app theme.
-    window.termbeacon.setNativeTheme(DARK_THEMES.includes(theme) ? "dark" : "light").catch(() => { /* the frame just stays as-is */ });
+    window.termbeacon.setNativeTheme({
+      mode: DARK_THEMES.includes(theme) ? "dark" : "light",
+      ...themeChrome[theme],
+    }).catch(() => { /* the frame just stays as-is */ });
     terminalViews.current.forEach((term) => { term.options.theme = terminalThemes[theme]; });
   }, [theme, themeSetting]);
 
