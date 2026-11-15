@@ -4,7 +4,9 @@ const path = require("node:path");
 const test = require("node:test");
 
 const app = fs.readFileSync(path.join(__dirname, "../src/renderer/App.tsx"), "utf8");
+const i18n = fs.readFileSync(path.join(__dirname, "../src/renderer/settings-i18n.ts"), "utf8");
 const launch = fs.readFileSync(path.join(__dirname, "../src/main/agent-launch.cjs"), "utf8");
+const sharedTypes = fs.readFileSync(path.join(__dirname, "../src/shared/types.ts"), "utf8");
 const styles = fs.readFileSync(path.join(__dirname, "../src/renderer/styles.css"), "utf8");
 
 test("brand header uses a beacon mark and only the product name", () => {
@@ -341,6 +343,36 @@ test("terminals created in a workspace start in the workspace folder", () => {
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /activeWorkspace\?\.cwd/);
   assert.match(addTerminal, /isValidCwd\(workspaceCwd\) \? workspaceCwd : DEFAULT_CWD/);
+});
+
+test("new terminals launch the configured default agent", () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8");
+  // Codex is the out-of-the-box default, and the choice is persisted with the
+  // rest of the terminal preferences.
+  assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
+  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*sidebarWidth,/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, sidebarWidth, hydrated\]\)/);
+  const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(addTerminal, "addTerminal must exist");
+  assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
+  assert.match(addTerminal, /await launchCli\(defaultNewTerminalAgent, cwd\)/);
+  assert.match(addTerminal, /type: "error"/);
+  assert.match(app, /newTerminalAgent=\{defaultNewTerminalAgent\}/);
+  assert.match(settings, /htmlFor="settings-new-terminal"/);
+  assert.match(settings, /props\.onNewTerminalAgent\(event\.target\.value as AgentType\)/);
+  assert.match(i18n, /"New terminal launches"/);
+  assert.match(i18n, /"Plain shell"/);
+});
+
+test("renderer tracks the CLI that owns a resumable session id", () => {
+  assert.match(sharedTypes, /lastSessionAgent\?: AgentCliId/);
+  assert.match(sharedTypes, /agentType: AgentCliId;/);
+  assert.match(app, /lastSessionAgent: event\.agentType/);
+  assert.match(app, /sessionAgent: terminal\.lastSessionAgent/);
+  // Hydration must discard an id before a live host can replace it, and the
+  // same guard runs again when state is serialized after a renderer reload.
+  assert.match(app, /terminal\.lastSessionId && terminal\.lastSessionAgent === terminal\.agentType/);
+  assert.match(app, /target\?\.lastSessionId !== undefined\s*\r?\n\s*&& target\.lastSessionAgent !== event\.agentType/s);
 });
 
 test("new shells announce the app appearance so opencode can follow the theme", () => {

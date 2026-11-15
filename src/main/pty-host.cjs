@@ -40,6 +40,7 @@ const detectors = new Map();
 const oscParsers = new Map();
 const agentTypes = new Map();
 const sessionIds = new Map();
+const sessionAgents = new Map();
 const creating = new Set();
 const killRequests = new Set();
 const buffers = new Map();
@@ -95,6 +96,7 @@ function applyHookEvent({ terminalId, event, status, sessionId, agent, eventId, 
   }
   if (typeof sessionId !== "string" || !sessionId) return;
   const currentAgent = agentTypes.get(terminalId) || "generic";
+  if (currentAgent === "generic") return;
   // A CLI launched inside another one shares TERMBEACON_TERMINAL_ID, so its
   // hook would otherwise overwrite the session id with an id its own CLI owns.
   // That mismatch is what makes resume unusable (`opencode --session <uuid>`
@@ -102,7 +104,8 @@ function applyHookEvent({ terminalId, event, status, sessionId, agent, eventId, 
   if (typeof agent === "string" && agent && agent !== currentAgent) return;
   if (!sessionIdFitsAgent(currentAgent, sessionId)) return;
   sessionIds.set(terminalId, sessionId);
-  send({ type: "session:update", terminalId, sessionId, at: Date.now() });
+  sessionAgents.set(terminalId, currentAgent);
+  send({ type: "session:update", terminalId, agentType: currentAgent, sessionId, at: Date.now() });
 }
 const hookServer = createHookServer({ onEvent: applyHookEvent });
 const hookReady = hookServer.start().catch((error) => {
@@ -266,6 +269,12 @@ function makeDetector(terminalId, agentType) {
   return detector;
 }
 
+function forgetForeignSession(terminalId, agent) {
+  if (sessionAgents.get(terminalId) === agent) return;
+  sessionIds.delete(terminalId);
+  sessionAgents.delete(terminalId);
+}
+
 // Both the output sniffer and a CLI's own hook can label a terminal. The agent
 // type selects the detector's pattern set, so switching either way rebuilds it
 // while preserving whatever the hooks already reported.
@@ -294,8 +303,7 @@ function adoptAgent(terminalId, agent, { direct = false } = {}) {
   }
   // A session id that belongs to the previous CLI cannot be resumed by the new
   // one; drop it so the renderer falls back to the latest session.
-  const knownSessionId = sessionIds.get(terminalId);
-  if (knownSessionId && !sessionIdFitsAgent(agent, knownSessionId)) sessionIds.delete(terminalId);
+  forgetForeignSession(terminalId, agent);
   send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
 }
 
@@ -340,7 +348,8 @@ function makeOscParser(terminalId) {
         && (!reportedAgent || reportedAgent === owningAgent)
         && sessionIdFitsAgent(owningAgent, status.id)) {
         sessionIds.set(terminalId, status.id);
-        send({ type: "session:update", terminalId, sessionId: status.id, at: Date.now() });
+        sessionAgents.set(terminalId, owningAgent);
+        send({ type: "session:update", terminalId, agentType: owningAgent, sessionId: status.id, at: Date.now() });
       }
     },
   );
@@ -389,7 +398,15 @@ function createSession(message, hookWaited = false) {
       const knownAgent = agentTypes.get(request.terminalId);
       if (knownAgent) send({ type: "pty:agent", terminalId: request.terminalId, agentType: knownAgent, at: Date.now() });
       const knownSessionId = sessionIds.get(request.terminalId);
-      if (knownSessionId) send({ type: "session:update", terminalId: request.terminalId, sessionId: knownSessionId, at: Date.now() });
+      if (knownSessionId) {
+        send({
+          type: "session:update",
+          terminalId: request.terminalId,
+          agentType: sessionAgents.get(request.terminalId),
+          sessionId: knownSessionId,
+          at: Date.now(),
+        });
+      }
       return;
     }
     sendError("pty:create", protocolError("ALREADY_EXISTS", `terminal already exists: ${request.terminalId}`), requestId, request.terminalId);
@@ -479,6 +496,7 @@ function createSession(message, hookWaited = false) {
     oscParsers.delete(request.terminalId);
     agentTypes.delete(request.terminalId);
     sessionIds.delete(request.terminalId);
+    sessionAgents.delete(request.terminalId);
     pausedSessions.delete(request.terminalId);
     // A dead terminal must not be resurrected by a later snapshot.
     stateSnapshots.delete(request.terminalId);
@@ -518,6 +536,7 @@ function handleMessage(message) {
       oscParsers.delete(terminalId);
       agentTypes.delete(terminalId);
       sessionIds.delete(terminalId);
+    sessionAgents.delete(terminalId);
       stateSnapshots.delete(terminalId);
       killRequests.delete(terminalId);
       pausedSessions.delete(terminalId);
@@ -628,6 +647,7 @@ function handleMessage(message) {
         throw protocolError("NOT_FOUND", `terminal does not exist: ${request.terminalId}`);
       }
       makeDetector(request.terminalId, agentType);
+      forgetForeignSession(request.terminalId, agentType);
       publishState(request.terminalId, { previous: "ready", current: "ready", confidence: 1, source: "user", summary: `detector rebuilt for ${agentType}`, at: Date.now() });
     } catch (error) {
       sendError("state:rebuild-detector", error, message.requestId, message?.terminalId);

@@ -3,24 +3,24 @@ const assert = require("node:assert/strict");
 const { getResumeSpec, sessionIdFitsAgent } = require("../src/main/session-resume.cjs");
 
 test("Claude resumes a specific session or latest session", () => {
-  assert.deepEqual(getResumeSpec({ agentType: "claude", sessionId: "abc" }).args, ["--resume", "abc"]);
+  assert.deepEqual(getResumeSpec({ agentType: "claude", sessionId: "abc", sessionAgent: "claude" }).args, ["--resume", "abc"]);
   assert.deepEqual(getResumeSpec({ agentType: "claude" }).args, ["--continue"]);
 });
 
 test("OpenCode always uses standalone mode", () => {
-  const spec = getResumeSpec({ agentType: "opencode", sessionId: "ses_e25baf5ccffeMyS98eLqAV350G", shell: "powershell.exe" });
+  const spec = getResumeSpec({ agentType: "opencode", sessionId: "ses_e25baf5ccffeMyS98eLqAV350G", sessionAgent: "opencode", shell: "powershell.exe" });
   assert.deepEqual(spec.args, ["--standalone", "--session", "ses_e25baf5ccffeMyS98eLqAV350G"]);
   assert.equal(spec.program, "opencode");
 });
 
 test("Codex uses its resume subcommand", () => {
-  assert.deepEqual(getResumeSpec({ agentType: "codex", sessionId: "c-1" }).args, ["resume", "c-1"]);
+  assert.deepEqual(getResumeSpec({ agentType: "codex", sessionId: "c-1", sessionAgent: "codex" }).args, ["resume", "c-1"]);
   assert.deepEqual(getResumeSpec({ agentType: "codex" }).args, ["resume", "--last"]);
 });
 
 test("resume adapters return raw arguments for the shared launch service to quote", () => {
   assert.equal(getResumeSpec({ agentType: "generic" }).supported, false);
-  assert.deepEqual(getResumeSpec({ agentType: "pi", sessionId: "a'b" }).args, ["--session", "a'b"]);
+  assert.deepEqual(getResumeSpec({ agentType: "pi", sessionId: "a'b", sessionAgent: "pi" }).args, ["--session", "a'b"]);
   assert.equal(getResumeSpec({ agentType: "pi" }).command, undefined);
   assert.equal(getResumeSpec({ agentType: "claude", sessionId: "x".repeat(257) }).mode, "latest");
 });
@@ -39,10 +39,28 @@ test("a Claude UUID is never sent to opencode's --session flag", () => {
 
 test("an opencode session id is never sent to Claude or Codex", () => {
   for (const agentType of ["claude", "codex"]) {
-    const spec = getResumeSpec({ agentType, sessionId: "ses_e25baf5ccffe" });
+    const spec = getResumeSpec({ agentType, sessionId: "ses_e25baf5ccffe", sessionAgent: agentType });
     assert.equal(spec.mode, "latest");
     assert.equal(spec.sessionId, undefined);
   }
+});
+
+test("a matching session owner is required before an id is resumed", () => {
+  const claudeId = "b8e33a24-47fb-4738-a098-f96998b398e3";
+  for (const agentType of ["codex", "pi", "opencode"]) {
+    const spec = getResumeSpec({ agentType, sessionId: claudeId, sessionAgent: "claude" });
+    assert.equal(spec.mode, "latest");
+    assert.equal(spec.sessionId, undefined);
+  }
+  for (const agentType of ["claude", "codex", "pi"]) {
+    const spec = getResumeSpec({ agentType, sessionId: claudeId, sessionAgent: agentType });
+    assert.equal(spec.mode, "session-id", `${agentType} should resume its own id`);
+  }
+  // Legacy ids have no owner, and UUID-like formats cannot distinguish
+  // Claude, Codex, and Pi. Prefer the CLI's own latest session.
+  const legacy = getResumeSpec({ agentType: "codex", sessionId: claudeId });
+  assert.equal(legacy.mode, "latest");
+  assert.equal(legacy.sessionId, undefined);
 });
 
 test("session id shape is matched to the CLI that will open it", () => {

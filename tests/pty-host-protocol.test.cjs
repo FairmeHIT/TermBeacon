@@ -325,6 +325,7 @@ test("OSC 7501 labels an unlabelled terminal and stores its session id", () => {
   spawned[0].dataCallback("\x1b]7501;state=idle:id=ses_abc:app=opencode\x07");
 
   assert.equal(messages.find((message) => message.type === "pty:agent")?.agentType, "opencode");
+  assert.equal(messages.find((message) => message.type === "session:update")?.agentType, "opencode");
   assert.equal(messages.find((message) => message.type === "session:update")?.sessionId, "ses_abc");
   const stateUpdates = messages.filter((message) => message.type === "state:update");
   assert.equal(stateUpdates.length, 0, "a startup idle report must not create completed-unseen");
@@ -378,18 +379,19 @@ test("PTY host routes bridge events to the terminal detector", () => {
     },
   });
   dataPort.emit("message", { data: createMessage("t1") });
-  emitHook({ terminalId: "t1", event: "session.status", status: "completed", sessionId: "session-1" });
+  emitHook({ terminalId: "t1", event: "session.status", status: "completed", agent: "claude", sessionId: "session-1" });
   emitHook({ terminalId: "missing", event: "session.status", status: "completed" });
   assert.deepEqual(hooks, [["session.status", "completed"]]);
   const sessionUpdate = messages.find((message) => message.type === "session:update");
   assert.equal(sessionUpdate?.terminalId, "t1");
   assert.equal(sessionUpdate?.sessionId, "session-1");
+  assert.equal(sessionUpdate?.agentType, "claude");
 });
 
 test("native status received before an agent banner survives detector upgrade", () => {
   const { dataPort, spawned, messages, emitHook, reattach } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
   dataPort.emit("message", { data: createMessage("t1") });
-  emitHook({ terminalId: "t1", event: "PermissionRequest", status: "waiting", sessionId: "main", occurredAt: 2000 });
+  emitHook({ terminalId: "t1", event: "PermissionRequest", status: "waiting", agent: "claude", sessionId: "main", occurredAt: 2000 });
   spawned[0].dataCallback("Claude Code\r\n\x1b]0;◐ Claude Code\x07");
   assert.equal(messages.filter((event) => event.type === "state:update").at(-1).current, "awaiting-input");
   assert.equal(reattach().find((event) => event.type === "state:snapshot").entries[0].state, "awaiting-input");
@@ -416,6 +418,22 @@ test("a hook's session id must belong to the terminal's own CLI", () => {
   emitHook({ terminalId: "t1", event: "session.idle", status: "completed", agent: "opencode", sessionId: "ses_e25baf5ccffe" });
   assert.equal(updates().length, 1);
   assert.equal(updates()[0].sessionId, "ses_e25baf5ccffe");
+  assert.equal(updates()[0].agentType, "opencode");
+});
+
+test("switching CLIs drops a foreign UUID session id before reattach", () => {
+  const { dataPort, spawned, messages, emitHook, reattach } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "Stop", status: "completed", agent: "claude", sessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" });
+  // Claude, Codex, and Pi all use UUID-like ids. A banner switch is the only
+  // reliable signal that the id is no longer portable to the foreground CLI.
+  spawned[0].dataCallback("Codex\r\n");
+  for (const target of ["codex", "pi"]) {
+    dataPort.emit("message", { data: { type: "state:rebuild-detector", terminalId: "t1", agentType: target } });
+    const reattached = reattach();
+    assert.equal(reattached.find((event) => event.type === "session:update"), undefined, `${target} must not inherit a Claude id`);
+  }
+  assert.equal(messages.filter((event) => event.type === "session:update").length > 0, true, "the Claude event itself is still published");
 });
 
 test("a declaring hook labels an unlabelled terminal and stores its session id", () => {
@@ -424,6 +442,13 @@ test("a declaring hook labels an unlabelled terminal and stores its session id",
   emitHook({ terminalId: "t1", event: "session.idle", status: "completed", agent: "opencode", sessionId: "ses_abc" });
   assert.equal(messages.find((event) => event.type === "pty:agent")?.agentType, "opencode");
   assert.equal(messages.find((event) => event.type === "session:update")?.sessionId, "ses_abc");
+});
+
+test("an undeclared generic terminal does not store a session id", () => {
+  const { dataPort, messages, emitHook } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "session.idle", status: "completed", sessionId: "ses_e25baf5ccffe" });
+  assert.equal(messages.find((event) => event.type === "session:update"), undefined);
 });
 
 // Detector stub that walks ready -> working -> stopped on the same terminal so

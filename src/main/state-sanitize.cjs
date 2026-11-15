@@ -60,7 +60,11 @@ function sanitizeState(parsed) {
       lastActivityAt: Number.isFinite(terminal.lastActivityAt) ? Math.max(0, Math.round(terminal.lastActivityAt)) : 0,
       ...(SHELL_TYPES.has(terminal.shell) ? { shell: terminal.shell } : {}),
       ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
-      ...(typeof terminal.lastSessionId === "string" && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId) ? { lastSessionId: terminal.lastSessionId.slice(0, MAX_SESSION_ID_LENGTH) } : {}),
+      ...(typeof terminal.lastSessionId === "string"
+        && terminal.lastSessionAgent === terminal.agentType
+        && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId)
+        ? { lastSessionId: terminal.lastSessionId.slice(0, MAX_SESSION_ID_LENGTH), lastSessionAgent: terminal.lastSessionAgent }
+        : {}),
       ...(typeof terminal.resumeAvailable === "boolean" ? { resumeAvailable: terminal.resumeAvailable } : {}),
       ...(RECOVERY_STATES.has(terminal.recoveryState) ? { recoveryState: terminal.recoveryState } : {}),
       ...(typeof terminal.resumeError === "string" && terminal.resumeError.trim() ? { resumeError: terminal.resumeError.trim().slice(0, MAX_RESUME_ERROR_LENGTH) } : {}),
@@ -127,6 +131,7 @@ function sanitizeState(parsed) {
   const result = { schemaVersion: 1, workspaces, terminals, tasks, activeTerminalId };
   if (activeWorkspaceId !== undefined) result.activeWorkspaceId = activeWorkspaceId;
   if (SHELL_TYPES.has(parsed.defaultShell)) result.defaultShell = parsed.defaultShell;
+  if (AGENT_TYPES.has(parsed.defaultNewTerminalAgent)) result.defaultNewTerminalAgent = parsed.defaultNewTerminalAgent;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
   if (parsed.windowBounds && typeof parsed.windowBounds === "object") {
     const width = Number.isFinite(parsed.windowBounds.width) ? Math.round(parsed.windowBounds.width) : 1280;

@@ -58,7 +58,7 @@ const { planRestart } = require("./host-restart.cjs") as {
   };
 };
 const { getResumeSpec } = require("./session-resume.cjs") as {
-  getResumeSpec: (request: { agentType?: string; sessionId?: string; cwd?: string; shell?: string }) => { supported: boolean; args?: string[]; [key: string]: unknown };
+  getResumeSpec: (request: { agentType?: string; sessionId?: string; sessionAgent?: string; cwd?: string; shell?: string }) => { supported: boolean; args?: string[]; [key: string]: unknown };
 };
 const { resolveAssets } = require("./integration-config.cjs") as {
   resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null };

@@ -34,6 +34,24 @@ test("preserves the manual terminal title pin", () => {
   assert.equal(result.terminals[0].titlePinned, true);
 });
 
+test("preserves a valid default new terminal agent and drops invalid values", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultNewTerminalAgent: "codex",
+  });
+  assert.equal(result.defaultNewTerminalAgent, "codex");
+
+  const invalid = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultNewTerminalAgent: "not-an-agent",
+  });
+  assert.equal(invalid.defaultNewTerminalAgent, undefined);
+});
+
 test("preserves workspace folder paths and manual name pins", () => {
   const result = sanitizeState({
     schemaVersion: 1,
@@ -145,10 +163,11 @@ test("preserves bounded recovery metadata without accepting malformed session id
   const result = sanitizeState({
     schemaVersion: 1,
     workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1"] }],
-    terminals: [{ ...validTerminal, state: "stopped", lastSessionId: "session-1", resumeAvailable: true, recoveryState: "resumable", resumeError: "  interrupted  " }],
+    terminals: [{ ...validTerminal, state: "stopped", lastSessionId: "session-1", lastSessionAgent: "claude", resumeAvailable: true, recoveryState: "resumable", resumeError: "  interrupted  " }],
     tasks: [{ id: "task-1", terminalId: "t1", startedAt: 1, state: "interrupted", recoveryState: "resumable" }],
   });
   assert.equal(result.terminals[0].lastSessionId, "session-1");
+  assert.equal(result.terminals[0].lastSessionAgent, "claude");
   assert.equal(result.terminals[0].recoveryState, "resumable");
   assert.equal(result.terminals[0].resumeError, "interrupted");
   assert.equal(result.tasks[0].state, "interrupted");
@@ -166,16 +185,23 @@ test("drops a persisted session id that belongs to another CLI", () => {
   // Claude UUID, so resume built `opencode --session <uuid>` and failed.
   const result = sanitizeState({
     schemaVersion: 1,
-    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1", "t2", "t3"] }],
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1", "t2", "t3", "t4", "t5"] }],
     terminals: [
-      { ...validTerminal, id: "t1", agentType: "opencode", lastSessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" },
-      { ...validTerminal, id: "t2", agentType: "claude", lastSessionId: "ses_e25baf5ccffe" },
-      { ...validTerminal, id: "t3", agentType: "opencode", lastSessionId: "ses_e25baf5ccffe" },
+      { ...validTerminal, id: "t1", agentType: "opencode", lastSessionId: "b8e33a24-47fb-4738-a098-f96998b398e3", lastSessionAgent: "claude" },
+      { ...validTerminal, id: "t2", agentType: "claude", lastSessionId: "ses_e25baf5ccffe", lastSessionAgent: "claude" },
+      { ...validTerminal, id: "t3", agentType: "opencode", lastSessionId: "ses_e25baf5ccffe", lastSessionAgent: "opencode" },
+      { ...validTerminal, id: "t4", agentType: "codex", lastSessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" },
+      { ...validTerminal, id: "t5", agentType: "codex", lastSessionId: "codex-uuid", lastSessionAgent: "codex" },
     ],
   });
   assert.equal(result.terminals[0].lastSessionId, undefined);
   assert.equal(result.terminals[1].lastSessionId, undefined);
   assert.equal(result.terminals[2].lastSessionId, "ses_e25baf5ccffe");
+  assert.equal(result.terminals[2].lastSessionAgent, "opencode");
+  // A UUID is not proof of ownership; without the owner field it is legacy.
+  assert.equal(result.terminals[3].lastSessionId, undefined);
+  assert.equal(result.terminals[4].lastSessionId, "codex-uuid");
+  assert.equal(result.terminals[4].lastSessionAgent, "codex");
 });
 
 test("preserves bounded retest attempt metadata", () => {

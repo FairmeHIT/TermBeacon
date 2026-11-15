@@ -26,12 +26,12 @@ function sessionIdFitsAgent(agentType, value) {
   return true;
 }
 
-function getResumeSpec({ agentType, sessionId, cwd, shell = "cmd.exe" } = {}) {
+function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.exe" } = {}) {
   if (!AGENT_TYPES.has(agentType) || agentType === "generic") {
     return { supported: false, agentType: agentType || "generic", mode: "unsupported", reason: "该终端没有可用的 CLI 会话适配器" };
   }
   const requested = normalizeSessionId(sessionId);
-  const id = requested && sessionIdFitsAgent(agentType, requested) ? requested : undefined;
+  const id = requested && sessionAgent === agentType && sessionIdFitsAgent(agentType, requested) ? requested : undefined;
   // The stored id belongs to another CLI (or predates the current adapter).
   // Resuming the latest session is always better than a command the CLI
   // rejects outright, so downgrade and explain the substitution.

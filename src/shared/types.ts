@@ -55,6 +55,8 @@ export interface TerminalInstance {
   lastActivityAt: number;
   lastOutputSummary?: string;
   lastSessionId?: string;
+  /** The CLI that owns lastSessionId; ids are not portable across CLIs. */
+  lastSessionAgent?: AgentCliId;
   resumeAvailable?: boolean;
   recoveryState?: RecoveryState;
   resumeError?: string;
@@ -171,6 +173,7 @@ export interface PtyAgentEvent {
 export interface PtySessionEvent {
   type: "session:update";
   terminalId: string;
+  agentType: AgentCliId;
   sessionId: string;
   at: number;
 }
@@ -207,5 +210,5 @@ export interface PtyHostReadyEvent {
   at: number;
 }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; sidebarWidth?: number; windowBounds?: WindowBounds; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; sidebarWidth?: number; windowBounds?: WindowBounds; }
 

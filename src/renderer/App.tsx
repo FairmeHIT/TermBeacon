@@ -64,7 +64,7 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
-      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
+      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
       restartHost(request?: { force: boolean }): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -260,6 +260,14 @@ const FALLBACK_PLATFORM = rendererPlatformFallback();
 const IS_WINDOWS = FALLBACK_PLATFORM.isWindows;
 
 const DEFAULT_SHELL: ShellType = FALLBACK_PLATFORM.shell as ShellType;
+const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex";
+const NEW_TERMINAL_AGENT_OPTIONS: Array<{ value: AgentType; label: string }> = [
+  { value: "generic", label: "普通 Shell" },
+  { value: "codex", label: "Codex" },
+  { value: "opencode", label: "opencode" },
+  { value: "claude", label: "Claude Code" },
+  { value: "pi", label: "Pi" },
+];
 const SHELL_OPTIONS: Array<{ value: ShellType; label: string }> = IS_WINDOWS
   ? [{ value: "cmd.exe", label: "命令提示符" }, { value: "powershell.exe", label: "Windows PowerShell" }, { value: "pwsh.exe", label: "PowerShell 7" }]
   : FALLBACK_PLATFORM.isMac
@@ -269,6 +277,10 @@ const DEFAULT_CWD = FALLBACK_PLATFORM.cwd;
 
 function isSupportedShell(value: unknown): value is ShellType {
   return SHELL_OPTIONS.some((option) => option.value === value) || value === DEFAULT_SHELL;
+}
+
+function isSupportedNewTerminalAgent(value: unknown): value is AgentType {
+  return NEW_TERMINAL_AGENT_OPTIONS.some((option) => option.value === value);
 }
 
 function isValidCwd(path: unknown): path is string {
@@ -383,6 +395,7 @@ function App() {
   const [hydrated, setHydrated] = useState(false);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(FALLBACK_PLATFORM);
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
+  const [defaultNewTerminalAgent, setDefaultNewTerminalAgent] = useState<AgentType>(DEFAULT_NEW_TERMINAL_AGENT);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     const saved = window.localStorage.getItem("termbeacon-theme");
     return isThemeSetting(saved) ? saved : "system";
@@ -538,7 +551,9 @@ function App() {
       setPlatformInfo(info);
       const runtimeDefaultShell = isSupportedShell(info.shell) ? info.shell : DEFAULT_SHELL;
       const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : runtimeDefaultShell;
+      const restoredDefaultNewTerminalAgent = isSupportedNewTerminalAgent(state.defaultNewTerminalAgent) ? state.defaultNewTerminalAgent : DEFAULT_NEW_TERMINAL_AGENT;
       setDefaultShell(restoredDefaultShell);
+      setDefaultNewTerminalAgent(restoredDefaultNewTerminalAgent);
       const restoredAt = Date.now();
       restoredTerminalIds.current = new Set(state.terminals.map((terminal) => terminal.id));
       previouslyActiveTasks.current = new Map((state.tasks ?? [])
@@ -565,6 +580,9 @@ function App() {
           resumeAvailable: terminal.agentType !== "generic" ? true : terminal.resumeAvailable,
           recoveryState,
           ...(interrupted ? { resumeError: undefined } : {}),
+          ...(terminal.lastSessionId && terminal.lastSessionAgent === terminal.agentType
+            ? { lastSessionId: terminal.lastSessionId, lastSessionAgent: terminal.lastSessionAgent }
+            : { lastSessionId: undefined, lastSessionAgent: undefined }),
         });
         });
         pinnedTitles.current = new Set(restoredTerminals.filter((terminal) => terminal.titlePinned).map((terminal) => terminal.id));
@@ -614,6 +632,7 @@ function App() {
       const fallback = newTerminal(1, DEFAULT_SHELL, FALLBACK_PLATFORM.cwd);
       setPlatformInfo(FALLBACK_PLATFORM);
       setDefaultShell(DEFAULT_SHELL);
+      setDefaultNewTerminalAgent(DEFAULT_NEW_TERMINAL_AGENT);
       setTasks([]);
       setTerminals([fallback]);
       setWorkspaces([{ id: "default", name: "默认工作区", terminalIds: [fallback.id], lastUsedAt: Date.now() }]);
@@ -765,9 +784,17 @@ function App() {
       setTerminals((items) => {
         const target = items.find((item) => item.id === event.terminalId);
         const recoveryState = target?.recoveryState === "recovering" ? "recovered" : target?.recoveryState;
-        if (!target || (target.agentType === event.agentType && target.resumeAvailable === resumeAvailable && target.recoveryState === recoveryState)) return items;
+        const foreignSession = target?.lastSessionId !== undefined
+          && target.lastSessionAgent !== event.agentType;
+        if (!target || (!foreignSession && target.agentType === event.agentType && target.resumeAvailable === resumeAvailable && target.recoveryState === recoveryState)) return items;
         return items.map((item) => item.id === event.terminalId
-          ? { ...item, agentType: event.agentType, resumeAvailable, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState }
+          ? {
+              ...item,
+              agentType: event.agentType,
+              ...(foreignSession ? { lastSessionId: undefined, lastSessionAgent: undefined } : {}),
+              resumeAvailable,
+              recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState,
+            }
           : item);
       });
       setTasks((items) => items.some((task) => task.terminalId === event.terminalId && task.recoveryState === "recovering")
@@ -779,10 +806,11 @@ function App() {
     const disposeSession = window.termbeacon.onSession((event) => {
       setTerminals((items) => {
         const target = items.find((item) => item.id === event.terminalId);
-        if (!target || (target.lastSessionId === event.sessionId && target.resumeAvailable === true
+        if (!target || target.agentType !== event.agentType
+          || (target.lastSessionId === event.sessionId && target.lastSessionAgent === event.agentType && target.resumeAvailable === true
           && target.recoveryState !== "recovering" && target.resumeError === undefined)) return items;
         return items.map((item) => item.id === event.terminalId
-          ? { ...item, lastSessionId: event.sessionId, resumeAvailable: true, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState, resumeError: undefined }
+          ? { ...item, lastSessionId: event.sessionId, lastSessionAgent: event.agentType, resumeAvailable: true, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState, resumeError: undefined }
           : item);
       });
       setTasks((items) => items.some((task) => task.terminalId === event.terminalId && (task.recoveryState === "resumable" || task.recoveryState === "recovering"))
@@ -1037,7 +1065,9 @@ function App() {
         state: terminal.state,
         alive: false,
         lastActivityAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0,
-        ...(terminal.lastSessionId ? { lastSessionId: terminal.lastSessionId } : {}),
+        ...(terminal.lastSessionId && terminal.lastSessionAgent === terminal.agentType
+          ? { lastSessionId: terminal.lastSessionId, lastSessionAgent: terminal.lastSessionAgent }
+          : {}),
         ...(terminal.resumeAvailable !== undefined ? { resumeAvailable: terminal.resumeAvailable } : {}),
         ...(terminal.recoveryState ? { recoveryState: terminal.recoveryState } : {}),
         ...(terminal.resumeError ? { resumeError: terminal.resumeError } : {}),
@@ -1050,6 +1080,7 @@ function App() {
         activeWorkspaceId,
         tasks,
         defaultShell,
+        defaultNewTerminalAgent,
         sidebarWidth,
       };
       const serialized = JSON.stringify(state);
@@ -1060,7 +1091,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, sidebarWidth, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, sidebarWidth, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1245,6 +1276,7 @@ function App() {
       spec = await window.termbeacon.getResumeSpec({
         agentType: terminal.agentType,
         sessionId: terminal.lastSessionId,
+        sessionAgent: terminal.lastSessionAgent,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
       });
@@ -1310,9 +1342,9 @@ function App() {
     focusTerminalView(id);
   }
 
-  async function launchCli(id: AgentCliId) {
+  async function launchCli(id: AgentCliId, cwd: string = activeWorkspace?.cwd || DEFAULT_CWD) {
     const spec = await window.termbeacon.getCliLaunchSpec({ id, shell: defaultShell });
-    const terminal = newTerminal(terminals.length + 1, defaultShell, activeWorkspace?.cwd || DEFAULT_CWD);
+    const terminal = newTerminal(terminals.length + 1, defaultShell, cwd);
     terminal.agentType = id;
     terminal.title = agentLabel[id];
     pendingCliLaunch.current.set(terminal.id, spec.command);
@@ -1336,10 +1368,22 @@ function App() {
   }
 
   // Terminals created inside a workspace start in the workspace's folder.
-  function addTerminal() {
+  async function addTerminal() {
     setSettingsOpen(false);
     const workspaceCwd = activeWorkspace?.cwd;
-    const terminal = newTerminal(terminals.length + 1, defaultShell, workspaceCwd && isValidCwd(workspaceCwd) ? workspaceCwd : DEFAULT_CWD);
+    const cwd = workspaceCwd && isValidCwd(workspaceCwd) ? workspaceCwd : DEFAULT_CWD;
+    if (defaultNewTerminalAgent !== "generic") {
+      try {
+        await launchCli(defaultNewTerminalAgent, cwd);
+      } catch (error) {
+        await window.termbeacon.showMessage({
+          type: "error",
+          message: t("启动默认 Agent 失败：{message}", { message: error instanceof Error ? error.message : String(error) }),
+        });
+      }
+      return;
+    }
+    const terminal = newTerminal(terminals.length + 1, defaultShell, cwd);
     setTerminals((items) => [...items, terminal]);
     // Creating a terminal also refreshes the workspace's place in the sidebar.
     setWorkspaces((items) => recordWorkspaceUse(items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace), activeWorkspaceId, Date.now()));
@@ -1639,6 +1683,7 @@ function App() {
       </>}
     </aside>
     {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={themeSetting} onTheme={setThemeSetting} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
+      newTerminalAgent={defaultNewTerminalAgent} newTerminalAgentOptions={NEW_TERMINAL_AGENT_OPTIONS} onNewTerminalAgent={setDefaultNewTerminalAgent}
       version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}
