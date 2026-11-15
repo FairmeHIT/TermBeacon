@@ -45,14 +45,23 @@ function orderWorkspaces(workspaces, { now = Date.now(), activeId } = {}) {
   return { visible, hidden };
 }
 
-// Selecting or creating a workspace is what "using" it means. An explicit hide
-// is cleared because the user just asked to work in it again.
+// Opening a workspace, creating one, or working through one of its terminals is
+// what "using" it means. An explicit hide is cleared because the user just
+// asked to work in it again.
 function recordWorkspaceUse(workspaces, id, at) {
   return (Array.isArray(workspaces) ? workspaces : []).map((workspace) => {
     if (workspace.id !== id) return workspace;
     const { hidden, ...rest } = workspace;
     return { ...rest, lastUsedAt: at };
   });
+}
+
+// The workspace a terminal belongs to, if any. Working inside a workspace
+// through its terminals counts as using it, so the caller can feed this back
+// into recordWorkspaceUse without duplicating the lookup.
+function workspaceForTerminal(workspaces, terminalId) {
+  return (Array.isArray(workspaces) ? workspaces : [])
+    .find((workspace) => Array.isArray(workspace?.terminalIds) && workspace.terminalIds.includes(terminalId))?.id;
 }
 
 function hideWorkspace(workspaces, id) {
@@ -70,4 +79,4 @@ function showWorkspace(workspaces, id) {
     : workspace);
 }
 
-module.exports = { AUTO_HIDE_IDLE_MS, VISIBLE_LIMIT, orderWorkspaces, recordWorkspaceUse, hideWorkspace, showWorkspace };
+module.exports = { AUTO_HIDE_IDLE_MS, VISIBLE_LIMIT, orderWorkspaces, recordWorkspaceUse, workspaceForTerminal, hideWorkspace, showWorkspace };

@@ -5,6 +5,7 @@ const {
   VISIBLE_LIMIT,
   orderWorkspaces,
   recordWorkspaceUse,
+  workspaceForTerminal,
   hideWorkspace,
   showWorkspace,
 } = require("../src/main/workspace-visibility.cjs");
@@ -126,4 +127,12 @@ test("workspaces saved before usage tracking existed are not all collapsed", () 
   // rule itself must still be idempotent for a single unknown workspace.
   const legacy = [{ id: "old", name: "old", terminalIds: [] }];
   assert.deepEqual(ids(orderWorkspaces(legacy, { now: NOW }).visible), ["old"]);
+});
+
+test("a terminal maps back to the workspace that owns it", () => {
+  const list = [workspace("a", 30), { ...workspace("b", 1), terminalIds: ["t1", "t2"] }];
+  assert.equal(workspaceForTerminal(list, "t2"), "b");
+  assert.equal(workspaceForTerminal(list, "missing"), undefined);
+  assert.equal(workspaceForTerminal(undefined, "t1"), undefined);
+  assert.equal(workspaceForTerminal([{ id: "broken", name: "broken" }], "t1"), undefined);
 });

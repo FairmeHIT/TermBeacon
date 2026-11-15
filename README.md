@@ -32,6 +32,7 @@ The image above is an illustrative UI preview. The application is an Electron de
 ## Features
 
 - **Multiple terminals and workspaces** - create, rename, switch, stop, restart, and remove sessions without losing background output.
+- **Workspace recency** - frequently used workspaces rise to the top; ones left idle for a week and outside your recent five sink into a collapsible **Hidden workspaces** group at the bottom of the sidebar. Opening a workspace, creating a terminal, or picking one of its terminals all count as use, and the collapsed group still shows its most urgent status lamp and count.
 - **Task status reminders** - see `Working`, `Completed`, `Ready`, `Waiting for input`, `Error`, and `Stopped` at a glance.
 - **Completed-unseen state** - a finished task stays highlighted until you open that terminal, so background work does not disappear silently.
 - **Agent CLI management** - detect, install, update, reinstall, switch sources, and roll back Codex, OpenCode, Claude Code, and Pi from a dedicated settings page. Managed installs are isolated under your user directory.

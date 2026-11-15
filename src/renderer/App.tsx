@@ -29,9 +29,10 @@ const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
 };
 // The sidebar derives both the ordering and the visible/hidden split from one
 // recency rule, so "frequently used floats up" and "idle sinks" cannot drift.
-const { orderWorkspaces, recordWorkspaceUse, hideWorkspace, showWorkspace } = workspaceUtils as {
+const { orderWorkspaces, recordWorkspaceUse, workspaceForTerminal, hideWorkspace, showWorkspace } = workspaceUtils as {
   orderWorkspaces: (items: Workspace[], options: { now?: number; activeId?: string }) => { visible: Workspace[]; hidden: Workspace[] };
   recordWorkspaceUse: (items: Workspace[], id: string, at: number) => Workspace[];
+  workspaceForTerminal: (items: Workspace[], terminalId: string) => string | undefined;
   hideWorkspace: (items: Workspace[], id: string) => Workspace[];
   showWorkspace: (items: Workspace[], id: string) => Workspace[];
 };
@@ -1301,9 +1302,19 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
   }
 
+  // Choosing one of a workspace's terminals is activity on that workspace too:
+  // someone who works in one workspace all day should not see it sink just
+  // because they never re-clicked its header. Falls through when the id does
+  // not belong to any workspace (e.g. a terminal mid-restore).
+  function touchWorkspaceOfTerminal(id: string) {
+    const workspaceId = workspaceForTerminal(workspaces, id);
+    if (workspaceId) setWorkspaces((items) => recordWorkspaceUse(items, workspaceId, Date.now()));
+  }
+
   function selectTerminal(id: string) {
     setSettingsOpen(false);
     setActiveId(id);
+    touchWorkspaceOfTerminal(id);
     markTerminalViewed(id);
     focusTerminalView(id);
   }
@@ -1315,7 +1326,8 @@ function App() {
     terminal.title = agentLabel[id];
     pendingCliLaunch.current.set(terminal.id, spec.command);
     setTerminals((items) => [...items, terminal]);
-    setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
+    // Launching an agent is activity in the workspace that hosts it.
+    setWorkspaces((items) => recordWorkspaceUse(items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace), activeWorkspaceId, Date.now()));
     setActiveId(terminal.id);
     setSettingsOpen(false);
   }
@@ -1338,7 +1350,8 @@ function App() {
     const workspaceCwd = activeWorkspace?.cwd;
     const terminal = newTerminal(terminals.length + 1, defaultShell, workspaceCwd && isValidCwd(workspaceCwd) ? workspaceCwd : DEFAULT_CWD);
     setTerminals((items) => [...items, terminal]);
-    setWorkspaces((items) => items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace));
+    // Creating a terminal also refreshes the workspace's place in the sidebar.
+    setWorkspaces((items) => recordWorkspaceUse(items.map((workspace) => workspace.id === activeWorkspaceId ? { ...workspace, terminalIds: [...workspace.terminalIds, terminal.id] } : workspace), activeWorkspaceId, Date.now()));
     setActiveId(terminal.id);
   }
 
