@@ -814,7 +814,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   box-shadow: none;
 }
 .xterm { height: 100%; background: var(--terminal-bg); }
-.xterm .xterm-viewport { background: var(--terminal-bg) !important; }
+/* xterm pins a native scrollbar to its viewport and styles it as
+   `overflow-y: scroll`, so a full-height OS scrollbar shows even when the
+   buffer has nothing to scroll (a fresh shell, or a TUI on the alternate
+   screen) and dragging it does nothing. Let it appear only when scrollback
+   exists, and tint it with the panel palette so it reads as part of the frame. */
+.xterm .xterm-viewport {
+  background: var(--terminal-bg) !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
 .xterm .xterm-screen { background: var(--terminal-bg); }
 .terminal-host:focus-within { box-shadow: inset 0 0 0 1px var(--border-strong); }
 
