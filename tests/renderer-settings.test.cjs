@@ -157,6 +157,101 @@ test("native title bar colors follow every app theme", () => {
   assert.match(main, /process\.platform !== "win32"/);
 });
 
+test("light terminal palettes keep PowerShell's ANSI colors readable", () => {
+  // PSReadLine paints the command being typed with bright yellow (ESC[93m) and
+  // turns arguments white (ESC[37m). xterm's built-in ANSI ramp targets dark
+  // canvases, so those defaults fall to roughly 1.1:1 on the warm-paper and
+  // light backgrounds and the typed command nearly disappears. Light themes
+  // therefore define every slot explicitly.
+  const block = app.match(/const terminalThemes: Record<Theme, TerminalTheme> = \{([\s\S]*?)\n\};/)?.[1];
+  assert.ok(block, "terminalThemes palette must exist");
+  const slots = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"];
+  const luminance = (hex) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    const [r, g, b] = [value >> 16 & 255, value >> 8 & 255, value & 255].map((channel) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [lighter, darker] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+  for (const theme of ["light", "sepia"]) {
+    const body = block.match(new RegExp(`\\n  ${theme}: \\{([\\s\\S]*?)\\n  \\},`))?.[1];
+    assert.ok(body, `${theme} palette must exist`);
+    const values = Object.fromEntries([...body.matchAll(/(\w+): "(#[0-9a-f]{6})"/g)].map((match) => [match[1], match[2]]));
+    for (const slot of slots) {
+      assert.match(values[slot] || "", /^#[0-9a-f]{6}$/, `${theme}.${slot} must be defined`);
+      assert.ok(contrast(values[slot], values.background) >= 4.5, `${theme}.${slot} must reach 4.5:1 against its background`);
+    }
+    // The default cursor accent is black and the default selection is white at
+    // 30% opacity; both are unusable on a light canvas.
+    assert.match(body, /cursorAccent: "#[0-9a-f]{6}"/);
+    assert.match(body, /selectionBackground: "rgba\(/);
+  }
+  // Dark palettes keep xterm's ramp, which already suits them.
+  for (const theme of ["dark", "midnight", "forest"]) {
+    const line = block.match(new RegExp(`\\n  ${theme}: \\{[^\\n]*\\},`))?.[0];
+    assert.ok(line, `${theme} palette must stay compact`);
+    assert.doesNotMatch(line, /brightYellow/);
+  }
+});
+
+test("workspaces surface the most urgent terminal state as a lamp", () => {
+  // A task that finished (green) or stalled (amber) in a background workspace
+  // must be visible from the workspace list, not only from its terminal row.
+  assert.match(app, /const WORKSPACE_LAMP_PRIORITY: AgentState\[\] = \["error", "awaiting-input", "completed-unseen", "working"\]/);
+  const memo = app.match(/const workspaceLampStates = useMemo\(\(\) => \{([\s\S]*?)\n  \}, \[workspaces, terminals\]\);/)?.[1];
+  assert.ok(memo, "workspace lamp memo must exist");
+  assert.match(memo, /WORKSPACE_LAMP_PRIORITY\.find/);
+  // The lamp reuses the terminal palette and sits on the folder glyph, so the
+  // row keeps its three-column grid and the close button never shifts.
+  assert.match(app, /\{lamp && <span className=\{`workspace-lamp status-dot \$\{stateClass\[lamp\]\}`\} role="img" aria-label=\{t\(stateLabel\[lamp\]\)\} \/>\}/);
+  const glyph = styles.match(/\.workspace-glyph \{([\s\S]*?)\}/)?.[1];
+  assert.ok(glyph, "workspace glyph styles must exist");
+  assert.match(glyph, /position: relative/);
+  const lamp = styles.match(/\.workspace-lamp \{([\s\S]*?)\}/)?.[1];
+  assert.ok(lamp, "workspace lamp styles must exist");
+  assert.match(lamp, /position: absolute/);
+  assert.match(lamp, /margin: 0/);
+  // Opening a workspace shows its terminal, so its "finished" lamp clears too.
+  const selectWorkspace = app.match(/function selectWorkspace\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(selectWorkspace, "selectWorkspace must exist");
+  assert.match(selectWorkspace, /markTerminalViewed\(nextTerminalId\)/);
+  const selectTerminal = app.match(/function selectTerminal\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.match(selectTerminal, /markTerminalViewed\(id\)/);
+});
+
+test("workspaces open their folder in the system file manager", () => {
+  // The row action hands the workspace folder to Explorer through the main
+  // process; it must not switch workspaces or paste the path into a terminal.
+  assert.match(app, /\{isValidCwd\(workspace\.cwd\) && <span className="workspace-open"/);
+  assert.match(app, /void openWorkspaceFolder\(workspace\)/);
+  const open = app.match(/async function openWorkspaceFolder\(workspace: Workspace\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(open, "openWorkspaceFolder must exist");
+  assert.match(open, /window\.termbeacon\.openFolder\(workspace\.cwd\)/);
+  assert.match(open, /window\.termbeacon\.showMessage\(\{\s*\n\s*type: "error"/);
+  const preload = fs.readFileSync(path.join(__dirname, "../src/main/preload.cjs"), "utf8");
+  assert.match(preload, /openFolder: \(target\) => ipcRenderer\.invoke\("folder:open", target\)/);
+
+  const main = fs.readFileSync(path.join(__dirname, "../src/main/main.ts"), "utf8");
+  const handler = main.match(/ipcMain\.handle\("folder:open", async \(_event, target: unknown\) => \{([\s\S]*?)\n\}\);/)?.[1];
+  assert.ok(handler, "folder:open handler must exist");
+  // Only existing directories may reach shell.openPath, which would otherwise
+  // launch documents and executables too.
+  assert.match(handler, /path\.isAbsolute\(target\)/);
+  assert.match(handler, /\(await stat\(target\)\)\.isDirectory\(\)/);
+  assert.match(handler, /await shell\.openPath\(target\)/);
+  assert.match(handler, /failure \? \{ ok: false, message: failure \} : \{ ok: true \}/);
+
+  const button = styles.match(/\.workspace-open \{([\s\S]*?)\}/)?.[1];
+  assert.ok(button, "workspace open styles must exist");
+  assert.match(button, /opacity: \.55/);
+  assert.match(styles, /\.workspace-open:hover \{ color: var\(--accent\); \}/);
+});
+
 test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
   assert.match(app, /readClipboardText\(\): Promise<string>/);
   assert.match(app, /term\.attachCustomKeyEventHandler\(\(event\) =>/);

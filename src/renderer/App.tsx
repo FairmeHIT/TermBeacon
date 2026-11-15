@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Terminal } from "@xterm/xterm";
+import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
@@ -45,6 +46,8 @@ declare global {
       readClipboardText(): Promise<string>;
       confirm(request: { message: string; detail?: string; okLabel?: string; cancelLabel?: string }): Promise<boolean>;
       pickCwd(): Promise<string | null>;
+      openFolder(target: string): Promise<{ ok: boolean; message?: string }>;
+      showMessage(request: { message: string; type?: "info" | "error"; okLabel?: string }): Promise<boolean>;
       loadHistory(terminalId: string): Promise<string>;
       appendHistory(terminalId: string, data: string): Promise<boolean>;
       removeHistory(terminalId: string): Promise<boolean>;
@@ -96,6 +99,12 @@ const stateClass: Record<AgentState, string> = {
   stopped: "stopped",
 };
 
+// A workspace lamp mirrors the most urgent state among the terminals it owns,
+// so a task that finished (green) or stalled (amber) in a background workspace
+// still surfaces while another workspace is in front. Ready and stopped
+// terminals stay quiet: their own rows already say so.
+const WORKSPACE_LAMP_PRIORITY: AgentState[] = ["error", "awaiting-input", "completed-unseen", "working"];
+
 const agentLabel: Record<AgentType, string> = {
   generic: "",
   opencode: "opencode",
@@ -144,12 +153,66 @@ function isThemeSetting(value: unknown): value is ThemeSetting {
   return typeof value === "string" && THEME_SETTINGS.includes(value as ThemeSetting);
 }
 
-const terminalThemes: Record<Theme, { background: string; foreground: string; cursor: string }> = {
+type TerminalTheme = ITheme & { background: string; foreground: string; cursor: string };
+
+// Dark themes keep xterm's built-in ANSI ramp, which is tuned for a dark
+// canvas. The light palettes spell out all 16 slots: PowerShell (PSReadLine)
+// paints the command being typed with "bright yellow" (#fce94f by default) and
+// parameters with "white", and once those defaults land on a cream or white
+// background they sit at roughly 1.1:1 contrast, so the line the user is typing
+// all but disappears. Every light slot below stays at or above 4.5:1 against
+// its own background, which means ANSI background blocks render darker than
+// they do on the dark themes.
+const terminalThemes: Record<Theme, TerminalTheme> = {
   dark: { background: "#101215", foreground: "#d7dce3", cursor: "#8ab8ed" },
-  light: { background: "#ffffff", foreground: "#29313b", cursor: "#2563a8" },
+  light: {
+    background: "#ffffff",
+    foreground: "#29313b",
+    cursor: "#2563a8",
+    cursorAccent: "#ffffff",
+    selectionBackground: "rgba(37, 99, 168, .22)",
+    black: "#24292f",
+    red: "#b31d28",
+    green: "#1a7f37",
+    yellow: "#7a5c00",
+    blue: "#0b5cad",
+    magenta: "#8250df",
+    cyan: "#0f6f77",
+    white: "#57606a",
+    brightBlack: "#6e7781",
+    brightRed: "#c0392b",
+    brightGreen: "#14682c",
+    brightYellow: "#8a5a00",
+    brightBlue: "#0a4e9c",
+    brightMagenta: "#7b3fbf",
+    brightCyan: "#0d666d",
+    brightWhite: "#3b434d",
+  },
   midnight: { background: "#0a1022", foreground: "#ccd6e8", cursor: "#8fb0f2" },
   forest: { background: "#0d1410", foreground: "#cfdad2", cursor: "#8cc7a5" },
-  sepia: { background: "#faf4e6", foreground: "#43392a", cursor: "#9a6b2f" },
+  sepia: {
+    background: "#faf4e6",
+    foreground: "#43392a",
+    cursor: "#9a6b2f",
+    cursorAccent: "#faf4e6",
+    selectionBackground: "rgba(154, 107, 47, .26)",
+    black: "#3a3226",
+    red: "#a3312a",
+    green: "#46651f",
+    yellow: "#7d5a0c",
+    blue: "#2c5a8a",
+    magenta: "#7a3d63",
+    cyan: "#1f6068",
+    white: "#5f5644",
+    brightBlack: "#6b6050",
+    brightRed: "#a8332a",
+    brightGreen: "#3d6b12",
+    brightYellow: "#8a5c05",
+    brightBlue: "#2a5480",
+    brightMagenta: "#6d3259",
+    brightCyan: "#1a575e",
+    brightWhite: "#4a4033",
+  },
 };
 
 // The Windows title bar can only choose light or dark through nativeTheme, so
@@ -258,6 +321,15 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
+}
+
+// "Open outside the app": an arrow leaving a window.
+function OpenInExplorerIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M13 4h7v7" />
+    <path d="M20 4l-9 9" />
+    <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+  </svg>;
 }
 
 function SidebarToggleIcon({ collapsed }: { collapsed: boolean }) {
@@ -381,6 +453,16 @@ function App() {
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
   const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
+  // One lamp per workspace, derived from the terminals it owns.
+  const workspaceLampStates = useMemo(() => {
+    const lamps = new Map<string, AgentState>();
+    workspaces.forEach((workspace) => {
+      const members = terminals.filter((terminal) => workspace.terminalIds.includes(terminal.id));
+      const lamp = WORKSPACE_LAMP_PRIORITY.find((state) => members.some((terminal) => terminal.state === state));
+      if (lamp) lamps.set(workspace.id, lamp);
+    });
+    return lamps;
+  }, [workspaces, terminals]);
 
   function displayTerminalTitle(terminal: TerminalInstance): string {
     if (terminal.titlePinned) return terminal.title;
@@ -1176,11 +1258,15 @@ function App() {
     });
   }
 
+  function markTerminalViewed(id: string) {
+    window.termbeacon.viewed(id);
+    setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
+  }
+
   function selectTerminal(id: string) {
     setSettingsOpen(false);
     setActiveId(id);
-    window.termbeacon.viewed(id);
-    setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
+    markTerminalViewed(id);
     focusTerminalView(id);
   }
 
@@ -1278,6 +1364,25 @@ function App() {
     if (nextActiveId) focusTerminalView(nextActiveId);
   }
 
+  // Reveal the workspace folder in Explorer without switching to the
+  // workspace: the row action must not steal the terminal the user is on.
+  async function openWorkspaceFolder(workspace: Workspace) {
+    if (!isValidCwd(workspace.cwd)) return;
+    try {
+      const result = await window.termbeacon.openFolder(workspace.cwd);
+      if (result?.ok) return;
+      await window.termbeacon.showMessage({
+        type: "error",
+        message: t("无法打开文件夹：{message}", { message: result?.message ? t(result.message) : t("未知错误") }),
+      });
+    } catch (error) {
+      await window.termbeacon.showMessage({
+        type: "error",
+        message: t("无法打开文件夹：{message}", { message: error instanceof Error ? error.message : String(error) }),
+      });
+    }
+  }
+
   function selectWorkspace(id: string) {
     setSettingsOpen(false);
     setActiveWorkspaceId(id);
@@ -1291,6 +1396,9 @@ function App() {
       ?? terminals.find((terminal) => members.has(terminal.id))?.id;
     if (nextTerminalId) {
       setActiveId(nextTerminalId);
+      // The workspace switch also brings that terminal on screen, so its
+      // "finished" lamp must clear exactly like clicking the row does.
+      markTerminalViewed(nextTerminalId);
       focusTerminalView(nextTerminalId);
     }
   }
@@ -1405,16 +1513,25 @@ function App() {
           <button className="workspace-add" onClick={addWorkspace} title={t("添加工作区（选择本地文件夹）")} aria-label={t("添加工作区（选择本地文件夹）")}><PlusIcon /></button>
         </div>
         <div className="workspace-list" ref={workspaceStrip}>
-          {workspaces.map((workspace) => <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={workspace.cwd ? `${displayWorkspaceName(workspace)} (${workspace.cwd})` : displayWorkspaceName(workspace)}>
-            <span className="workspace-glyph" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+          {workspaces.map((workspace) => {
+            const lamp = workspaceLampStates.get(workspace.id);
+            const name = displayWorkspaceName(workspace);
+            const title = workspace.cwd ? `${name} (${workspace.cwd})` : name;
+            return <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={lamp ? `${title} · ${t(stateLabel[lamp])}` : title}>
+            <span className="workspace-glyph">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+              {lamp && <span className={`workspace-lamp status-dot ${stateClass[lamp]}`} role="img" aria-label={t(stateLabel[lamp])} />}
             </span>
             <span className="workspace-copy">
-              <EditableTitle title={displayWorkspaceName(workspace)} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
+              <EditableTitle title={name} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
               <small>{workspace.cwd || t("未设置目录")}</small>
             </span>
-            {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })} role="button" aria-label={t("删除工作区「{name}」", { name: displayWorkspaceName(workspace) })}>×</span>}
-          </button>)}
+            <span className="workspace-actions">
+              {isValidCwd(workspace.cwd) && <span className="workspace-open" role="button" onClick={(event) => { event.stopPropagation(); void openWorkspaceFolder(workspace); }} title={t("在文件资源管理器中打开")} aria-label={t("在文件资源管理器中打开「{name}」", { name })}><OpenInExplorerIcon /></span>}
+              {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name })} role="button" aria-label={t("删除工作区「{name}」", { name })}>×</span>}
+            </span>
+          </button>;
+          })}
         </div>
       </section>
       <section className="sidebar-section terminals-section">

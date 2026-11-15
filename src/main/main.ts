@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFile, readFile, unlink, writeFile, rename } from "node:fs/promises";
+import { copyFile, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 import type { AgentCliId, CliProgress, CliScan, CliPlan } from "../shared/types";
@@ -736,6 +736,37 @@ ipcMain.handle("cwd:pick", async () => {
   const result = await dialog.showOpenDialog(mainWindow!, { properties: ["openDirectory"] });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+// Reveal a workspace folder in the OS file manager. Only existing directories
+// are accepted: shell.openPath would also launch documents and executables, and
+// the renderer only ever needs the project folder.
+ipcMain.handle("folder:open", async (_event, target: unknown) => {
+  if (typeof target !== "string" || !path.isAbsolute(target) || target.length > 4096) {
+    return { ok: false, message: "目录无效" };
+  }
+  try {
+    if (!(await stat(target)).isDirectory()) return { ok: false, message: "目录不存在" };
+  } catch {
+    return { ok: false, message: "目录不存在" };
+  }
+  const failure = await shell.openPath(target);
+  return failure ? { ok: false, message: failure } : { ok: true };
+});
+// Single-button native message box. Errors must never be silent, and a question
+// dialog with a cancel button would misrepresent them.
+ipcMain.handle("dialog:message", async (event, request) => {
+  const message = typeof request?.message === "string" ? request.message : "";
+  if (!message) return false;
+  const owner = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+  const options: MessageBoxOptions = {
+    type: request?.type === "error" ? "error" : "info",
+    buttons: [typeof request?.okLabel === "string" && request.okLabel ? request.okLabel : "确定"],
+    noLink: true,
+    message,
+  };
+  if (owner) await dialog.showMessageBox(owner, options);
+  else await dialog.showMessageBox(options);
+  return true;
 });
 // window.confirm/alert in Electron never report the window as focused again on
 // Windows, so after a confirmation every keystroke is dropped until the user

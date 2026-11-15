@@ -51,6 +51,9 @@ test("terminal workspace labels use the selected language", () => {
   assert.equal(text("en", "就绪"), "Ready");
   assert.equal(text("en", "终端 {index}", { index: 1 }), "Terminal 1");
   assert.equal(text("zh-CN", "终端 {index}", { index: 1 }), "终端 1");
+  assert.equal(text("en", "在文件资源管理器中打开"), "Open in File Explorer");
+  assert.equal(text("en", "在文件资源管理器中打开「{name}」", { name: "infra" }), "Open \"infra\" in File Explorer");
+  assert.equal(text("en", "无法打开文件夹：{message}", { message: text("en", "目录不存在") }), "Could not open folder: Folder no longer exists");
 });
 
 test("settings update messages include localized retries, downloads, and nested errors", () => {

@@ -178,6 +178,8 @@ contextBridge.exposeInMainWorld("termbeacon", {
   readClipboardText: () => ipcRenderer.invoke("clipboard:read-text"),
   confirm: (request) => ipcRenderer.invoke("dialog:confirm", request),
   pickCwd: () => ipcRenderer.invoke("cwd:pick"),
+  openFolder: (target) => ipcRenderer.invoke("folder:open", target),
+  showMessage: (request) => ipcRenderer.invoke("dialog:message", request),
   loadHistory: (terminalId) => ipcRenderer.invoke("history:load", terminalId),
   appendHistory: (terminalId, data) => ipcRenderer.invoke("history:append", terminalId, data),
   removeHistory: (terminalId) => ipcRenderer.invoke("history:remove", terminalId),

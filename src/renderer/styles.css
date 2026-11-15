@@ -322,6 +322,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--accent);
 }
 .workspace-glyph {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -362,6 +363,42 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   white-space: nowrap;
 }
 .workspace-item:not(.active) .workspace-copy strong { color: var(--text-soft); }
+.workspace-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* Always offered, just quiet until the row is hovered, so the folder action is
+   discoverable without a context menu. */
+.workspace-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  color: var(--muted);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: .55;
+  transition: opacity .12s ease, color .12s ease;
+}
+.workspace-open svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+.workspace-item:hover .workspace-open,
+.workspace-item:focus-visible .workspace-open {
+  color: var(--text-soft);
+  opacity: 1;
+}
+.workspace-open:hover { color: var(--accent); }
 .workspace-remove {
   display: inline-flex;
   align-items: center;
@@ -507,6 +544,19 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 :root[data-theme="light"] .status-dot.ready, :root[data-theme="sepia"] .status-dot.ready { background: #668377; }
 :root[data-theme="light"] .status-dot.awaiting, :root[data-theme="sepia"] .status-dot.awaiting { background: #a66b13; }
 :root[data-theme="light"] .status-dot.stopped, :root[data-theme="sepia"] .status-dot.stopped { background: #a0a8b1; }
+/* Workspace lamp: the same palette as the terminal rows, pinned to the corner of
+   the folder glyph so the row keeps its three-column layout. */
+.workspace-lamp {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  margin: 0;
+  border: 1px solid var(--panel-bg);
+}
+.workspace-item:hover .workspace-lamp { border-color: var(--panel-soft); }
+.workspace-item.active .workspace-lamp { border-color: var(--panel-active); }
 .terminal-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .terminal-copy strong {
   overflow: hidden;
