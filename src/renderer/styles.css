@@ -19,6 +19,11 @@
   --danger-soft: rgba(240, 128, 128, .09);
   --overlay-shadow: 0 12px 32px rgba(0, 0, 0, .32);
   --sidebar-width: 300px;
+  /* Terminal frame: gutter outside the card, inset between card edge and text,
+     and the card's corner radius. */
+  --terminal-frame-gutter: 10px;
+  --terminal-frame-inset: 10px;
+  --terminal-frame-radius: 10px;
 }
 
 :root[data-theme="light"] {
@@ -640,25 +645,27 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .sidebar-toggle-collapsed {
   position: absolute;
   top: auto;
-  bottom: 14px;
-  left: 14px;
+  bottom: 20px;
+  left: 20px;
   z-index: 5;
 }
 
 /* Workspace */
+/* The gutter uses the sidebar's tone so the framed terminal reads as a sibling
+   surface rather than a second window. */
 .workspace {
   position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  background: var(--terminal-bg);
+  background: var(--panel-bg);
 }
 /* Shown only when the active terminal has stopped; floats over the stage. */
 .terminal-restart {
   position: absolute;
-  top: 10px;
-  right: 12px;
+  top: 20px;
+  right: 22px;
   z-index: 4;
   min-height: 28px;
   padding: 5px 10px;
@@ -699,24 +706,32 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .update-banner button:hover { background: var(--accent-soft); }
 
-/* The terminal is the workspace, not a card inside it. */
+/* The terminal is a framed canvas rather than a bare edge: agents that draw no
+   chrome of their own (Claude Code, Pi, plain shells) then sit inside the same
+   inset as the sidebar's panels. Agents that do draw a box, such as opencode,
+   keep their own frame inside this one. */
 .terminal-stage {
   position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
+  margin: var(--terminal-frame-gutter);
   padding: 0;
   overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--terminal-frame-radius);
   background: var(--terminal-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .16), 0 14px 30px -26px rgba(0, 0, 0, .5);
 }
+/* xterm measures its host, so the inner inset also shrinks the reported grid. */
 .terminal-host {
   position: absolute;
-  inset: 0;
+  inset: var(--terminal-frame-inset);
   z-index: 1;
   padding: 0;
   overflow: hidden;
   border: 0;
-  border-radius: 0;
+  border-radius: 6px;
   background: var(--terminal-bg);
   box-shadow: none;
 }

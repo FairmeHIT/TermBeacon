@@ -39,8 +39,10 @@ test("sidebar controls expose collapse and a visible new-terminal action", () =>
   assert.match(toggle, /background:\s*transparent/);
   assert.match(toggle, /width:\s*28px/);
   const collapsed = styles.match(/\.sidebar-toggle-collapsed\s*\{([\s\S]*?)\}/)?.[1];
-  assert.match(collapsed, /bottom:\s*14px/);
-  assert.doesNotMatch(collapsed, /top:\s*14px/);
+  // Bottom-left inside the terminal frame: the 10px gutter plus the frame's
+  // 10px inset keeps the button on the card's edge instead of over its text.
+  assert.match(collapsed, /bottom:\s*20px/);
+  assert.doesNotMatch(collapsed, /top:\s*20px/);
 });
 
 test("workspaces and terminals render as distinct labeled sections", () => {
@@ -250,6 +252,36 @@ test("workspaces open their folder in the system file manager", () => {
   assert.ok(button, "workspace open styles must exist");
   assert.match(button, /opacity: \.55/);
   assert.match(styles, /\.workspace-open:hover \{ color: var\(--accent\); \}/);
+});
+
+test("the terminal stage is framed like the sidebar's panels", () => {
+  // Claude Code, Pi and plain shells draw no chrome of their own, so the stage
+  // supplies both the frame and the inner inset; without it their output ran
+  // straight into the window edge and read as a different surface from the
+  // sidebar. opencode keeps its own box inside this one.
+  const root = styles.match(/:root \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(root, "root theme variables must exist");
+  assert.match(root, /--terminal-frame-gutter: 10px/);
+  assert.match(root, /--terminal-frame-inset: 10px/);
+  assert.match(root, /--terminal-frame-radius: 10px/);
+
+  const stage = styles.match(/\.terminal-stage \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(stage, "terminal stage styles must exist");
+  assert.match(stage, /margin: var\(--terminal-frame-gutter\)/);
+  assert.match(stage, /border: 1px solid var\(--border\)/);
+  assert.match(stage, /border-radius: var\(--terminal-frame-radius\)/);
+
+  // xterm measures its host, so the inset must live on the host: padding on the
+  // stage would be ignored by the absolutely positioned host and would not
+  // shrink the reported grid either.
+  const host = styles.match(/\.terminal-host \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(host, "terminal host styles must exist");
+  assert.match(host, /inset: var\(--terminal-frame-inset\)/);
+
+  // The gutter takes the sidebar's surface so the two panels read as siblings.
+  const workspace = styles.match(/\n\.workspace \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(workspace, "workspace styles must exist");
+  assert.match(workspace, /background: var\(--panel-bg\)/);
 });
 
 test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
