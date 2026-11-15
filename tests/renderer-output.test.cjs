@@ -85,6 +85,16 @@ test("Pi restores the normal-screen cursor after leaving the alternate screen", 
   assert.equal(context.alternateScreenByTerminal.current.get("t1"), false);
 });
 
+test("plain chunks keep their data and screen mode without scanning", () => {
+  const { splitScreenOutput, normalizePiCursorOutput } = screenModule.exports;
+  const split = splitScreenOutput("plain output", true);
+  assert.equal(split.normalData, "plain output");
+  assert.equal(split.alternate, true);
+  const normalized = normalizePiCursorOutput("plain output", true);
+  assert.equal(normalized.normalData, "plain output");
+  assert.equal(normalized.alternate, true);
+});
+
 test("pending history stays bounded when flush timers are throttled", () => {
   const { context, emit } = harness();
   for (let i = 1; i < 400; i += 1) emit(i, "中🙂".repeat(1000));

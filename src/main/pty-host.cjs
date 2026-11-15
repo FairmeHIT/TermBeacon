@@ -99,7 +99,7 @@ const hookReady = hookServer.start().catch((error) => {
 const OUTPUT_BUFFER_LIMIT_BYTES = 2 * 1024 * 1024;
 const EXITED_BUFFER_LIMIT_BYTES = 16 * 1024 * 1024;
 const EXITED_BUFFER_TTL_MS = 5 * 60 * 1000;
-const OUTPUT_CHUNK_CHARS = 16 * 1024;
+const OUTPUT_CHUNK_CHARS = 32 * 1024;
 const MAX_SOCKET_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 // Detection is time-driven: quiet windows only advance when tick() is called.
@@ -112,8 +112,16 @@ function startTickLoop() {
   tickTimer = setInterval(() => {
     const now = Date.now();
     pruneExitedBuffers(now);
+    if (detectors.size === 0 && buffers.size === 0) {
+      stopTickLoop();
+      return;
+    }
     for (const [terminalId, detector] of detectors) {
       if (pausedSessions.has(terminalId)) continue;
+      // An idle detector cannot transition until new input/output arms it.
+      // Skipping those calls keeps the timer cheap with many live terminals.
+      const runtime = detector.runtime;
+      if (runtime && !runtime.armed && !runtime.pending) continue;
       try {
         detector.tick(now);
       } catch {
@@ -124,13 +132,24 @@ function startTickLoop() {
   if (typeof tickTimer.unref === "function") tickTimer.unref();
 }
 
-function bufferAppend(terminalId, message) {
+function stopTickLoop() {
+  if (!tickTimer) return;
+  clearInterval(tickTimer);
+  tickTimer = null;
+}
+
+// Timers only wake the host while there is detector state that can expire or
+// exited buffers still waiting to be pruned.
+function stopTickLoopWhenIdle() {
+  if (detectors.size === 0 && buffers.size === 0) stopTickLoop();
+}
+
+function bufferAppend(terminalId, message, bytes = Buffer.byteLength(message.data)) {
   let entry = buffers.get(terminalId);
   if (!entry) {
     entry = { parts: [], start: 0, bytes: 0 };
     buffers.set(terminalId, entry);
   }
-  const bytes = Buffer.byteLength(message.data);
   entry.parts.push({ ...message, bytes });
   entry.bytes += bytes;
   while (entry.bytes > OUTPUT_BUFFER_LIMIT_BYTES && entry.parts.length - entry.start > 1) {
@@ -349,6 +368,7 @@ function createSession(message, hookWaited = false) {
 
   creating.delete(request.terminalId);
   sessions.set(request.terminalId, session);
+  startTickLoop();
   if (outputFlow.paused) {
     pausedSessions.set(request.terminalId, Date.now());
     try { session.pause?.(); } catch { /* the process may already be exiting */ }
@@ -372,9 +392,13 @@ function createSession(message, hookWaited = false) {
       if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end -= 1;
       const next = (sequence.get(request.terminalId) || 0) + 1;
       sequence.set(request.terminalId, next);
-      const message = { type: "pty:output", terminalId: request.terminalId, data: data.slice(start, end), sequence: next, streamId, replay: false, at };
-      bufferAppend(request.terminalId, message);
-      outputFlow.output(message);
+      const text = data.slice(start, end);
+      // The replay buffer and the flow controller both account by UTF-8 bytes.
+      // Measure once instead of scanning the same chunk twice.
+      const bytes = Buffer.byteLength(text);
+      const message = { type: "pty:output", terminalId: request.terminalId, data: text, sequence: next, streamId, replay: false, at };
+      bufferAppend(request.terminalId, message, bytes);
+      outputFlow.output(message, bytes);
       start = end;
     }
     try { oscParser.feed(data); } catch { /* title parsing must never break output delivery */ }
@@ -405,6 +429,7 @@ function createSession(message, hookWaited = false) {
     const entry = buffers.get(request.terminalId);
     if (entry) entry.exitedAt = Date.now();
     pruneExitedBuffers();
+    stopTickLoopWhenIdle();
   });
 }
 
@@ -440,6 +465,7 @@ function handleMessage(message) {
       pausedSessions.delete(terminalId);
       bufferRelease(terminalId);
       outputFlow.forget(terminalId);
+      stopTickLoopWhenIdle();
       session?.kill();
     } catch (error) { sendError("pty:forget", error, message.requestId, message?.terminalId); }
     return;
@@ -455,10 +481,7 @@ function handleMessage(message) {
     return;
   }
   if (message.type === "shutdown") {
-    if (tickTimer) {
-      clearInterval(tickTimer);
-      tickTimer = null;
-    }
+    stopTickLoop();
     void hookServer.close();
     try { standaloneServer?.close(); } catch { /* already closed */ }
     if (!isWindows && standaloneSocketPath) {
@@ -693,6 +716,5 @@ if (parentPort) {
   throw new Error("PTY host requires an Electron parent port or --server socket path");
 }
 
-// Start the detector clock as soon as the host module loads. It is independent
-// of the data port so detection keeps advancing across renderer reconnects.
-startTickLoop();
+// The detector clock starts with the first PTY and stops once nothing is left
+// to advance, so an idle app does not wake the host four times per second.

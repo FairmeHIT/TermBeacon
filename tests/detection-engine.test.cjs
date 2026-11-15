@@ -145,6 +145,15 @@ test("OSC completion accelerates a text-evidenced candidate", () => {
   assert.equal(updates.at(-1).confidence, 0.88);
 });
 
+test("a large output burst is judged by its newest tail", () => {
+  const { detector, updates } = make();
+  detector.input("build project\r");
+  // 100k+ characters of noise before the prompt must not hide the evidence.
+  detector.output(`${"progress line ".repeat(8000)}\r\nDone\r\n$ `, 1000);
+  detector.tick(3600);
+  assert.equal(updates.at(-1).current, "completed-unseen");
+});
+
 test("unarmed OSC progress without user activity never settles", () => {
   const { detector, updates } = make();
   detector.output("\u001b]9;4;1;100\u0007", 1000);

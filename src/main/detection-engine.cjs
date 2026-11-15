@@ -2,6 +2,10 @@ const registry = require("./agent-registry.cjs");
 const { createOscParser } = require("./osc-parser.cjs");
 
 function stripAnsi(value) {
+  // Most shell/build output carries no escape sequences at all. Skipping the
+  // regex keeps the common case allocation-free instead of scanning every
+  // chunk with the full ANSI grammar.
+  if (!value.includes("\u001b") && !value.includes("\u009b")) return value;
   return value.replace(/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, "");
 }
 
@@ -36,14 +40,34 @@ function parseOscTitle(value) {
 const EVIDENCE_TAIL = 1024;
 const SIGNAL_TAIL = 512;
 const COMPLETION_LINES = 2;
+// Detection only needs the newest lines. Capping the scan window keeps a large
+// PTY burst (a build log or `cat` of a big file) from re-running every pattern
+// over megabytes of text while preserving the state the sidebar shows.
+const MAX_DETECTION_CHARS = 8192;
+
+// Collect the last `count` non-empty lines without splitting the whole input.
+// tailLines used to allocate one array per requested line count; the output
+// path asks for four different counts per PTY chunk.
+function lastLines(text, count) {
+  const lines = [];
+  let end = text.length;
+  while (end > 0 && lines.length < count) {
+    let start = end - 1;
+    while (start >= 0) {
+      const code = text.charCodeAt(start);
+      if (code === 10 || code === 13) break;
+      start -= 1;
+    }
+    const line = text.slice(start + 1, end).replace(/[ \t]+$/, "");
+    if (line.length > 0) lines.push(line);
+    end = start;
+  }
+  lines.reverse();
+  return lines;
+}
 
 function tailLines(text, count) {
-  const lines = text
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/[ \t]+$/, ""))
-    .filter((line) => line.length > 0);
-  return lines.slice(-count).join("\n");
+  return lastLines(text, count).join("\n");
 }
 
 function createDetector(agentType = "generic", emit = () => {}) {
@@ -152,16 +176,19 @@ function createDetector(agentType = "generic", emit = () => {}) {
 
   function output(data, now = Date.now()) {
     outputAt = now;
-    const clean = stripAnsi(oscParser.feed(data));
+    const visible = oscParser.feed(data);
+    // The parser must see every chunk to catch split OSC sequences, but the
+    // heuristics only inspect the newest lines. Bounding the haystack keeps a
+    // 64 KB PTY burst from doing full-text regex work.
+    const clean = stripAnsi(visible.length > MAX_DETECTION_CHARS ? visible.slice(-MAX_DETECTION_CHARS) : visible);
     runtime.lastOutputAt = now;
-    const errorOutput = tailLines(clean, 4);
     // A native lifecycle event owns this turn until input, launch or another
     // native event. A permission/confirmation dialog is the one exception:
     // some TUI versions render it without emitting a native waiting event.
     if (runtime.hookStatus) {
       if (runtime.hookStatus !== "waiting"
         && config.id !== "opencode"
-        && config.patterns.error.some((pattern) => pattern.test(errorOutput))) {
+        && config.patterns.error.some((pattern) => pattern.test(tailLines(clean, 4)))) {
         runtime.hookStatus = "failed";
         runtime.pending = null;
         transition("error", 0.92, "output", clean.trim().slice(-160));
@@ -177,10 +204,12 @@ function createDetector(agentType = "generic", emit = () => {}) {
     }
     const recent = (runtime.signalTail + clean).slice(-EVIDENCE_TAIL);
     runtime.signalTail = recent.slice(-SIGNAL_TAIL);
-    const evidence = tailLines(recent, COMPLETION_LINES);
-    const dialog = tailLines(recent, 8);
-    const errorLines = tailLines(recent, 4);
-    const lastLine = tailLines(recent, 1);
+    // One backward scan supplies every line window the heuristics need.
+    const lines = lastLines(recent, 8);
+    const evidence = lines.slice(-COMPLETION_LINES).join("\n");
+    const dialog = lines.join("\n");
+    const errorLines = lines.slice(-4).join("\n");
+    const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
     const hasWorkingSignal = config.patterns.working.some((pattern) => pattern.test(clean));
 
     if (config.patterns.waitingInput.some((pattern) => pattern.test(dialog))) {

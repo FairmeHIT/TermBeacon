@@ -225,6 +225,35 @@ test("PTY host advances detectors on a timer without new output", () => {
   assert.equal(ticks, 2);
 });
 
+test("PTY host skips detectors that cannot transition on a timer", () => {
+  let ticks = 0;
+  const runtime = { armed: false, pending: null };
+  const { dataPort, tick } = createHarness({
+    detection: {
+      createDetector: () => ({ runtime, output() {}, tick() { ticks += 1; }, input() {}, exit() {}, viewed() {}, hook() {} }),
+    },
+  });
+  dataPort.emit("message", { data: createMessage("t1") });
+  tick();
+  tick();
+  assert.equal(ticks, 0);
+  runtime.armed = true;
+  tick();
+  assert.equal(ticks, 1);
+});
+
+test("PTY host stops the detector clock when the last terminal is forgotten", () => {
+  const { dataPort, context } = createHarness({
+    detection: {
+      createDetector: () => ({ runtime: { armed: true, pending: null }, output() {}, tick() {}, input() {}, exit() {}, viewed() {}, hook() {} }),
+    },
+  });
+  dataPort.emit("message", { data: createMessage("t1") });
+  assert.notEqual(vm.runInContext("tickTimer", context), null);
+  dataPort.emit("message", { data: { type: "pty:forget", terminalId: "t1" } });
+  assert.equal(vm.runInContext("tickTimer", context), null);
+});
+
 test("PTY host treats agent launch writes as launch, not task input", () => {
   let launches = 0;
   let inputs = 0;
@@ -424,7 +453,8 @@ test("PTY backpressure waits for parsing ACKs and detach resumes background work
   const initial = messages.filter((m) => m.type === "pty:output");
   assert.equal(initial.reduce((sum, m) => sum + m.data.length, 0), 512 * 1024);
   for (const output of initial) dataPort.emit("message", { data: { type: "pty:output-ack", flowId: output.flowId, deliveryId: output.deliveryId } });
-  assert.equal(messages.filter((m) => m.type === "pty:output").length, 64);
+  const chunkChars = vm.runInContext("OUTPUT_CHUNK_CHARS", context);
+  assert.equal(messages.filter((m) => m.type === "pty:output").length, Math.ceil((1024 * 1024) / chunkChars));
   assert.equal(vm.runInContext("pausedSessions.size", context), 1);
   tick();
   dataPort.emit("message", { data: { type: "client:detach" } });
@@ -444,7 +474,8 @@ test("large Unicode output is bounded, preserves characters and no longer builds
   }
   const output = messages.filter((m) => m.type === "pty:output");
   assert.equal(output.map((m) => m.data).join(""), text);
-  assert.ok(output.every((m) => m.data.length <= 16384 && m.summary === undefined));
+  const chunkChars = vm.runInContext("OUTPUT_CHUNK_CHARS", context);
+  assert.ok(output.every((m) => m.data.length <= chunkChars && m.summary === undefined));
   assert.ok(output.every((m) => !/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(m.data)));
   assert.ok(vm.runInContext("buffers.get('t1').bytes <= OUTPUT_BUFFER_LIMIT_BYTES", context));
 });

@@ -383,7 +383,10 @@ function attachHostSocket(socket: Socket) {
   socket.on("data", (chunk) => {
     if (hostSocket !== socket) return;
     pending += chunk;
-    if (Buffer.byteLength(pending, "utf8") > MAX_HOST_MESSAGE_BYTES) {
+    // UTF-8 bytes are at most 3x the UTF-16 code-unit count, so a short buffer
+    // cannot be oversized. Skipping the byte scan keeps the framing hot path
+    // from measuring every socket chunk twice.
+    if (pending.length * 3 > MAX_HOST_MESSAGE_BYTES && Buffer.byteLength(pending, "utf8") > MAX_HOST_MESSAGE_BYTES) {
       console.error("[pty-host] oversized socket message");
       pending = "";
       socket.destroy();

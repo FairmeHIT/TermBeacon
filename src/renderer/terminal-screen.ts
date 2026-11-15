@@ -20,6 +20,9 @@ const PRIVATE_MODE = /\x1b\[\?([0-9;]+)([hl])/g;
  */
 export function normalizePiCursorOutput(data: string, initialAlternate = false): ScreenOutput {
   if (!data) return { normalData: "", alternate: initialAlternate };
+  // Without a private-mode sequence there is nothing to rewrite. This is the
+  // common case for plain shell output, so avoid matchAll and string copies.
+  if (!data.includes("\x1b[?")) return { normalData: data, alternate: initialAlternate };
 
   let alternate = initialAlternate;
   let cursor = 0;
@@ -51,6 +54,9 @@ export function normalizePiCursorOutput(data: string, initialAlternate = false):
 
 export function splitScreenOutput(data: string, initialAlternate = false): ScreenOutput {
   if (!data) return { normalData: "", alternate: initialAlternate };
+  // Without a private-mode sequence the whole chunk is normal-screen output.
+  // Most PTY chunks take this path, so skip the scanner and its allocations.
+  if (!data.includes("\x1b[?")) return { normalData: data, alternate: initialAlternate };
 
   let alternate = initialAlternate;
   let cursor = 0;
@@ -62,13 +68,14 @@ export function splitScreenOutput(data: string, initialAlternate = false): Scree
     if (!alternate) normalData += data.slice(cursor, index);
 
     const modes = match[1].split(";").map((value) => Number(value));
-    if (modes.some((mode) => ALTERNATE_MODES.has(mode))) {
+    const switchesScreen = modes.some((mode) => ALTERNATE_MODES.has(mode));
+    if (switchesScreen) {
       alternate = match[2] === "h";
     }
     // A private-mode sequence that does not switch screens is normal output
     // when it arrives on the normal screen. Repaint traffic is discarded only
     // while alternate is active.
-    if (!alternate && !modes.some((mode) => ALTERNATE_MODES.has(mode))) {
+    if (!alternate && !switchesScreen) {
       normalData += match[0];
     }
     cursor = index + match[0].length;

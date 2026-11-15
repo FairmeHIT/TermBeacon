@@ -69,9 +69,8 @@ function createOutputFlow({ send, onPause, high = OUTPUT_HIGH_WATERMARK, low = O
     return flowId;
   }
 
-  function output(message) {
+  function output(message, bytes = Buffer.byteLength(message.data, "utf8")) {
     if (!flowId) return;
-    const bytes = Buffer.byteLength(message.data, "utf8");
     queue.push({ message, bytes });
     queuedBytes += bytes;
     flush();

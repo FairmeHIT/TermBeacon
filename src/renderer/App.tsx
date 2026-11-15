@@ -635,33 +635,56 @@ function App() {
       // Keep the submitted task title in the sidebar instead of replacing it
       // with the static "Claude Code" label on every redraw.
       if (isClaudeStatusTitle(event.title)) return;
-      setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, title: event.title }
-        : item));
+      setTerminals((items) => {
+        const target = items.find((item) => item.id === event.terminalId);
+        // Shells re-emit the same title on every prompt; returning the current
+        // array skips a full App render for a no-op update.
+        if (!target || target.title === event.title) return items;
+        return items.map((item) => item.id === event.terminalId
+          ? { ...item, title: event.title }
+          : item);
+      });
     });
     const disposeCwd = window.termbeacon.onCwd((event) => {
-      setTerminals((items) => items.map((item) => item.id === event.terminalId && item.cwd !== event.cwd
-        ? { ...item, cwd: event.cwd }
-        : item));
+      setTerminals((items) => {
+        const target = items.find((item) => item.id === event.terminalId);
+        if (!target || target.cwd === event.cwd) return items;
+        return items.map((item) => item.id === event.terminalId ? { ...item, cwd: event.cwd } : item);
+      });
     });
     // Agent type is identified by the PTY host from the CLI's own banner; the
     // UI only stores it so the sidebar can show which agent is running.
     const disposeAgent = window.termbeacon.onAgent((event) => {
       agentTypeByTerminal.current.set(event.terminalId, event.agentType);
-      setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, agentType: event.agentType, resumeAvailable: event.agentType !== "generic", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState }
-        : item));
-      setTasks((items) => items.map((task) => task.terminalId === event.terminalId && task.recoveryState === "recovering"
-        ? { ...task, recoveryState: "recovered" }
-        : task));
+      const resumeAvailable = event.agentType !== "generic";
+      setTerminals((items) => {
+        const target = items.find((item) => item.id === event.terminalId);
+        const recoveryState = target?.recoveryState === "recovering" ? "recovered" : target?.recoveryState;
+        if (!target || (target.agentType === event.agentType && target.resumeAvailable === resumeAvailable && target.recoveryState === recoveryState)) return items;
+        return items.map((item) => item.id === event.terminalId
+          ? { ...item, agentType: event.agentType, resumeAvailable, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState }
+          : item);
+      });
+      setTasks((items) => items.some((task) => task.terminalId === event.terminalId && task.recoveryState === "recovering")
+        ? items.map((task) => task.terminalId === event.terminalId && task.recoveryState === "recovering"
+          ? { ...task, recoveryState: "recovered" }
+          : task)
+        : items);
     });
     const disposeSession = window.termbeacon.onSession((event) => {
-      setTerminals((items) => items.map((item) => item.id === event.terminalId
-        ? { ...item, lastSessionId: event.sessionId, resumeAvailable: true, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState, resumeError: undefined }
-        : item));
-      setTasks((items) => items.map((task) => task.terminalId === event.terminalId && (task.recoveryState === "resumable" || task.recoveryState === "recovering")
-        ? { ...task, recoveryState: "recovered" }
-        : task));
+      setTerminals((items) => {
+        const target = items.find((item) => item.id === event.terminalId);
+        if (!target || (target.lastSessionId === event.sessionId && target.resumeAvailable === true
+          && target.recoveryState !== "recovering" && target.resumeError === undefined)) return items;
+        return items.map((item) => item.id === event.terminalId
+          ? { ...item, lastSessionId: event.sessionId, resumeAvailable: true, recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState, resumeError: undefined }
+          : item);
+      });
+      setTasks((items) => items.some((task) => task.terminalId === event.terminalId && (task.recoveryState === "resumable" || task.recoveryState === "recovering"))
+        ? items.map((task) => task.terminalId === event.terminalId && (task.recoveryState === "resumable" || task.recoveryState === "recovering")
+          ? { ...task, recoveryState: "recovered" }
+          : task)
+        : items);
     });
     const disposeUpdate = window.termbeacon.onUpdate((event) => setUpdateState(event));
     // The automatic check runs before this renderer mounts, so read the last
