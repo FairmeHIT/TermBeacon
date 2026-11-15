@@ -52,30 +52,39 @@ test("preserves a valid default new terminal agent and drops invalid values", ()
   assert.equal(invalid.defaultNewTerminalAgent, undefined);
 });
 
-test("preserves a valid default Codex profile and drops blank or non-string values", () => {
+test("preserves default Codex launch arguments and migrates the legacy profile", () => {
   const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    defaultCodexArgs: " --yolo -m wb/cn:kimi-k3.1-pro ",
+  });
+  assert.equal(result.defaultCodexArgs, "--yolo -m wb/cn:kimi-k3.1-pro");
+
+  const legacy = sanitizeState({
     schemaVersion: 1,
     workspaces: [],
     terminals: [],
     defaultCodexProfile: " bifrost ",
   });
-  assert.equal(result.defaultCodexProfile, "bifrost");
+  assert.equal(legacy.defaultCodexArgs, "-p bifrost");
+  assert.equal(legacy.defaultCodexProfile, undefined);
 
   const invalid = sanitizeState({
     schemaVersion: 1,
     workspaces: [],
     terminals: [],
-    defaultCodexProfile: 42,
+    defaultCodexArgs: 42,
   });
-  assert.equal(invalid.defaultCodexProfile, undefined);
+  assert.equal(invalid.defaultCodexArgs, undefined);
 
   const blank = sanitizeState({
     schemaVersion: 1,
     workspaces: [],
     terminals: [],
-    defaultCodexProfile: "   ",
+    defaultCodexArgs: "   ",
   });
-  assert.equal(blank.defaultCodexProfile, undefined);
+  assert.equal(blank.defaultCodexArgs, undefined);
 });
 
 test("preserves workspace folder paths and manual name pins", () => {

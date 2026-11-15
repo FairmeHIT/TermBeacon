@@ -350,17 +350,17 @@ test("new terminals launch the configured default agent", () => {
   // Codex is the out-of-the-box default, and the choice is persisted with the
   // rest of the terminal preferences.
   assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
-  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexProfile,\s*\n\s*sidebarWidth,/);
-  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexProfile, sidebarWidth, hydrated\]\)/);
+  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexArgs,\s*\n\s*sidebarWidth,/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, sidebarWidth, hydrated\]\)/);
   const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
   assert.match(addTerminal, /await launchCli\(defaultNewTerminalAgent, cwd\)/);
   assert.match(addTerminal, /type: "error"/);
   assert.match(app, /newTerminalAgent=\{defaultNewTerminalAgent\}/);
-  assert.match(app, /codexProfile=\{defaultCodexProfile\} onCodexProfile=\{setDefaultCodexProfile\}/);
+  assert.match(app, /codexArgs=\{defaultCodexArgs\} onCodexArgs=\{setDefaultCodexArgs\}/);
   assert.match(settings, /htmlFor="settings-new-terminal"/);
-  assert.match(settings, /htmlFor="settings-codex-profile"/);
+  assert.match(settings, /htmlFor="settings-codex-args"/);
   assert.match(settings, /props\.onNewTerminalAgent\(event\.target\.value as AgentType\)/);
   assert.match(i18n, /"New terminal launches"/);
   assert.match(i18n, /"Plain shell"/);

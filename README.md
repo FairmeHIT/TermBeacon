@@ -37,7 +37,7 @@ The image above is an illustrative UI preview. The application is an Electron de
 - **Completed-unseen state** - a finished task stays highlighted until you open that terminal, so background work does not disappear silently.
 - **Agent CLI management** - detect, install, update, reinstall, switch sources, and roll back Codex, OpenCode, Claude Code, and Pi from a dedicated settings page. Managed installs are isolated under your user directory.
 - **CLI status integrations** - native bridges for OpenCode, Claude Code, and Pi; inferred title/output detection for Codex.
-- **Default new terminal** - launch Codex directly from the new terminal action, or choose a plain shell, OpenCode, Claude Code, or Pi in Settings. Set a Codex launch profile to append `-p` for new Codex terminals.
+- **Default new terminal** - launch Codex directly from the new terminal action, or choose a plain shell, OpenCode, Claude Code, or Pi in Settings. Set Codex launch arguments, such as `--yolo` and a model, for new Codex terminals.
 - **Bilingual settings** - switch Settings between Simplified Chinese and English, with an immediately applied, saved preference.
 - **Persistent sessions** - restore window layout, workspace selection, task history, and terminal scrollback after restarting the app. Saved CLI sessions carry their owner, so TermBeacon resumes them with the matching CLI instead of passing one CLI's session id to another.
 - **Native terminal behavior** - xterm.js in the renderer, `node-pty` and Windows ConPTY in the host process, with a MessagePort data path for high-frequency output.

@@ -25,7 +25,7 @@ const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") a
     scan(): Promise<CliScan>;
     plan(request: unknown): Promise<CliPlan>;
     execute(request: unknown): Promise<unknown>;
-    launch(request: { id: AgentCliId; shell?: string; codexProfile?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
+    launch(request: { id: AgentCliId; shell?: string; codexArgs?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
   };
 };
 const { createHistoryStore } = require("./terminal-history.cjs") as {
@@ -713,7 +713,7 @@ ipcMain.handle("cli:execute", (_event, request) => agentManager().execute(reques
 ipcMain.handle("cli:launch-spec", (_event, request) => agentManager().launch({
   id: request?.id,
   shell: request?.shell,
-  codexProfile: request?.codexProfile,
+  codexArgs: request?.codexArgs,
 }));
 ipcMain.handle("cli:docs", async (_event, id) => {
   if (typeof id !== "string" || !Object.hasOwn(cliCatalog, id)) throw new Error("不支持的 Agent CLI");

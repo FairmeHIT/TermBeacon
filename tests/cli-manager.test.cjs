@@ -147,14 +147,16 @@ test("managed environment has a single Windows PATH key and command quoting pres
   assert.throws(() => shellCommand("C:\\%TEMP%\\cli.exe", [], "cmd.exe"), /PowerShell/);
 });
 
-test("Codex launch can inject the configured profile", async (t) => {
+test("Codex launch can inject configured arguments", async (t) => {
   const { manager } = await fixture(t);
-  const launch = await manager.launch({ id: "codex", shell: "powershell.exe", codexProfile: " bifrost " });
-  assert.match(launch.command, /'-p' 'bifrost'$/);
+  const launch = await manager.launch({ id: "codex", shell: "powershell.exe", codexArgs: " --yolo -m 'wb/cn:kimi-k3.1-pro' " });
+  assert.match(launch.command, /'--yolo' '-m' 'wb\/cn:kimi-k3\.1-pro'$/);
   const plain = await manager.launch({ id: "codex", shell: "powershell.exe" });
-  assert.doesNotMatch(plain.command, /-p/);
+  assert.doesNotMatch(plain.command, /--yolo/);
   const explicit = await manager.launch({ id: "codex", shell: "powershell.exe", args: ["resume", "--last"] });
-  assert.doesNotMatch(explicit.command, /-p/);
+  assert.doesNotMatch(explicit.command, /--yolo/);
+  await assert.rejects(manager.launch({ id: "codex", shell: "powershell.exe", codexArgs: '"open' }), /引号未闭合/);
+  await assert.rejects(manager.launch({ id: "codex", shell: "powershell.exe", codexArgs: "--" + "x".repeat(399) }), /参数过长/);
 });
 
 test("npm shims resolve to a direct process invocation instead of evaluating batch code", async (t) => {

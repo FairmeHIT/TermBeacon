@@ -24,8 +24,8 @@ type Props = {
   newTerminalAgent: AgentType;
   newTerminalAgentOptions: { value: AgentType; label: string }[];
   onNewTerminalAgent: (agent: AgentType) => void;
-  codexProfile: string;
-  onCodexProfile: (profile: string) => void;
+  codexArgs: string;
+  onCodexArgs: (args: string) => void;
   version: string;
   updateHint: string;
   updateBusy: boolean;
@@ -171,7 +171,7 @@ export default function SettingsPage(props: Props) {
           <section className="preference-row"><div><h2><label htmlFor="settings-language">{props.locale === "zh-CN" ? "语言 / Language" : t("语言")}</label></h2><p>{t("选择设置页面的显示语言，即时生效并自动保存。")}</p></div><select id="settings-language" value={props.locale} onChange={(event) => props.onLocale(event.target.value as SettingsLocale)}><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></section>
           <section className="preference-row"><div><h2>{t("默认 Shell")}</h2><p>{t("用于之后新建的终端。")}</p></div><select value={props.shell} onChange={(event) => props.onShell(event.target.value as ShellType)} aria-label={t("默认 Shell")}>{props.shellOptions.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}</select></section>
           <section className="preference-row"><div><h2><label htmlFor="settings-new-terminal">{t("新建终端默认启动")}</label></h2><p>{t("点击“新建终端”时启动的程序。")}</p></div><select id="settings-new-terminal" value={props.newTerminalAgent} onChange={(event) => props.onNewTerminalAgent(event.target.value as AgentType)}>{props.newTerminalAgentOptions.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}</select></section>
-          <section className="preference-row"><div><h2><label htmlFor="settings-codex-profile">{t("Codex 启动 profile")}</label></h2><p>{t("由 TermBeacon 启动 Codex 时追加 -p。留空使用 Codex 默认配置。")}</p></div><input id="settings-codex-profile" className="settings-input" value={props.codexProfile} placeholder="bifrost" maxLength={100} spellCheck={false} autoComplete="off" onChange={(event) => props.onCodexProfile(event.target.value.trim())} /></section>
+          <section className="preference-row"><div><h2><label htmlFor="settings-codex-args">{t("Codex 启动参数")}</label></h2><p>{t("由 TermBeacon 启动 Codex 时追加。支持引号。留空使用 Codex 默认配置。")}</p></div><input id="settings-codex-args" className="settings-input" value={props.codexArgs} placeholder="--yolo -m wb/cn:kimi-k3.1-pro" maxLength={400} spellCheck={false} autoComplete="off" onChange={(event) => props.onCodexArgs(event.target.value.trim())} /></section>
           <section className="preference-row"><div><h2>{t("应用更新")} <span className="settings-version">{props.version || t("版本未知")}</span></h2><p role="status">{props.updateHint || t("检查并获取 TermBeacon 的新版本。")}</p></div><button className="settings-button" onClick={props.updateDownloaded ? props.onInstallUpdate : props.onCheckUpdate} disabled={props.updateBusy}>{t(props.updateDownloaded ? "重启并安装" : props.updateBusy ? "检查中…" : "检查更新")}</button></section>
           <section className="preference-row"><div><h2>{t("终端后台服务")}</h2><p>{t("升级状态检测组件后，可在任务结束时重启服务。此操作会关闭当前所有终端进程。")}</p></div><button className="settings-button" disabled={restarting} onClick={() => {
             setRestarting(true);

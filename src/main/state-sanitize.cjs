@@ -17,7 +17,7 @@ const MAX_CWD_LENGTH = 32760;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_RESUME_ERROR_LENGTH = 500;
 const MAX_TASK_BATCH_ID_LENGTH = 128;
-const MAX_PROFILE_LENGTH = 100;
+const MAX_CODEX_ARGS_LENGTH = 400;
 
 function validId(value) {
   return typeof value === "string"
@@ -133,8 +133,11 @@ function sanitizeState(parsed) {
   if (activeWorkspaceId !== undefined) result.activeWorkspaceId = activeWorkspaceId;
   if (SHELL_TYPES.has(parsed.defaultShell)) result.defaultShell = parsed.defaultShell;
   if (AGENT_TYPES.has(parsed.defaultNewTerminalAgent)) result.defaultNewTerminalAgent = parsed.defaultNewTerminalAgent;
-  const defaultCodexProfile = cleanText(parsed.defaultCodexProfile, MAX_PROFILE_LENGTH);
-  if (defaultCodexProfile) result.defaultCodexProfile = defaultCodexProfile;
+  const defaultCodexArgs = cleanText(
+    parsed.defaultCodexArgs ?? (typeof parsed.defaultCodexProfile === "string" && parsed.defaultCodexProfile.trim() ? `-p ${parsed.defaultCodexProfile.trim()}` : undefined),
+    MAX_CODEX_ARGS_LENGTH,
+  );
+  if (defaultCodexArgs) result.defaultCodexArgs = defaultCodexArgs;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
   if (parsed.windowBounds && typeof parsed.windowBounds === "object") {
     const width = Number.isFinite(parsed.windowBounds.width) ? Math.round(parsed.windowBounds.width) : 1280;

@@ -210,5 +210,5 @@ export interface PtyHostReadyEvent {
   at: number;
 }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; defaultCodexProfile?: string; sidebarWidth?: number; windowBounds?: WindowBounds; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; defaultCodexArgs?: string; sidebarWidth?: number; windowBounds?: WindowBounds; }
 
