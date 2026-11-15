@@ -457,6 +457,8 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   assert.match(section, /aria-controls="hidden-workspaces"/);
   assert.match(section, /visibleWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, false\)\)/);
   assert.match(section, /hiddenWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, true\)\)/);
+  // The sidebar renders creation order; nothing re-sorts it on each click.
+  assert.doesNotMatch(app, /workspaceOrder|orderWorkspaceIds/);
   // The toggle is icon-only: no visible label, just the centered chevron.
   assert.doesNotMatch(section, /workspace-hidden-label|workspace-hidden-count|workspace-toggle-lamp/);
   assert.match(section, /<ChevronIcon open \/>/);

@@ -475,9 +475,8 @@ function App() {
     return lamps;
   }, [workspaces, terminals]);
 
-  // The stored array keeps creation order; the sidebar order and the hidden
-  // group are derived from usage, so renaming or deleting never has to renumber
-  // anything and a workspace cannot drift between the two lists mid-session.
+  // The stored array is creation order and the sidebar renders it as-is, so
+  // usage can never reshuffle rows; it only decides which idle workspaces sink.
   const { visible: visibleWorkspaces, hidden: hiddenWorkspaces } = useMemo(
     () => orderWorkspaces(workspaces, { now: Date.now(), activeId: activeWorkspace?.id }),
     [workspaces, activeWorkspace],
@@ -1296,9 +1295,8 @@ function App() {
   }
 
   // Choosing one of a workspace's terminals is activity on that workspace too:
-  // someone who works in one workspace all day should not see it sink just
-  // because they never re-clicked its header. Falls through when the id does
-  // not belong to any workspace (e.g. a terminal mid-restore).
+  // it resets the idle clock so the workspace does not sink, without moving
+  // its row in the creation-ordered list.
   function touchWorkspaceOfTerminal(id: string) {
     const workspaceId = workspaceForTerminal(workspaces, id);
     if (workspaceId) setWorkspaces((items) => recordWorkspaceUse(items, workspaceId, Date.now()));
@@ -1430,8 +1428,8 @@ function App() {
   function selectWorkspace(id: string) {
     setSettingsOpen(false);
     setActiveWorkspaceId(id);
-    // Opening a workspace counts as using it: it rises to the front and leaves
-    // the hidden group even when the click came from the dropdown.
+    // Opening a workspace resets its idle clock and leaves the hidden group,
+    // but the list stays in creation order so the row never jumps.
     setWorkspaces((items) => recordWorkspaceUse(items, id, Date.now()));
     const target = workspaces.find((workspace) => workspace.id === id);
     const members = new Set(target?.terminalIds ?? []);

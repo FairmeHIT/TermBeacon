@@ -1,10 +1,8 @@
 // Sidebar ordering and auto-collapse for workspaces.
 //
-// The stored array stays in creation order: renaming, deleting and
-// lastActiveTerminalId never have to reason about a list that rearranges
-// itself. Ordering and the visible/hidden split are derived at render time
-// from each workspace's last usage, so one rule feeds both "frequently used
-// floats up" and "unused sinks into the hidden group".
+// The visible list always follows creation order. Usage never reorders rows, so
+// clicking a workspace can never make the sidebar jump; recency is only used to
+// decide whether an idle workspace has stopped being one of the recent five.
 
 // A workspace only leaves the sidebar when it is both old and no longer part of
 // the handful the user rotates through. Either condition alone is too eager:
@@ -17,17 +15,23 @@ function usedAt(workspace) {
   return Number.isSafeInteger(workspace?.lastUsedAt) && workspace.lastUsedAt >= 0 ? workspace.lastUsedAt : 0;
 }
 
+// Recency ranking used only by the idle rule: the newest VISIBLE_LIMIT
+// workspaces stay visible even after a quiet week.
+function rankByRecency(workspaces) {
+  return (Array.isArray(workspaces) ? workspaces : [])
+    .map((workspace, index) => ({ workspace, index }))
+    .sort((left, right) => usedAt(right.workspace) - usedAt(left.workspace) || left.index - right.index)
+    .map((entry) => entry.workspace.id);
+}
+
 function orderWorkspaces(workspaces, { now = Date.now(), activeId } = {}) {
   const list = Array.isArray(workspaces) ? workspaces : [];
-  // Rank once by recency, keeping creation order as the tie-break so equally
-  // old workspaces never trade places between renders.
-  const ranked = list
-    .map((workspace, index) => ({ workspace, index }))
-    .sort((left, right) => usedAt(right.workspace) - usedAt(left.workspace) || left.index - right.index);
-  const rank = new Map(ranked.map((entry, index) => [entry.workspace.id, index]));
+  const rank = new Map(rankByRecency(list).map((id, index) => [id, index]));
   const visible = [];
   const hidden = [];
-  for (const { workspace } of ranked) {
+  // Iterate the stored array as-is: the sidebar is creation-ordered and stays
+  // put while the user works.
+  for (const workspace of list) {
     const idle = now - usedAt(workspace) >= AUTO_HIDE_IDLE_MS;
     const recent = (rank.get(workspace.id) ?? 0) < VISIBLE_LIMIT;
     // The workspace in front must never disappear: hiding it would leave the
@@ -45,9 +49,9 @@ function orderWorkspaces(workspaces, { now = Date.now(), activeId } = {}) {
   return { visible, hidden };
 }
 
-// Opening a workspace, creating one, or working through one of its terminals is
-// what "using" it means. An explicit hide is cleared because the user just
-// asked to work in it again.
+// Opening a workspace, creating one, or working through one of its terminals
+// resets its idle clock. It never moves the row: the list is creation-ordered.
+// An explicit hide is cleared because the user just asked to work in it again.
 function recordWorkspaceUse(workspaces, id, at) {
   return (Array.isArray(workspaces) ? workspaces : []).map((workspace) => {
     if (workspace.id !== id) return workspace;

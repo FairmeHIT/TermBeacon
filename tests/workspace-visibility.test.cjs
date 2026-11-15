@@ -21,10 +21,10 @@ function ids(items) {
   return items.map((item) => item.id);
 }
 
-test("visible workspaces are ordered by recency, not by creation order", () => {
+test("workspaces stay in creation order even when usage differs", () => {
   const list = [workspace("a", 1), workspace("b", 0.25), workspace("c", 3)];
   const { visible, hidden } = orderWorkspaces(list, { now: NOW, activeId: "b" });
-  assert.deepEqual(ids(visible), ["b", "a", "c"]);
+  assert.deepEqual(ids(visible), ["a", "b", "c"]);
   assert.deepEqual(hidden, []);
 });
 
@@ -100,7 +100,7 @@ test("automatic hiding never empties the sidebar, but manual hiding may", () => 
   assert.deepEqual(orderWorkspaces(collapsed, { now: NOW }).visible, []);
 });
 
-test("using a workspace moves it to the front and clears a manual hide", () => {
+test("using a workspace clears a manual hide without moving the row", () => {
   const list = [workspace("a", 30, { hidden: true }), workspace("b", 1)];
   const next = recordWorkspaceUse(list, "a", NOW);
   assert.equal(next.find((item) => item.id === "a").hidden, undefined);
@@ -135,4 +135,18 @@ test("a terminal maps back to the workspace that owns it", () => {
   assert.equal(workspaceForTerminal(list, "missing"), undefined);
   assert.equal(workspaceForTerminal(undefined, "t1"), undefined);
   assert.equal(workspaceForTerminal([{ id: "broken", name: "broken" }], "t1"), undefined);
+});
+
+test("recent use never moves a workspace ahead of older creation rows", () => {
+  const list = [workspace("old", 30), workspace("new", 0.1), workspace("middle", 2)];
+  const { visible } = orderWorkspaces(list, { now: NOW, activeId: "new" });
+  assert.deepEqual(ids(visible), ["old", "new", "middle"]);
+});
+
+test("idle workspaces sink while the remaining rows keep creation order", () => {
+  const list = [workspace("fresh", 0), ...Array.from({ length: VISIBLE_LIMIT }, (_, index) => workspace(`old${index}`, 8 + index))];
+  // The live recent five are fresh + old0..old3; old4 is stale and sinks.
+  const { visible, hidden } = orderWorkspaces(list, { now: NOW });
+  assert.deepEqual(ids(hidden), ["old4"]);
+  assert.deepEqual(ids(visible), ["fresh", "old0", "old1", "old2", "old3"]);
 });
