@@ -11,6 +11,7 @@ import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, setting
 import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
+import workspaceUtils from "../main/workspace-visibility.cjs";
 import { normalizePiCursorOutput, splitScreenOutput } from "./terminal-screen";
 import "./styles.css";
 
@@ -25,6 +26,14 @@ const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInte
 const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
   isAgentLaunchInput: (value: string | undefined, agentType: AgentType) => boolean;
   withOpenCodeStandalone: (data: string, candidate: string | undefined, agentType: AgentType) => string;
+};
+// The sidebar derives both the ordering and the visible/hidden split from one
+// recency rule, so "frequently used floats up" and "idle sinks" cannot drift.
+const { orderWorkspaces, recordWorkspaceUse, hideWorkspace, showWorkspace } = workspaceUtils as {
+  orderWorkspaces: (items: Workspace[], options: { now?: number; activeId?: string }) => { visible: Workspace[]; hidden: Workspace[] };
+  recordWorkspaceUse: (items: Workspace[], id: string, at: number) => Workspace[];
+  hideWorkspace: (items: Workspace[], id: string) => Workspace[];
+  showWorkspace: (items: Workspace[], id: string) => Workspace[];
 };
 
 // Mirrors the payload the main process sends on update:event and returns from
@@ -54,7 +63,7 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
-      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string }>;
+      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
       restartHost(request?: { force: boolean }): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -365,8 +374,9 @@ function EditableTitle({ title, onCommit, renameHint = "双击重命名" }: { ti
 
 function App() {
   const [terminals, setTerminals] = useState<TerminalInstance[]>(() => [newTerminal(1)]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => [{ id: "default", name: "默认工作区", terminalIds: [] }]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(() => [{ id: "default", name: "默认工作区", terminalIds: [], lastUsedAt: Date.now() }]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default");
+  const [hiddenWorkspacesOpen, setHiddenWorkspacesOpen] = useState(false);
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -464,6 +474,21 @@ function App() {
     return lamps;
   }, [workspaces, terminals]);
 
+  // The stored array keeps creation order; the sidebar order and the hidden
+  // group are derived from usage, so renaming or deleting never has to renumber
+  // anything and a workspace cannot drift between the two lists mid-session.
+  const { visible: visibleWorkspaces, hidden: hiddenWorkspaces } = useMemo(
+    () => orderWorkspaces(workspaces, { now: Date.now(), activeId: activeWorkspace?.id }),
+    [workspaces, activeWorkspace],
+  );
+  // A collapsed group must still report activity: the lamp is the most urgent
+  // state among its members, so a finished task in a hidden workspace is never
+  // invisible.
+  const hiddenWorkspaceLamp = useMemo(
+    () => WORKSPACE_LAMP_PRIORITY.find((lamp) => hiddenWorkspaces.some((workspace) => workspaceLampStates.get(workspace.id) === lamp)),
+    [hiddenWorkspaces, workspaceLampStates],
+  );
+
   function displayTerminalTitle(terminal: TerminalInstance): string {
     if (terminal.titlePinned) return terminal.title;
     const match = /^(?:终端|Terminal)\s+(\d+)$/i.exec(terminal.title.trim());
@@ -555,13 +580,18 @@ function App() {
         setTerminals(freshTerminal ? [freshTerminal] : []);
       }
       // A workspace title mirrors its folder name until the user renames it.
-      const restored = state.workspaces.length > 0
+      const restoredTitles = state.workspaces.length > 0
         ? state.workspaces.map((workspace) => {
           if (workspace.namePinned || !workspace.cwd) return workspace;
           const folderName = folderNameFromPath(workspace.cwd);
           return folderName ? { ...workspace, name: folderName } : workspace;
         })
         : [{ id: "default", name: "默认工作区", terminalIds: state.terminals.map((terminal) => terminal.id) }];
+      // State written before the sidebar tracked usage has no clock. Seed it at
+      // load so the idle rule cannot collapse every workspace at once; ties keep
+      // creation order until the user opens one.
+      const workspaceUsageAt = Date.now();
+      const restored = restoredTitles.map((workspace) => workspace.lastUsedAt === undefined ? { ...workspace, lastUsedAt: workspaceUsageAt } : workspace);
       const restoredActiveWorkspaceId = state.activeWorkspaceId && restored.some((workspace) => workspace.id === state.activeWorkspaceId)
         ? state.activeWorkspaceId
         : restored[0].id;
@@ -593,7 +623,7 @@ function App() {
       setDefaultShell(DEFAULT_SHELL);
       setTasks([]);
       setTerminals([fallback]);
-      setWorkspaces([{ id: "default", name: "默认工作区", terminalIds: [fallback.id] }]);
+      setWorkspaces([{ id: "default", name: "默认工作区", terminalIds: [fallback.id], lastUsedAt: Date.now() }]);
       setActiveWorkspaceId("default");
       setActiveId(fallback.id);
       setHydrated(true);
@@ -948,6 +978,7 @@ function App() {
             cols,
             rows,
             agentType: terminal.agentType,
+            appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
           });
           const pendingCommand = pendingCliLaunch.current.get(terminal.id);
           if (pendingCommand) {
@@ -998,7 +1029,7 @@ function App() {
         }
       })();
     });
-  }, [terminals, hydrated, platformInfo.shell, activeId, settingsOpen]);
+  }, [terminals, hydrated, platformInfo.shell, activeId, settingsOpen, theme]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -1202,6 +1233,7 @@ function App() {
       cols,
       rows,
       agentType: terminal.agentType,
+      appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
     }).then(() => {
       setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready", resumeError: undefined } : item));
       requestAnimationFrame(() => fitTerminal(id));
@@ -1215,7 +1247,7 @@ function App() {
   async function resumeTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
     if (!terminal || !terminal.alive || terminal.recoveryState === "recovering") return;
-    let spec: { supported: boolean; command?: string; reason?: string };
+    let spec: { supported: boolean; command?: string; reason?: string; mode?: string };
     try {
       spec = await window.termbeacon.getResumeSpec({
         agentType: terminal.agentType,
@@ -1243,6 +1275,12 @@ function App() {
       ? { ...task, recoveryState: "recovering" }
       : task));
     window.termbeacon.launch({ terminalId: id, data: `${spec.command}\r` });
+    // The stored id belonged to a different CLI, so the resume silently opened
+    // the latest conversation instead. Say so: otherwise the user believes the
+    // window contains the session it was showing when the app closed.
+    if (spec.mode === "latest" && terminal.lastSessionId) {
+      void window.termbeacon.showMessage({ message: t("保存的会话不属于当前 CLI，已改为恢复最近会话。") });
+    }
   }
 
   // The rename inputs are rendered inside the chip/terminal <button>, so the
@@ -1386,6 +1424,9 @@ function App() {
   function selectWorkspace(id: string) {
     setSettingsOpen(false);
     setActiveWorkspaceId(id);
+    // Opening a workspace counts as using it: it rises to the front and leaves
+    // the hidden group even when the click came from the dropdown.
+    setWorkspaces((items) => recordWorkspaceUse(items, id, Date.now()));
     const target = workspaces.find((workspace) => workspace.id === id);
     const members = new Set(target?.terminalIds ?? []);
     // Prefer the terminal this workspace had active last time; fall back to
@@ -1420,6 +1461,7 @@ function App() {
       name: folderName || `工作区 ${workspaces.length + 1}`,
       cwd: picked,
       terminalIds: [terminal.id],
+      lastUsedAt: Date.now(),
     };
     setTerminals((items) => [...items, terminal]);
     setWorkspaces((items) => [...items, workspace]);
@@ -1429,6 +1471,20 @@ function App() {
 
   function renameWorkspace(id: string, name: string) {
     setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, name, namePinned: true } : workspace));
+  }
+
+  // Manual collapse is the only way a workspace leaves the visible list at
+  // once. The active one stays put: hiding it would leave the terminal panel
+  // showing a workspace the sidebar cannot point at.
+  function collapseWorkspace(id: string) {
+    if (id === activeWorkspaceId) return;
+    setWorkspaces((items) => hideWorkspace(items, id));
+  }
+
+  // Expanding by hand also pins the workspace, so the idle rule cannot collapse
+  // it again on the next render.
+  function restoreWorkspace(id: string) {
+    setWorkspaces((items) => showWorkspace(items, id));
   }
 
   async function removeWorkspace(id: string) {
@@ -1503,6 +1559,33 @@ function App() {
       : item));
   }
 
+  // One card for both lists: a hidden workspace keeps the same shape and lamp,
+  // only its trailing action changes, so moving between the groups does not
+  // reshuffle the row visually.
+  function workspaceRow(workspace: Workspace, hidden: boolean) {
+    const lamp = workspaceLampStates.get(workspace.id);
+    const name = displayWorkspaceName(workspace);
+    const title = workspace.cwd ? `${name} (${workspace.cwd})` : name;
+    const isActive = workspace.id === activeWorkspaceId;
+    return <button key={workspace.id} className={`workspace-item ${isActive ? "active" : ""} ${hidden ? "workspace-item-hidden" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={lamp ? `${title} · ${t(stateLabel[lamp])}` : title}>
+      <span className="workspace-glyph">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+        {lamp && <span className={`workspace-lamp status-dot ${stateClass[lamp]}`} role="img" aria-label={t(stateLabel[lamp])} />}
+      </span>
+      <span className="workspace-copy">
+        <EditableTitle title={name} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
+        <small>{workspace.cwd || t("未设置目录")}</small>
+      </span>
+      <span className="workspace-actions">
+        {isValidCwd(workspace.cwd) && <span className="workspace-open" role="button" onClick={(event) => { event.stopPropagation(); void openWorkspaceFolder(workspace); }} title={t("在文件资源管理器中打开")} aria-label={t("在文件资源管理器中打开「{name}」", { name })}><OpenInExplorerIcon /></span>}
+        {hidden
+          ? <span className="workspace-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreWorkspace(workspace.id); }} title={t("取消隐藏「{name}」", { name })} aria-label={t("取消隐藏「{name}」", { name })}><ChevronIcon open /></span>
+          : !isActive && <span className="workspace-hide" role="button" onClick={(event) => { event.stopPropagation(); collapseWorkspace(workspace.id); }} title={t("收起工作区「{name}」", { name })} aria-label={t("收起工作区「{name}」", { name })}><ChevronIcon open /></span>}
+        {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name })} role="button" aria-label={t("删除工作区「{name}」", { name })}>×</span>}
+      </span>
+    </button>;
+  }
+
   return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${settingsOpen ? "settings-mode" : ""}`}>
     <aside className="sidebar">
       {!sidebarCollapsed && <>
@@ -1513,26 +1596,20 @@ function App() {
           <button className="workspace-add" onClick={addWorkspace} title={t("添加工作区（选择本地文件夹）")} aria-label={t("添加工作区（选择本地文件夹）")}><PlusIcon /></button>
         </div>
         <div className="workspace-list" ref={workspaceStrip}>
-          {workspaces.map((workspace) => {
-            const lamp = workspaceLampStates.get(workspace.id);
-            const name = displayWorkspaceName(workspace);
-            const title = workspace.cwd ? `${name} (${workspace.cwd})` : name;
-            return <button key={workspace.id} className={`workspace-item ${workspace.id === activeWorkspaceId ? "active" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={lamp ? `${title} · ${t(stateLabel[lamp])}` : title}>
-            <span className="workspace-glyph">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
-              {lamp && <span className={`workspace-lamp status-dot ${stateClass[lamp]}`} role="img" aria-label={t(stateLabel[lamp])} />}
-            </span>
-            <span className="workspace-copy">
-              <EditableTitle title={name} renameHint={t("双击重命名")} onCommit={(next) => renameWorkspace(workspace.id, next)} />
-              <small>{workspace.cwd || t("未设置目录")}</small>
-            </span>
-            <span className="workspace-actions">
-              {isValidCwd(workspace.cwd) && <span className="workspace-open" role="button" onClick={(event) => { event.stopPropagation(); void openWorkspaceFolder(workspace); }} title={t("在文件资源管理器中打开")} aria-label={t("在文件资源管理器中打开「{name}」", { name })}><OpenInExplorerIcon /></span>}
-              {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name })} role="button" aria-label={t("删除工作区「{name}」", { name })}>×</span>}
-            </span>
-          </button>;
-          })}
+          {visibleWorkspaces.map((workspace) => workspaceRow(workspace, false))}
         </div>
+        {/* The hidden group sits at the bottom of the workspace block: the list
+            above stays the place you work from, and collapsed workspaces remain
+            one click away instead of disappearing. */}
+        <button className={`workspace-hidden-toggle ${hiddenWorkspacesOpen ? "expanded" : ""}`} onClick={() => setHiddenWorkspacesOpen((open) => !open)} aria-expanded={hiddenWorkspacesOpen} aria-controls="hidden-workspaces" title={hiddenWorkspacesOpen ? t("收起隐藏的工作区") : t("展开隐藏的工作区")}>
+          {hiddenWorkspaceLamp && <span className={`workspace-toggle-lamp status-dot ${stateClass[hiddenWorkspaceLamp]}`} role="img" aria-label={t(stateLabel[hiddenWorkspaceLamp])} />}
+          <span className="workspace-hidden-label">{t("隐藏的工作区")}</span>
+          {hiddenWorkspaces.length > 0 && <span className="workspace-hidden-count">{hiddenWorkspaces.length}</span>}
+          <ChevronIcon open={hiddenWorkspacesOpen} />
+        </button>
+        {hiddenWorkspacesOpen && (hiddenWorkspaces.length > 0
+          ? <div className="workspace-list workspace-hidden-list" id="hidden-workspaces">{hiddenWorkspaces.map((workspace) => workspaceRow(workspace, true))}</div>
+          : <p className="workspace-hidden-empty" id="hidden-workspaces">{t("暂无隐藏的工作区")}</p>)}
       </section>
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">

@@ -58,6 +58,10 @@ function normalizeCreateRequest(message) {
   }
   const agentType = message.agentType || "generic";
   if (!AGENT_TYPES.has(agentType)) throw protocolError("INVALID_AGENT", `unsupported agent type: ${agentType}`, { field: "agentType" });
+  const appearance = message.appearance;
+  if (appearance !== undefined && appearance !== "light" && appearance !== "dark") {
+    throw protocolError("INVALID_APPEARANCE", `unsupported appearance: ${appearance}`, { field: "appearance" });
+  }
   return {
     terminalId,
     title,
@@ -68,6 +72,7 @@ function normalizeCreateRequest(message) {
     cols: normalizeDimension(message.cols, "cols", 120),
     rows: normalizeDimension(message.rows, "rows", 32),
     agentType,
+    ...(appearance ? { appearance } : {}),
   };
 }
 

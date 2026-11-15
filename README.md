@@ -39,7 +39,7 @@ The image above is an illustrative UI preview. The application is an Electron de
 - **Bilingual settings** - switch Settings between Simplified Chinese and English, with an immediately applied, saved preference.
 - **Persistent sessions** - restore window layout, workspace selection, task history, and terminal scrollback after restarting the app.
 - **Native terminal behavior** - xterm.js in the renderer, `node-pty` and Windows ConPTY in the host process, with a MessagePort data path for high-frequency output.
-- **Light and dark themes** - switch the interface without changing terminal workflows.
+- **Light and dark themes** - switch the interface without changing terminal workflows. Full-screen agents keep their own palette, so terminals started afterwards tell OpenCode the app's light/dark mode; an explicit `theme.mode` in `cli.json` still wins.
 - **Automatic updates** - packaged builds can check GitHub Releases and install a downloaded update after restart.
 
 ## Status model

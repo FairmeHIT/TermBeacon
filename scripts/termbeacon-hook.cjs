@@ -18,6 +18,10 @@ const { setTimeout: delay } = require("node:timers/promises");
 const fs = require("node:fs");
 
 const STATUSES = new Set(["started", "running", "waiting", "completed", "failed"]);
+// Which CLI this hook belongs to. Optional, but a declared agent lets the PTY
+// host reject a session id that another CLI nested inside the same terminal
+// tried to store.
+const HOOK_AGENTS = new Set(["opencode", "codex", "claude", "pi"]);
 const MAX_STDIN_BYTES = 128 * 1024;
 
 const EVENT_STATUS = {
@@ -143,7 +147,15 @@ async function runHook(argv = process.argv.slice(2)) {
     return;
   }
   const sessionId = args.session_id || args.sessionId || sessionIdFromInput(input);
-  const ok = await post({ event, status, occurredAt, ...(sessionId ? { sessionId: String(sessionId).slice(0, 256) } : {}) });
+  const declared = String(args.agent || process.env.TERMBEACON_HOOK_AGENT || "").trim().toLowerCase();
+  const agent = HOOK_AGENTS.has(declared) ? declared : undefined;
+  const ok = await post({
+    event,
+    status,
+    occurredAt,
+    ...(agent ? { agent } : {}),
+    ...(sessionId ? { sessionId: String(sessionId).slice(0, 256) } : {}),
+  });
   if (!ok && process.env.TERMBEACON_HOOK_PORT) {
     console.error("[termbeacon-hook] could not reach the TermBeacon hook bridge");
   }

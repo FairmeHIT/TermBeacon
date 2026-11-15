@@ -34,6 +34,13 @@ test("rejects relative cwd and invalid dimensions", () => {
   assert.throws(() => normalizeResizeRequest({ terminalId: "t1", cols: 501, rows: 20 }), { code: "INVALID_DIMENSION" });
 });
 
+test("carries the app appearance so full-screen CLIs can pick their palette", () => {
+  assert.equal(normalizeCreateRequest({ terminalId: "t1", cwd, appearance: "light" }).appearance, "light");
+  assert.equal(normalizeCreateRequest({ terminalId: "t1", cwd, appearance: "dark" }).appearance, "dark");
+  assert.equal(normalizeCreateRequest({ terminalId: "t1", cwd }).appearance, undefined);
+  assert.throws(() => normalizeCreateRequest({ terminalId: "t1", cwd, appearance: "sepia" }), { code: "INVALID_APPEARANCE" });
+});
+
 test("validates write and terminal control payloads", () => {
   assert.deepEqual(normalizeWriteRequest({ terminalId: "t1", data: "echo ok\r" }), { terminalId: "t1", data: "echo ok\r" });
   assert.deepEqual(normalizeTerminalRequest({ terminalId: "t1" }, "pty:kill"), { terminalId: "t1" });

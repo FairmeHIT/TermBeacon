@@ -25,6 +25,9 @@ const MAX_EVENT_LENGTH = 64;
 const MAX_SESSION_ID_LENGTH = 256;
 
 const STATUSES = new Set(["started", "running", "waiting", "completed", "failed"]);
+// Which CLI a hook belongs to. Optional, but it lets the PTY host reject a
+// session id reported by a CLI other than the one running in that terminal.
+const HOOK_AGENTS = new Set(["opencode", "codex", "claude", "pi"]);
 
 function safeEqual(left, right) {
   const a = Buffer.from(String(left));
@@ -45,6 +48,7 @@ function validPayload(payload) {
     && STATUSES.has(payload.status)
     && (payload.eventId === undefined || (typeof payload.eventId === "string" && payload.eventId.length > 0 && payload.eventId.length <= MAX_FIELD_LENGTH && !/[\u0000-\u001f\u007f]/.test(payload.eventId)))
     && (payload.occurredAt === undefined || (Number.isSafeInteger(payload.occurredAt) && payload.occurredAt >= 0))
+    && (payload.agent === undefined || HOOK_AGENTS.has(payload.agent))
     && (payload.sessionId === undefined || (typeof payload.sessionId === "string" && payload.sessionId.length > 0 && payload.sessionId.length <= MAX_SESSION_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(payload.sessionId)));
 }
 
@@ -99,7 +103,7 @@ function createHookServer({ onEvent } = {}) {
       try {
         const key = payload.eventId ? JSON.stringify([payload.terminalId, payload.eventId]) : null;
         if (!key || !delivered.has(key)) {
-          handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, sessionId: payload.sessionId, eventId: payload.eventId, occurredAt: payload.occurredAt, at: Date.now() });
+          handler?.({ terminalId: payload.terminalId, event: payload.event, status: payload.status, agent: payload.agent, sessionId: payload.sessionId, eventId: payload.eventId, occurredAt: payload.occurredAt, at: Date.now() });
           if (key) {
             delivered.set(key, true);
             if (delivered.size > 1024) delivered.delete(delivered.keys().next().value);
@@ -152,4 +156,4 @@ function createHookServer({ onEvent } = {}) {
   };
 }
 
-module.exports = { createHookServer, validPayload, STATUSES };
+module.exports = { createHookServer, validPayload, STATUSES, HOOK_AGENTS };

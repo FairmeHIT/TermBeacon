@@ -14,7 +14,11 @@ async function post(connection, payload, signal) {
         "content-type": "application/json",
         "x-termbeacon-token": connection.token,
       },
-      body: JSON.stringify({ terminalId: connection.terminalId, ...payload }),
+      body: JSON.stringify({
+        terminalId: connection.terminalId,
+        ...(connection.agent ? { agent: connection.agent } : {}),
+        ...payload,
+      }),
       signal: controller.signal,
     });
     return response.ok ? "ok" : response.status >= 500 || response.status === 408 || response.status === 429 ? "retry" : "reject";

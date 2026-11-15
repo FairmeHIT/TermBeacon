@@ -10,7 +10,7 @@ function resolveAssets({ packaged = false, resourcesPath = process.resourcesPath
     piExtension: path.join(root, "pi", "termbeacon.js"),
     statusReporter: path.join(root, "shared", "status-reporter.js"),
     hookScript: packaged ? path.join(root, "termbeacon-hook.cjs") : path.join(appPath, "scripts", "termbeacon-hook.cjs"),
-    hookCommand: packaged ? `"${executablePath.replace(/\\/g, "/")}" --hook` : null,
+    hookCommand: packaged ? `"${executablePath.replace(/\\/g, "/")}" --hook --agent claude` : null,
   };
 }
 
@@ -111,7 +111,9 @@ function isTermBeaconHook(value) {
 }
 
 function hookCommand(hookScript) {
-  return `node "${hookScript.replace(/\\/g, "/")}"`;
+  // Declaring the agent lets the PTY host tell this CLI's hook apart from one
+  // launched inside it, so a nested CLI cannot claim the terminal's session id.
+  return `node "${hookScript.replace(/\\/g, "/")}" --agent claude`;
 }
 
 function mergeClaudeSettings(existing, hookScript, configuredCommand) {

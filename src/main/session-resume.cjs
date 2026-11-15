@@ -1,17 +1,41 @@
 const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude", "pi"]);
 const MAX_SESSION_ID_LENGTH = 256;
 
+// opencode validates `--session` with a schema that requires the "ses" prefix
+// (its own ids look like `ses_0193a28f4ffeZQr`). Claude Code and Codex use
+// UUIDs. A persisted id can come from the wrong CLI — a terminal that ran
+// `claude` and was later labelled `opencode` keeps the UUID — and the CLI then
+// aborts before it can fall back to its own latest session:
+//   Error: Expected a string starting with "ses"  at ["sessionID"]
+const OPENCODE_SESSION_ID = /^ses[_-]/i;
+
 function normalizeSessionId(value) {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed && trimmed.length <= MAX_SESSION_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(trimmed) ? trimmed : undefined;
 }
 
+// Only an id the target CLI can actually open is worth passing. An opencode id
+// is never valid for Claude/Codex and a Claude/Codex id is never valid for
+// opencode, so a mismatched id is dropped instead of producing a CLI error.
+function sessionIdFitsAgent(agentType, value) {
+  const id = normalizeSessionId(value);
+  if (!id) return false;
+  if (agentType === "opencode") return OPENCODE_SESSION_ID.test(id);
+  if (agentType === "claude" || agentType === "codex") return !OPENCODE_SESSION_ID.test(id);
+  return true;
+}
+
 function getResumeSpec({ agentType, sessionId, cwd, shell = "cmd.exe" } = {}) {
   if (!AGENT_TYPES.has(agentType) || agentType === "generic") {
     return { supported: false, agentType: agentType || "generic", mode: "unsupported", reason: "该终端没有可用的 CLI 会话适配器" };
   }
-  const id = normalizeSessionId(sessionId);
+  const requested = normalizeSessionId(sessionId);
+  const id = requested && sessionIdFitsAgent(agentType, requested) ? requested : undefined;
+  // The stored id belongs to another CLI (or predates the current adapter).
+  // Resuming the latest session is always better than a command the CLI
+  // rejects outright, so downgrade and explain the substitution.
+  const note = requested && !id ? `会话 ID 与 ${agentType} 不匹配，已改为恢复最近会话` : undefined;
   let program;
   let args;
   let mode;
@@ -32,7 +56,16 @@ function getResumeSpec({ agentType, sessionId, cwd, shell = "cmd.exe" } = {}) {
     args = id ? ["resume", id] : ["resume", "--last"];
     mode = id ? "session-id" : "latest";
   }
-  return { supported: true, agentType, mode, sessionId: id, cwd: typeof cwd === "string" ? cwd : undefined, program, args };
+  return {
+    supported: true,
+    agentType,
+    mode,
+    sessionId: id,
+    cwd: typeof cwd === "string" ? cwd : undefined,
+    program,
+    args,
+    ...(note ? { note } : {}),
+  };
 }
 
-module.exports = { getResumeSpec, normalizeSessionId };
+module.exports = { getResumeSpec, normalizeSessionId, sessionIdFitsAgent };

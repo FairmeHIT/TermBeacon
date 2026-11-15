@@ -20,6 +20,18 @@ test("detects opencode", () => {
   assert.deepStrictEqual(detected, ["opencode"]);
 });
 
+test("detects opencode from the echoed launch command", () => {
+  const { sniffer, detected } = makeSniffer();
+  sniffer.feed("PS D:\\work\\app> opencode\r\n");
+  assert.deepStrictEqual(detected, ["opencode"]);
+});
+
+test("detects opencode from a PowerShell resume command", () => {
+  const { sniffer, detected } = makeSniffer();
+  sniffer.feed("PS D:\\work\\app> & 'C:\\Users\\me\\AppData\\Roaming\\npm\\opencode.cmd' '--standalone' '--session' 'ses_abc'\r\n");
+  assert.deepStrictEqual(detected, ["opencode"]);
+});
+
 test("detects codex", () => {
   const { sniffer, detected } = makeSniffer();
   sniffer.feed("OpenAI Codex v0.166.0\n");
@@ -59,4 +71,25 @@ test("stops scanning after the head of the session", () => {
   sniffer.feed("x".repeat(MAX_SCAN_BYTES));
   sniffer.feed("Claude Code\n");
   assert.deepStrictEqual(detected, []);
+});
+
+test("a transcript mentioning opencode is not an opencode launch", () => {
+  // Regression: Claude Code printed "…want to go fully self-managed like
+  // opencode" while working in this repo, and the terminal was relabelled
+  // `opencode` even though it only ever ran Claude.
+  const { sniffer, detected } = makeSniffer();
+  sniffer.feed("I should go fully self-managed like opencode, keeping the claude models.\r\n");
+  sniffer.feed("> 后期不想用 cc-switch 了，类似 opencode 自管\r\n");
+  assert.deepStrictEqual(detected, []);
+});
+
+test("a real banner overrules an earlier command-level guess", () => {
+  const { sniffer, detected } = makeSniffer();
+  sniffer.feed("PS D:\\work\\app> opencode\r\n");
+  assert.deepStrictEqual(detected, ["opencode"]);
+  sniffer.feed("✻ Welcome to Claude Code v2.1\r\n");
+  assert.deepStrictEqual(detected, ["opencode", "claude"]);
+  // The banner settles the identity: later mentions change nothing.
+  sniffer.feed("PS D:\\work\\app> opencode\r\n");
+  assert.deepStrictEqual(detected, ["opencode", "claude"]);
 });

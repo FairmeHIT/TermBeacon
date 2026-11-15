@@ -106,6 +106,27 @@ test("clamps persisted layout and window bounds", () => {
   assert.deepEqual(result.windowBounds, { width: 900, height: 2160, x: 41, y: -12, isMaximized: true });
 });
 
+test("keeps workspace usage metadata and drops contradictory flags", () => {
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [
+      { id: "w1", name: "a", terminalIds: [], lastUsedAt: 1_700_000_000_000, hidden: true, keepVisible: true },
+      { id: "w2", name: "b", terminalIds: [], lastUsedAt: -5, hidden: "yes", keepVisible: true },
+      { id: "w3", name: "c", terminalIds: [], lastUsedAt: 1.5 },
+    ],
+    terminals: [],
+  });
+  assert.equal(result.workspaces[0].lastUsedAt, 1_700_000_000_000);
+  // `hidden` is the last user action, so it wins over a stale pin.
+  assert.equal(result.workspaces[0].hidden, true);
+  assert.equal(result.workspaces[0].keepVisible, undefined);
+  // Malformed timestamps and non-boolean flags are dropped, not repaired.
+  assert.equal(result.workspaces[1].lastUsedAt, undefined);
+  assert.equal(result.workspaces[1].hidden, undefined);
+  assert.equal(result.workspaces[1].keepVisible, true);
+  assert.equal(result.workspaces[2].lastUsedAt, undefined);
+});
+
 test("keeps bounded task history only for known terminals", () => {
   const result = sanitizeState({
     schemaVersion: 1,
@@ -138,6 +159,23 @@ test("preserves bounded recovery metadata without accepting malformed session id
     terminals: [{ ...validTerminal, lastSessionId: "bad\nvalue" }],
   });
   assert.equal(malformed.terminals.length, 0);
+});
+
+test("drops a persisted session id that belongs to another CLI", () => {
+  // A terminal that ran `claude` and was later labelled `opencode` kept a
+  // Claude UUID, so resume built `opencode --session <uuid>` and failed.
+  const result = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [{ id: "default", name: "默认工作区", terminalIds: ["t1", "t2", "t3"] }],
+    terminals: [
+      { ...validTerminal, id: "t1", agentType: "opencode", lastSessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" },
+      { ...validTerminal, id: "t2", agentType: "claude", lastSessionId: "ses_e25baf5ccffe" },
+      { ...validTerminal, id: "t3", agentType: "opencode", lastSessionId: "ses_e25baf5ccffe" },
+    ],
+  });
+  assert.equal(result.terminals[0].lastSessionId, undefined);
+  assert.equal(result.terminals[1].lastSessionId, undefined);
+  assert.equal(result.terminals[2].lastSessionId, "ses_e25baf5ccffe");
 });
 
 test("preserves bounded retest attempt metadata", () => {

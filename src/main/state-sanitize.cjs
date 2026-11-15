@@ -1,5 +1,6 @@
 // Shared state.json sanitization for the main process. Kept as CJS so tests
 // can require it directly and scripts/copy-runtime.mjs can ship it.
+const { sessionIdFitsAgent } = require("./session-resume.cjs");
 
 function defaultState() {
   return { schemaVersion: 1, workspaces: [{ id: "default", name: "默认工作区", terminalIds: [] }], terminals: [], tasks: [] };
@@ -59,7 +60,7 @@ function sanitizeState(parsed) {
       lastActivityAt: Number.isFinite(terminal.lastActivityAt) ? Math.max(0, Math.round(terminal.lastActivityAt)) : 0,
       ...(SHELL_TYPES.has(terminal.shell) ? { shell: terminal.shell } : {}),
       ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
-      ...(typeof terminal.lastSessionId === "string" ? { lastSessionId: terminal.lastSessionId.slice(0, MAX_SESSION_ID_LENGTH) } : {}),
+      ...(typeof terminal.lastSessionId === "string" && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId) ? { lastSessionId: terminal.lastSessionId.slice(0, MAX_SESSION_ID_LENGTH) } : {}),
       ...(typeof terminal.resumeAvailable === "boolean" ? { resumeAvailable: terminal.resumeAvailable } : {}),
       ...(RECOVERY_STATES.has(terminal.recoveryState) ? { recoveryState: terminal.recoveryState } : {}),
       ...(typeof terminal.resumeError === "string" && terminal.resumeError.trim() ? { resumeError: terminal.resumeError.trim().slice(0, MAX_RESUME_ERROR_LENGTH) } : {}),
@@ -84,6 +85,12 @@ function sanitizeState(parsed) {
     if (typeof workspace.lastActiveTerminalId === "string" && workspaceTerminalIds.includes(workspace.lastActiveTerminalId)) {
       next.lastActiveTerminalId = workspace.lastActiveTerminalId;
     }
+    // Sidebar recency and the collapsing flags. They are cosmetic, so invalid
+    // values are dropped instead of resetting the workspace; `hidden` wins when
+    // both explicit flags are present because it is the last user action.
+    if (Number.isSafeInteger(workspace.lastUsedAt) && workspace.lastUsedAt >= 0) next.lastUsedAt = workspace.lastUsedAt;
+    if (workspace.hidden === true) next.hidden = true;
+    else if (workspace.keepVisible === true) next.keepVisible = true;
     workspaces.push(next);
   }
   const tasks = Array.isArray(parsed.tasks)

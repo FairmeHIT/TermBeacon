@@ -37,6 +37,16 @@ test("hook server forwards an optional bounded session id", async (t) => {
   assert.equal(tooLong.status, 400);
 });
 
+test("hook server forwards an optional declaring agent and rejects unknown ones", async (t) => {
+  const { server, port, events } = await withServer(t);
+  const accepted = await post(port, { terminalId: "t1", event: "session.idle", status: "completed", agent: "opencode" }, server.token);
+  assert.equal(accepted.status, 204);
+  assert.equal(events[0].agent, "opencode");
+  const unknown = await post(port, { terminalId: "t1", event: "session.idle", status: "completed", agent: "not-a-cli" }, server.token);
+  assert.equal(unknown.status, 400);
+  assert.equal(events.length, 1);
+});
+
 test("hook server rejects a missing or wrong token", async (t) => {
   const { server, port, events } = await withServer(t);
   const wrong = await post(port, { terminalId: "t1", event: "x", status: "running" }, "wrong");

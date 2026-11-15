@@ -70,6 +70,12 @@ export interface Workspace {
   terminalIds: string[];
   /** Terminal this workspace last had active, so returning restores it. */
   lastActiveTerminalId?: string;
+  /** Epoch milliseconds of the last time this workspace was opened. */
+  lastUsedAt?: number;
+  /** Collapsed into the sidebar's hidden group by the user. */
+  hidden?: boolean;
+  /** Expanded by hand, so the idle rule must not collapse it again. */
+  keepVisible?: boolean;
 }
 
 export interface TaskRecord {

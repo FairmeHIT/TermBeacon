@@ -100,7 +100,7 @@ export default {
 
     const controller = new AbortController();
     const registrations = [];
-    const reporter = createReporter(connection, controller.signal);
+    const reporter = createReporter({ ...connection, agent: "opencode" }, controller.signal);
     const parents = new Map();
     let activeSessionId;
     let hasTurn = false;

@@ -57,6 +57,22 @@ test("hook client forwards Claude session_id from stdin", async (t) => {
   assert.equal(events[0].sessionId, "claude-session-1");
 });
 
+test("hook client declares the CLI that owns the hook", async (t) => {
+  const events = [];
+  const server = createHookServer({ onEvent: (event) => events.push(event) });
+  const port = await server.start();
+  t.after(() => server.close());
+  await run(process.execPath, [script, "--agent", "claude", "running", "SessionStart"], {
+    env: { ...process.env, TERMBEACON_HOOK_PORT: String(port), TERMBEACON_HOOK_TOKEN: server.token, TERMBEACON_TERMINAL_ID: "terminal-3" },
+  });
+  assert.equal(events[0].agent, "claude");
+  // Unknown agents are dropped instead of poisoning the PTY host's identity.
+  await run(process.execPath, [script, "--agent", "not-a-cli", "completed", "Stop"], {
+    env: { ...process.env, TERMBEACON_HOOK_PORT: String(port), TERMBEACON_HOOK_TOKEN: server.token, TERMBEACON_TERMINAL_ID: "terminal-4" },
+  });
+  assert.equal(events[1].agent, undefined);
+});
+
 test("hook client is a no-op outside TermBeacon", async () => {
   const result = await run(process.execPath, [script, "completed", "Stop"], {
     env: { ...process.env, TERMBEACON_HOOK_PORT: "", TERMBEACON_HOOK_TOKEN: "", TERMBEACON_TERMINAL_ID: "" },

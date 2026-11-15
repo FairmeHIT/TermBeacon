@@ -13,7 +13,7 @@ export default function termbeacon(pi) {
   const start = () => {
     if (controller && !controller.signal.aborted) return;
     controller = new AbortController();
-    reporter = createReporter({ port, token, terminalId }, controller.signal);
+    reporter = createReporter({ port, token, terminalId, agent: "pi" }, controller.signal);
   };
   const report = (event, status, ctx) => {
     start();

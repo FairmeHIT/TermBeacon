@@ -8,7 +8,7 @@ const vm = require("node:vm");
 const hostSource = fs.readFileSync(path.join(__dirname, "..", "src", "main", "pty-host.cjs"), "utf8");
 const validation = require("../src/main/pty-validation.cjs");
 
-function createHarness({ spawn, detection, hookPort = 12345 } = {}) {
+function createHarness({ spawn, detection, hookPort = 12345, env = {} } = {}) {
   const parentPort = new EventEmitter();
   const dataPort = new EventEmitter();
   const messages = [];
@@ -57,7 +57,7 @@ function createHarness({ spawn, detection, hookPort = 12345 } = {}) {
   };
   const fakeProcess = {
     parentPort,
-    env: {},
+    env,
     cwd: () => process.cwd(),
     exit() {},
   };
@@ -311,6 +311,22 @@ test("PTY host injects the hook bridge env into each session", () => {
   assert.equal(env.TERMBEACON_HOOK_TOKEN, "test-token");
 });
 
+test("PTY host tells opencode the app appearance when the user has no theme mode", () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "tb-appearance-"));
+  try {
+    const { dataPort, spawnedOptions } = createHarness({ env: { OPENCODE_CONFIG_DIR: dir } });
+    dataPort.emit("message", { data: { ...createMessage("t1"), appearance: "light" } });
+    assert.equal(spawnedOptions[0].env.OPENCODE_CLI_CONFIG_CONTENT, JSON.stringify({ theme: { mode: "light" } }));
+
+    fs.writeFileSync(path.join(dir, "cli.json"), '{ "theme": { "mode": "dark" } }');
+    const second = createHarness({ env: { OPENCODE_CONFIG_DIR: dir } });
+    second.dataPort.emit("message", { data: { ...createMessage("t2"), appearance: "light" } });
+    assert.equal(second.spawnedOptions[0].env.OPENCODE_CLI_CONFIG_CONTENT, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("PTY host routes bridge events to the terminal detector", () => {
   const hooks = [];
   const { dataPort, messages, emitHook } = createHarness({
@@ -340,6 +356,34 @@ test("native status received before an agent banner survives detector upgrade", 
   // A stale retry must not replace the session id used by resume.
   emitHook({ terminalId: "t1", event: "UserPromptSubmit", status: "running", sessionId: "old", occurredAt: 1000 });
   assert.equal(messages.filter((event) => event.type === "session:update").at(-1).sessionId, "main");
+});
+
+test("a hook's session id must belong to the terminal's own CLI", () => {
+  const { dataPort, spawned, messages, emitHook } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  // A typed launch is the strongest evidence the opencode TUI prints.
+  spawned[0].dataCallback("PS D:\\work> opencode\r\n");
+  const updates = () => messages.filter((event) => event.type === "session:update");
+  // Regression: Claude ran in a terminal labelled opencode, its hook posted a
+  // Claude UUID, and resume built `opencode --session <uuid>`, which fails with
+  // `Expected a string starting with "ses"` at ["sessionID"].
+  emitHook({ terminalId: "t1", event: "Stop", status: "completed", agent: "claude", sessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" });
+  assert.equal(updates().length, 0, "a declared agent that differs from the terminal must not claim the id");
+  // An undeclared hook cannot prove ownership either, but the id still has to
+  // fit the CLI the terminal is running.
+  emitHook({ terminalId: "t1", event: "session.idle", status: "completed", sessionId: "b8e33a24-47fb-4738-a098-f96998b398e3" });
+  assert.equal(updates().length, 0);
+  emitHook({ terminalId: "t1", event: "session.idle", status: "completed", agent: "opencode", sessionId: "ses_e25baf5ccffe" });
+  assert.equal(updates().length, 1);
+  assert.equal(updates()[0].sessionId, "ses_e25baf5ccffe");
+});
+
+test("a declaring hook labels an unlabelled terminal and stores its session id", () => {
+  const { dataPort, messages, emitHook } = createHarness();
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "session.idle", status: "completed", agent: "opencode", sessionId: "ses_abc" });
+  assert.equal(messages.find((event) => event.type === "pty:agent")?.agentType, "opencode");
+  assert.equal(messages.find((event) => event.type === "session:update")?.sessionId, "ses_abc");
 });
 
 // Detector stub that walks ready -> working -> stopped on the same terminal so

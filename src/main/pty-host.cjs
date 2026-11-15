@@ -19,7 +19,9 @@ const { createDetector } = require("./detection-engine.cjs");
 const { createOscParser } = require("./osc-parser.cjs");
 const { createAgentSniffer } = require("./agent-sniff.cjs");
 const { createHookServer } = require("./hook-server.cjs");
+const { sessionIdFitsAgent } = require("./session-resume.cjs");
 const { managedEnvironment } = require("./cli-runtime.cjs");
+const { buildCliAppearanceEnv } = require("./cli-appearance.cjs");
 const { summarize } = require("./summary-utils.cjs");
 const { utf8Tail } = require("./utf8-utils.cjs");
 const { createOutputFlow } = require("./output-flow.cjs");
@@ -80,14 +82,27 @@ const outputFlow = createOutputFlow({
 // External CLI hooks/plugins post status events to this loopback server. The
 // port/token are injected into each PTY environment so a hook process can find
 // the bridge without any global config. See hook-server.cjs for the protocol.
-function applyHookEvent({ terminalId, event, status, sessionId, eventId, occurredAt }) {
+function applyHookEvent({ terminalId, event, status, sessionId, agent, eventId, occurredAt }) {
   const detector = detectors.get(terminalId);
   if (!detector || typeof event !== "string" || typeof status !== "string"
     || detector.hook(event, status, { eventId, occurredAt }) === false) return;
-  if (typeof sessionId === "string" && sessionId.length > 0 && sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(sessionId)) {
-    sessionIds.set(terminalId, sessionId);
-    send({ type: "session:update", terminalId, sessionId, at: Date.now() });
+  // A CLI plugin knows which agent it belongs to and may report before any
+  // banner is visible (the opencode TUI draws almost no text). Only an
+  // unlabelled terminal is adopted here; a sniffed identity is never overruled
+  // by a hook, because a nested CLI inherits the bridge environment too.
+  if (typeof agent === "string" && AGENT_TYPES.has(agent) && agentTypes.get(terminalId) === "generic") {
+    adoptAgent(terminalId, agent);
   }
+  if (typeof sessionId !== "string" || !sessionId) return;
+  const currentAgent = agentTypes.get(terminalId) || "generic";
+  // A CLI launched inside another one shares TERMBEACON_TERMINAL_ID, so its
+  // hook would otherwise overwrite the session id with an id its own CLI owns.
+  // That mismatch is what makes resume unusable (`opencode --session <uuid>`
+  // fails with `Expected a string starting with "ses"`).
+  if (typeof agent === "string" && agent && agent !== currentAgent) return;
+  if (!sessionIdFitsAgent(currentAgent, sessionId)) return;
+  sessionIds.set(terminalId, sessionId);
+  send({ type: "session:update", terminalId, sessionId, at: Date.now() });
 }
 const hookServer = createHookServer({ onEvent: applyHookEvent });
 const hookReady = hookServer.start().catch((error) => {
@@ -251,35 +266,44 @@ function makeDetector(terminalId, agentType) {
   return detector;
 }
 
+// Both the output sniffer and a CLI's own hook can label a terminal. The agent
+// type selects the detector's pattern set, so switching either way rebuilds it
+// while preserving whatever the hooks already reported.
+function adoptAgent(terminalId, agent) {
+  if (!AGENT_TYPES.has(agent) || agent === "generic" || agentTypes.get(terminalId) === agent) return;
+  const previous = detectors.get(terminalId);
+  const current = makeDetector(terminalId, agent);
+  // Hooks may arrive before the banner. Preserve their authoritative state
+  // when the output sniffer upgrades a generic detector.
+  if (previous?.runtime?.hookStatus) {
+    Object.assign(current.runtime, previous.runtime);
+    seedState(terminalId, current.runtime?.state);
+  }
+  // The shell echoes the launch command before the CLI banner identifies the
+  // agent. That can briefly arm the generic detector, so publish the new
+  // agent's idle baseline explicitly.
+  if (previous?.runtime && !previous.runtime.hookStatus && previous.runtime.state !== "ready") {
+    publishState(terminalId, {
+      previous: previous.runtime.state,
+      current: "ready",
+      confidence: 1,
+      source: "agent",
+      summary: `detector switched to ${agent}`,
+      at: Date.now(),
+    });
+  }
+  // A session id that belongs to the previous CLI cannot be resumed by the new
+  // one; drop it so the renderer falls back to the latest session.
+  const knownSessionId = sessionIds.get(terminalId);
+  if (knownSessionId && !sessionIdFitsAgent(agent, knownSessionId)) sessionIds.delete(terminalId);
+  send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
+}
+
 // The renderer no longer asks the user to pick an agent type; identifying the
 // CLI from its own banner keeps the dropdown (and a whole row of controls) out
 // of the UI while still giving the detector the right pattern set.
 function makeAgentSniffer(terminalId) {
-  return createAgentSniffer((agent) => {
-    if (agentTypes.get(terminalId) === agent) return;
-    const previous = detectors.get(terminalId);
-    const current = makeDetector(terminalId, agent);
-    // Hooks may arrive before the banner. Preserve their authoritative state
-    // when the output sniffer upgrades a generic detector.
-    if (previous?.runtime.hookStatus) {
-      Object.assign(current.runtime, previous.runtime);
-      seedState(terminalId, current.runtime.state);
-    }
-    // The shell echoes the launch command before the CLI banner identifies the
-    // agent. That can briefly arm the generic detector, so publish the new
-    // agent's idle baseline explicitly.
-    if (previous && !previous.runtime.hookStatus && previous.runtime?.state !== "ready") {
-      publishState(terminalId, {
-        previous: previous.runtime.state,
-        current: "ready",
-        confidence: 1,
-        source: "agent",
-        summary: `detector switched to ${agent}`,
-        at: Date.now(),
-      });
-    }
-    send({ type: "pty:agent", terminalId, agentType: agent, at: Date.now() });
-  });
+  return createAgentSniffer((agent) => adoptAgent(terminalId, agent));
 }
 
 function makeOscParser(terminalId) {
@@ -350,6 +374,10 @@ function createSession(message, hookWaited = false) {
       TERMBEACON_HOOK_TOKEN: hookServer.token,
     } : {}),
   };
+  // A full-screen TUI such as opencode cannot be recoloured after it starts, so
+  // the app hands the shell its light/dark intent up front. Explicit request
+  // env still wins, and cli-appearance skips users who set their own theme.
+  const appearanceEnv = request.appearance ? buildCliAppearanceEnv(request.appearance, { env: process.env }) : {};
   let session;
   try {
     session = pty.spawn(request.shell, request.args, {
@@ -357,7 +385,7 @@ function createSession(message, hookWaited = false) {
       cols: request.cols,
       rows: request.rows,
       cwd: request.cwd,
-      env: managedEnvironment({ ...process.env, ...request.env, ...hookEnv }),
+      env: managedEnvironment({ ...process.env, ...appearanceEnv, ...request.env, ...hookEnv }),
       ...(isWindows ? { useConpty: true } : {}),
     });
   } catch (error) {

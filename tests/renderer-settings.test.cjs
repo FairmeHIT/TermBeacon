@@ -250,7 +250,14 @@ test("workspaces open their folder in the system file manager", () => {
 
   const button = styles.match(/\.workspace-open \{([\s\S]*?)\}/)?.[1];
   assert.ok(button, "workspace open styles must exist");
-  assert.match(button, /opacity: \.55/);
+  // The folder action stays hidden until the row is hovered or focused, just
+  // like the close button, so idle rows carry no stray glyphs.
+  assert.match(button, /opacity:\s*0/);
+  assert.match(button, /visibility:\s*hidden/);
+  const reveal = styles.match(/\.workspace-item:hover \.workspace-open,\s*\n\.workspace-item:focus-visible \.workspace-open\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(reveal, "workspace open must be revealed on hover");
+  assert.match(reveal, /opacity:\s*1/);
+  assert.match(reveal, /visibility:\s*visible/);
   assert.match(styles, /\.workspace-open:hover \{ color: var\(--accent\); \}/);
 });
 
@@ -334,6 +341,19 @@ test("terminals created in a workspace start in the workspace folder", () => {
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /activeWorkspace\?\.cwd/);
   assert.match(addTerminal, /isValidCwd\(workspaceCwd\) \? workspaceCwd : DEFAULT_CWD/);
+});
+
+test("new shells announce the app appearance so opencode can follow the theme", () => {
+  // opencode draws its own full-screen palette and never asks the terminal for
+  // one on Windows, so the PTY needs the light/dark intent when it starts.
+  const creates = [...app.matchAll(/createTerminal\(\{([\s\S]*?)\n\s*\}\)/g)].map((match) => match[1]);
+  assert.equal(creates.length, 2);
+  for (const body of creates) {
+    assert.match(body, /appearance: DARK_THEMES\.includes\(theme\) \? "dark" : "light"/);
+  }
+  // The mount effect decides the appearance from the theme, so a stale closure
+  // would keep spawning shells with the previous palette.
+  assert.match(app, /\}, \[terminals, hydrated, platformInfo\.shell, activeId, settingsOpen, theme\]\);/);
 });
 
 test("removing the last terminal restores focus to the replacement xterm", () => {
@@ -423,4 +443,31 @@ test("generic input only treats a complete CLI command as an agent launch", () =
   assert.match(launch, /normalized === command\s*\|\|\s*normalized\.startsWith\(`\$\{command\} `\)/);
   assert.doesNotMatch(launch, /command\.startsWith\(normalized\)/);
   assert.match(app, /isAgentLaunchInput\(candidate/);
+});
+
+test("workspaces collapse into a hidden group below the visible list", () => {
+  const section = app.match(/<section className="sidebar-section workspaces-section">([\s\S]*?)<\/section>/)?.[1];
+  assert.ok(section, "workspaces section must exist");
+  // The dropdown lives at the bottom of the block, after the scrolling list.
+  const listIndex = section.indexOf('className="workspace-list"');
+  const toggleIndex = section.indexOf("workspace-hidden-toggle");
+  assert.ok(listIndex >= 0, "visible workspace list must exist");
+  assert.ok(toggleIndex > listIndex, "hidden group toggle must sit below the visible list");
+  assert.match(section, /aria-expanded=\{hiddenWorkspacesOpen\}/);
+  assert.match(section, /aria-controls="hidden-workspaces"/);
+  assert.match(section, /visibleWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, false\)\)/);
+  assert.match(section, /hiddenWorkspaces\.map\(\(workspace\) => workspaceRow\(workspace, true\)\)/);
+  assert.match(section, /暂无隐藏的工作区/);
+  // Both lists reuse one card so a workspace does not change shape on the way
+  // down, and the active row never offers to hide itself.
+  assert.match(app, /function workspaceRow\(workspace: Workspace, hidden: boolean\)/);
+  assert.match(app, /: !isActive && <span className="workspace-hide"/);
+  assert.match(app, /<span className="workspace-unhide"/);
+  const toggle = styles.match(/\.workspace-hidden-toggle\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(toggle, "hidden toggle styles must exist");
+  assert.match(toggle, /cursor:\s*pointer/);
+  const hiddenList = styles.match(/\.workspace-hidden-list\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(hiddenList, "hidden list styles must exist");
+  assert.match(hiddenList, /max-height/);
+  assert.match(styles, /\.workspace-item-hidden\s*\{[^}]*opacity/);
 });
