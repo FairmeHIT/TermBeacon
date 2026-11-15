@@ -454,9 +454,17 @@ test("Claude task titles stay in the sidebar while OSC status labels are ignored
   assert.match(app, /function isClaudeStatusTitle\(title: string\): boolean/);
   assert.match(app, /return \/\^\(\?:\[◐◑✳\]\\s\*\)\?Claude Code\$\/i\.test/);
   assert.match(app, /if \(isClaudeStatusTitle\(event\.title\)\) return;/);
-  assert.match(app, /if \(event\.current === "working" && prompt\) syncClaudeTaskTitle\(event\.terminalId, prompt\)/);
+  assert.match(app, /if \(event\.current === "working" && prompt\) syncAgentTaskTitle\(event\.terminalId, prompt\)/);
   assert.match(app, /taskTitles\.current\.set\(id, title\)/);
   assert.match(app, /titlePinned: false/);
+});
+
+test("Codex task titles use the submitted prompt as a stable fallback", () => {
+  const sync = app.match(/function syncAgentTaskTitle\(id: string, prompt: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(sync, "syncAgentTaskTitle must exist");
+  assert.match(sync, /agentType !== "claude" && agentType !== "codex"/);
+  assert.match(app, /agentTypeByTerminal\.current\.get\(event\.terminalId\) === "codex"/);
+  assert.match(app, /taskTitles\.current\.has\(event\.terminalId\)/);
 });
 
 test("settings occupy an independent page while terminal views remain mounted", () => {

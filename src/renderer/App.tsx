@@ -729,7 +729,7 @@ function App() {
     const disposeState = window.termbeacon.onState((event) => {
       const prompt = lastInput.current.get(event.terminalId);
       lastStateAt.current.set(event.terminalId, typeof event.at === "number" ? event.at : Date.now());
-      if (event.current === "working" && prompt) syncClaudeTaskTitle(event.terminalId, prompt);
+      if (event.current === "working" && prompt) syncAgentTaskTitle(event.terminalId, prompt);
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState } : item));
       setTasks((items) => applyTaskEvent(items, event, prompt));
     });
@@ -767,6 +767,10 @@ function App() {
       // Keep the submitted task title in the sidebar instead of replacing it
       // with the static "Claude Code" label on every redraw.
       if (isClaudeStatusTitle(event.title)) return;
+      // Codex titles carry a spinner and repository suffix while a turn runs.
+      // Once the submitted prompt provides a stable fallback, prefer that name.
+      if (agentTypeByTerminal.current.get(event.terminalId) === "codex"
+        && taskTitles.current.has(event.terminalId)) return;
       setTerminals((items) => {
         const target = items.find((item) => item.id === event.terminalId);
         // Shells re-emit the same title on every prompt; returning the current
@@ -1609,9 +1613,10 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title, titlePinned: true } : item));
   }
 
-  function syncClaudeTaskTitle(id: string, prompt: string) {
+  function syncAgentTaskTitle(id: string, prompt: string) {
     if (pinnedTitles.current.has(id)) return;
-    if (agentTypeByTerminal.current.get(id) !== "claude") return;
+    const agentType = agentTypeByTerminal.current.get(id);
+    if (agentType !== "claude" && agentType !== "codex") return;
     const title = normalizeTitleInput(prompt);
     if (!title || taskTitles.current.get(id) === title) return;
     taskTitles.current.set(id, title);
