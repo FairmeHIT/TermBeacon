@@ -487,6 +487,16 @@ test("generic input only treats a complete CLI command as an agent launch", () =
   assert.match(app, /isAgentLaunchInput\(candidate/);
 });
 
+// The alternate screen separates a shell line from an agent prompt. Without
+// this gate, typing a CLI name into an OpenCode prompt resets the detector,
+// and without the shell rewrite a restored terminal rejoins the shared server.
+test("the launch rewrite follows the alternate screen and the restored label", () => {
+  assert.match(app, /const interactive = alternateScreenByTerminal\.current\.get\(terminal\.id\) === true/);
+  assert.match(app, /isAgentLaunchInput\(candidate, agentType, interactive\)/);
+  assert.match(app, /withOpenCodeStandalone\(data, candidate, agentType, interactive\)/);
+  assert.match(launch, /agentType !== "generic" && agentType !== "opencode"/);
+});
+
 test("workspaces collapse into a hidden group below the visible list", () => {
   const section = app.match(/<section className="sidebar-section workspaces-section">([\s\S]*?)<\/section>/)?.[1];
   assert.ok(section, "workspaces section must exist");

@@ -1,8 +1,12 @@
 const AGENT_COMMANDS = ["opencode", "claude", "codex", "pi"];
 const KNOWN_AGENT_TYPES = new Set(["generic", ...AGENT_COMMANDS]);
 
-function isAgentLaunchInput(value, agentType) {
+function isAgentLaunchInput(value, agentType, interactive = false) {
   if (typeof value !== "string") return false;
+  // While an agent TUI holds the alternate screen, typed text belongs to its
+  // prompt. A prompt that happens to start with `opencode` must not reset the
+  // detector or carry the launch rewrite.
+  if (interactive) return false;
   // A terminal can retain a stale label after an earlier CLI exits. Let an
   // explicit agent command at the shell still take the launch path, so its
   // banner does not light up as a completed task before identity updates.
@@ -18,8 +22,13 @@ function isAgentLaunchInput(value, agentType) {
     && (agentType === "generic" || agentType === command));
 }
 
-function withOpenCodeStandalone(data, candidate, agentType) {
-  if (agentType !== "generic" || typeof data !== "string" || typeof candidate !== "string") return data;
+function withOpenCodeStandalone(data, candidate, agentType, interactive = false) {
+  if (interactive || typeof data !== "string" || typeof candidate !== "string") return data;
+  // A terminal restored with an OpenCode label is still at a shell until a TUI
+  // takes the alternate screen, so a relaunch there must keep using a private
+  // server. Letting it attach to the shared service is what made every tab's
+  // OSC 7501 status land on every terminal.
+  if (agentType !== "generic" && agentType !== "opencode") return data;
   const normalized = candidate.trim();
   if (!/^opencode(?:\s|$)/i.test(normalized)) return data;
   // Explicit server selection is an intentional escape hatch. Otherwise the

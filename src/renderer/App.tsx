@@ -24,8 +24,8 @@ const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInte
   restoredTerminalRecovery: (terminal: TerminalInstance, existing: boolean) => RecoveryState;
 };
 const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
-  isAgentLaunchInput: (value: string | undefined, agentType: AgentType) => boolean;
-  withOpenCodeStandalone: (data: string, candidate: string | undefined, agentType: AgentType) => string;
+  isAgentLaunchInput: (value: string | undefined, agentType: AgentType, interactive?: boolean) => boolean;
+  withOpenCodeStandalone: (data: string, candidate: string | undefined, agentType: AgentType, interactive?: boolean) => string;
 };
 // The sidebar derives both the ordering and the visible/hidden split from one
 // recency rule, so "frequently used floats up" and "idle sinks" cannot drift.
@@ -963,10 +963,15 @@ function App() {
           if (nextBuffer) inputBuffers.current.set(terminal.id, nextBuffer.slice(-500));
           candidate = nextBuffer;
         }
-        const launch = isAgentLaunchInput(candidate, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType);
+        const agentType = agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType;
+        // A TUI owns the keyboard while it holds the alternate screen. Text
+        // typed there goes to the agent prompt, so it is neither a shell
+        // launch nor a place to inject the standalone flag.
+        const interactive = alternateScreenByTerminal.current.get(terminal.id) === true;
+        const launch = isAgentLaunchInput(candidate, agentType, interactive);
         if (submitted && candidate && !launch) lastInput.current.set(terminal.id, candidate);
         const launchData = launch
-          ? withOpenCodeStandalone(data, candidate, agentTypeByTerminal.current.get(terminal.id) ?? terminal.agentType)
+          ? withOpenCodeStandalone(data, candidate, agentType, interactive)
           : data;
         const request = { terminalId: terminal.id, data: launchData };
         if (launch) window.termbeacon.launch(request);

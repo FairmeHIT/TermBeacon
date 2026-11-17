@@ -8,6 +8,11 @@ captures/
 artifacts/
 .release-notes.md
 
+# Local upstream agent source snapshots and scratch inspectors used for
+# diagnostics only. They are not part of the packaged app.
+agents/
+.tmp-*
+
 # Credentials and local signing material.
 .env
 .env.*
