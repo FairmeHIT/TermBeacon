@@ -88,6 +88,8 @@ const english: Record<string, string> = {
   "点击“新建终端”时启动的程序。": "The program launched when you click \"New terminal\".",
   "Codex 启动参数": "Codex launch arguments",
   "由 TermBeacon 启动 Codex 时追加。支持引号。留空使用 Codex 默认配置。": "Appended when TermBeacon launches Codex. Single or double quotes are supported. Leave empty to use Codex defaults.",
+  "启动时自动恢复会话": "Resume sessions on startup",
+  "终端后台服务不在时，自动恢复已记录会话 ID 的 Agent 终端；无法确定会话的终端仍保留“恢复”，可手动处理。": "When the terminal service is not running, automatically resume agent terminals with a recorded session ID. Terminals without a known session keep the manual Resume action.",
   "普通 Shell": "Plain shell",
   "启动默认 Agent 失败：{message}": "Could not launch the default agent: {message}",
   "应用更新": "App updates",

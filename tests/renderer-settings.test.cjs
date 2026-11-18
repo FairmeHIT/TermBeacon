@@ -350,8 +350,8 @@ test("new terminals launch the configured default agent", () => {
   // Codex is the out-of-the-box default, and the choice is persisted with the
   // rest of the terminal preferences.
   assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
-  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexArgs,\s*\n\s*sidebarWidth,/);
-  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, sidebarWidth, hydrated\]\)/);
+  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexArgs,\s*\n\s*autoResumeOnStart,\s*\n\s*sidebarWidth,/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, hydrated\]\)/);
   const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
@@ -364,6 +364,30 @@ test("new terminals launch the configured default agent", () => {
   assert.match(settings, /props\.onNewTerminalAgent\(event\.target\.value as AgentType\)/);
   assert.match(i18n, /"New terminal launches"/);
   assert.match(i18n, /"Plain shell"/);
+});
+
+test("startup recovery resumes only exact saved sessions, once, and after a fresh shell", () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8");
+  // The preference is persisted and exposed as an accessible switch.
+  assert.match(sharedTypes, /autoResumeOnStart\?: boolean/);
+  assert.match(app, /const \[autoResumeOnStart, setAutoResumeOnStart\] = useState\(true\)/);
+  assert.match(app, /autoResumeOnStart=\{autoResumeOnStart\} onAutoResumeOnStart=\{setAutoResumeOnStart\}/);
+  assert.match(settings, /role="switch"/);
+  assert.match(settings, /aria-checked=\{props\.autoResumeOnStart\}/);
+  assert.match(settings, /props\.onAutoResumeOnStart\(!props\.autoResumeOnStart\)/);
+  assert.match(i18n, /"Resume sessions on startup"/);
+  // Older state files default to enabled; the pending set is built from exact
+  // session ids and the active terminal is resumed first.
+  assert.match(app, /const restoredAutoResume = state\.autoResumeOnStart !== false/);
+  assert.match(app, /autoResumeCandidates\(state\.terminals, restoredAutoResume\)/);
+  assert.match(app, /autoResumeIds\.unshift\(state\.activeTerminalId\)/);
+  // Attaching to a still-live host must never replay a resume command; only a
+  // restored terminal that needed a brand-new PTY enters the queue.
+  assert.match(app, /if \(restored && !existing && autoResume\) queueAutoResume\(terminal\.id\)/);
+  // Background recovery must be serialized and must not guess a session.
+  assert.match(app, /autoResumeTimer\.current = window\.setTimeout\(runAutoResumeQueue, AUTO_RESUME_INTERVAL_MS\)/);
+  assert.match(app, /options\.auto && spec\.mode !== "session-id"/);
+  assert.match(app, /autoResumePending\.current\.delete\(terminal\.id\)/);
 });
 
 test("renderer tracks the CLI that owns a resumable session id", () => {

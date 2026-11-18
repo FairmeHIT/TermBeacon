@@ -138,6 +138,7 @@ function sanitizeState(parsed) {
     MAX_CODEX_ARGS_LENGTH,
   );
   if (defaultCodexArgs) result.defaultCodexArgs = defaultCodexArgs;
+  if (typeof parsed.autoResumeOnStart === "boolean") result.autoResumeOnStart = parsed.autoResumeOnStart;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
   if (parsed.windowBounds && typeof parsed.windowBounds === "object") {
     const width = Number.isFinite(parsed.windowBounds.width) ? Math.round(parsed.windowBounds.width) : 1280;

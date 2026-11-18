@@ -169,6 +169,7 @@ interface PersistedState {
   activeTerminalId?: string;
   activeWorkspaceId?: string;
   defaultShell?: ShellType;
+  autoResumeOnStart?: boolean;
   sidebarWidth?: number;
   windowBounds?: WindowBounds;
 }

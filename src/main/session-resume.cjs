@@ -80,4 +80,20 @@ function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.e
   };
 }
 
-module.exports = { getResumeSpec, normalizeSessionId, sessionIdFitsAgent };
+// Choose the terminals a startup pass may resume without guessing. Only an
+// exact, owned session id is safe to reopen automatically: falling back to
+// `--continue` or Codex's picker would start a different conversation (or wait
+// for a choice) on behalf of a terminal the user is not looking at yet.
+function autoResumeCandidates(terminals, enabled = true) {
+  if (enabled !== true || !Array.isArray(terminals)) return [];
+  return terminals.filter((terminal) => Boolean(terminal)
+    && terminal.agentType !== "generic"
+    && terminal.state !== "stopped"
+    && terminal.resumeAvailable !== false
+    && terminal.recoveryState !== "unsupported"
+    && terminal.lastSessionAgent === terminal.agentType
+    && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId)
+  ).map((terminal) => terminal.id);
+}
+
+module.exports = { getResumeSpec, normalizeSessionId, sessionIdFitsAgent, autoResumeCandidates };

@@ -87,6 +87,15 @@ test("preserves default Codex launch arguments and migrates the legacy profile",
   assert.equal(blank.defaultCodexArgs, undefined);
 });
 
+test("preserves the automatic session-resume preference", () => {
+  for (const value of [true, false]) {
+    const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], autoResumeOnStart: value });
+    assert.equal(result.autoResumeOnStart, value);
+  }
+  const invalid = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], autoResumeOnStart: "yes" });
+  assert.equal(invalid.autoResumeOnStart, undefined);
+});
+
 test("preserves workspace folder paths and manual name pins", () => {
   const result = sanitizeState({
     schemaVersion: 1,

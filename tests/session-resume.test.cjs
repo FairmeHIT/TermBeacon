@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { getResumeSpec, sessionIdFitsAgent } = require("../src/main/session-resume.cjs");
+const { getResumeSpec, sessionIdFitsAgent, autoResumeCandidates } = require("../src/main/session-resume.cjs");
 
 test("Claude resumes a specific session or latest session", () => {
   assert.deepEqual(getResumeSpec({ agentType: "claude", sessionId: "abc", sessionAgent: "claude" }).args, ["--resume", "abc"]);
@@ -86,4 +86,21 @@ test("session id shape is matched to the CLI that will open it", () => {
   assert.equal(sessionIdFitsAgent("pi", "anything"), true);
   assert.equal(sessionIdFitsAgent("opencode", ""), false);
   assert.equal(sessionIdFitsAgent("opencode", undefined), false);
+});
+
+test("automatic startup resume only selects exact, owned, resumable sessions", () => {
+  const claudeId = "b8e33a24-47fb-4738-a098-f96998b398e3";
+  const terminals = [
+    { id: "active", agentType: "claude", state: "working", lastSessionId: claudeId, lastSessionAgent: "claude", recoveryState: "resumable" },
+    { id: "opencode", agentType: "opencode", state: "ready", lastSessionId: "ses_abc", lastSessionAgent: "opencode", recoveryState: "resumable" },
+    { id: "plain", agentType: "generic", state: "ready", lastSessionId: "ses_abc", lastSessionAgent: "opencode" },
+    { id: "foreign", agentType: "codex", state: "ready", lastSessionId: claudeId, lastSessionAgent: "claude" },
+    { id: "unsupported", agentType: "codex", state: "error", lastSessionId: claudeId, lastSessionAgent: "codex", recoveryState: "unsupported" },
+    { id: "opted-out", agentType: "claude", state: "ready", lastSessionId: claudeId, lastSessionAgent: "claude", resumeAvailable: false },
+    { id: "closed", agentType: "claude", state: "stopped", lastSessionId: claudeId, lastSessionAgent: "claude", recoveryState: "resumable" },
+    { id: "no-session", agentType: "claude", state: "ready", recoveryState: "resumable" },
+  ];
+  assert.deepEqual(autoResumeCandidates(terminals), ["active", "opencode"]);
+  assert.deepEqual(autoResumeCandidates(terminals, false), []);
+  assert.deepEqual(autoResumeCandidates(null), []);
 });

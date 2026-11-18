@@ -10,6 +10,7 @@ import SettingsPage from "./SettingsPage";
 import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, settingsText, type SettingsLocale } from "./settings-i18n";
 import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
+import sessionResumeUtils from "../main/session-resume.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
 import workspaceUtils from "../main/workspace-visibility.cjs";
 import { normalizePiCursorOutput, splitScreenOutput } from "./terminal-screen";
@@ -22,6 +23,9 @@ const { cleanTaskPrompt, applyTaskEvent, settleTask: settleTaskRecords, markInte
   markInterrupted: (items: TaskRecord[], at: number, detail?: string) => TaskRecord[];
   restoreAttachedTasks: (items: TaskRecord[], terminalId: string, previouslyActive: Map<string, TaskRecord>) => TaskRecord[];
   restoredTerminalRecovery: (terminal: TerminalInstance, existing: boolean) => RecoveryState;
+};
+const { autoResumeCandidates } = sessionResumeUtils as {
+  autoResumeCandidates: (terminals: TerminalInstance[], enabled?: boolean) => string[];
 };
 const { isAgentLaunchInput, withOpenCodeStandalone } = launchUtils as {
   isAgentLaunchInput: (value: string | undefined, agentType: AgentType, interactive?: boolean) => boolean;
@@ -262,6 +266,9 @@ const IS_WINDOWS = FALLBACK_PLATFORM.isWindows;
 const DEFAULT_SHELL: ShellType = FALLBACK_PLATFORM.shell as ShellType;
 const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex";
 const DEFAULT_CODEX_ARGS = "";
+// Space out automatic resumes so a machine restart does not launch every agent
+// at once. Each command is a full CLI process with its own startup work.
+const AUTO_RESUME_INTERVAL_MS = 700;
 const NEW_TERMINAL_AGENT_OPTIONS: Array<{ value: AgentType; label: string }> = [
   { value: "generic", label: "普通 Shell" },
   { value: "codex", label: "Codex" },
@@ -402,6 +409,7 @@ function App() {
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
   const [defaultNewTerminalAgent, setDefaultNewTerminalAgent] = useState<AgentType>(DEFAULT_NEW_TERMINAL_AGENT);
   const [defaultCodexArgs, setDefaultCodexArgs] = useState<string>(DEFAULT_CODEX_ARGS);
+  const [autoResumeOnStart, setAutoResumeOnStart] = useState(true);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     const saved = window.localStorage.getItem("termbeacon-theme");
     return isThemeSetting(saved) ? saved : "system";
@@ -445,6 +453,14 @@ function App() {
   const historyFlushTimer = useRef<number | null>(null);
   const lastSavedState = useRef("");
   const restoredTerminalIds = useRef(new Set<string>());
+  // Restored terminals whose exact CLI session may be reopened automatically.
+  // Populated once at hydration, then consumed by the first successful attach.
+  const autoResumePending = useRef(new Set<string>());
+  const autoResumeQueue = useRef<string[]>([]);
+  const autoResumeTimer = useRef<number | null>(null);
+  // Async resume paths need the latest terminal list instead of the closure
+  // from the render that scheduled them.
+  const terminalsRef = useRef(terminals);
   const previouslyActiveTasks = useRef(new Map<string, TaskRecord>());
   const agentTypeByTerminal = useRef(new Map<string, AgentType>());
   const lastInput = useRef(new Map<string, string>());
@@ -459,6 +475,20 @@ function App() {
   // Timestamp of the last state this renderer applied per terminal, so an older
   // snapshot can never overwrite a newer transition that already arrived.
   const lastStateAt = useRef(new Map<string, number>());
+
+  useEffect(() => { terminalsRef.current = terminals; }, [terminals]);
+  // Turning the preference off should also cancel a startup pass that is still
+  // waiting between terminals. Turning it on mid-session is intentionally a
+  // no-op: already-created shells are not a startup restore.
+  useEffect(() => {
+    if (autoResumeOnStart) return;
+    autoResumePending.current.clear();
+    autoResumeQueue.current = [];
+    if (autoResumeTimer.current !== null) {
+      window.clearTimeout(autoResumeTimer.current);
+      autoResumeTimer.current = null;
+    }
+  }, [autoResumeOnStart]);
 
   // The PTY host owns task detection and keeps running across renderer reloads,
   // so its snapshot is the authority for terminals the UI has not observed
@@ -563,6 +593,19 @@ function App() {
       setDefaultNewTerminalAgent(restoredDefaultNewTerminalAgent);
       setDefaultCodexArgs(restoredDefaultCodexArgs);
       const restoredAt = Date.now();
+      // Older state files have no flag. Auto-resume is the new default so a
+      // restart does not ask for the same click on every agent terminal again.
+      const restoredAutoResume = state.autoResumeOnStart !== false;
+      setAutoResumeOnStart(restoredAutoResume);
+      const autoResumeIds = autoResumeCandidates(state.terminals, restoredAutoResume);
+      // Resume the terminal the user was looking at first; the rest follow in
+      // the saved order.
+      if (state.activeTerminalId && autoResumeIds.includes(state.activeTerminalId)) {
+        autoResumeIds.splice(autoResumeIds.indexOf(state.activeTerminalId), 1);
+        autoResumeIds.unshift(state.activeTerminalId);
+      }
+      autoResumePending.current = new Set(autoResumeIds);
+      autoResumeQueue.current = [];
       restoredTerminalIds.current = new Set(state.terminals.map((terminal) => terminal.id));
       previouslyActiveTasks.current = new Map((state.tasks ?? [])
         .filter((task) => task.state === "working" || task.state === "awaiting-input")
@@ -1025,6 +1068,7 @@ function App() {
           }
           const existing = Boolean((result as { existing?: boolean } | undefined)?.existing);
           const restored = restoredTerminalIds.current.delete(terminal.id);
+          const autoResume = autoResumePending.current.delete(terminal.id);
           // Disk history excludes alternate-screen output, so it cannot tell
           // us which screen an attached process is currently displaying.
           alternateScreenByTerminal.current.set(terminal.id, false);
@@ -1059,6 +1103,10 @@ function App() {
             resizeTimers.current.set(terminal.id, resizeTimer);
             setTasks((items) => restoreAttachedTasks(items, terminal.id, previouslyActiveTasks.current));
           }
+          // A live host reattach (existing) keeps the original CLI process, so
+          // it is never resumed. Only a fresh shell after a machine restart or
+          // host loss needs the saved session replayed.
+          if (restored && !existing && autoResume) queueAutoResume(terminal.id);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           setTerminals((items) => items.map((item) => item.id === terminal.id
@@ -1099,6 +1147,7 @@ function App() {
         defaultShell,
         defaultNewTerminalAgent,
         defaultCodexArgs,
+        autoResumeOnStart,
         sidebarWidth,
       };
       const serialized = JSON.stringify(state);
@@ -1109,7 +1158,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, sidebarWidth, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1286,9 +1335,34 @@ function App() {
     });
   }
 
-  async function resumeTerminal(id: string) {
-    const terminal = terminals.find((item) => item.id === id);
+  // Automatic startup recovery is serialized: one CLI at a time, with a short
+  // pause between terminals so a machine restart does not spawn every agent in
+  // the same tick.
+  function queueAutoResume(terminalId: string) {
+    autoResumeQueue.current.push(terminalId);
+    if (autoResumeTimer.current !== null) return;
+    autoResumeTimer.current = window.setTimeout(runAutoResumeQueue, AUTO_RESUME_INTERVAL_MS);
+  }
+
+  function runAutoResumeQueue() {
+    autoResumeTimer.current = null;
+    const terminalId = autoResumeQueue.current.shift();
+    if (terminalId) {
+      const terminal = terminalsRef.current.find((item) => item.id === terminalId);
+      if (terminal && terminal.alive
+        && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted")) {
+        void resumeTerminal(terminalId, { auto: true });
+      }
+    }
+    if (autoResumeQueue.current.length > 0) {
+      autoResumeTimer.current = window.setTimeout(runAutoResumeQueue, AUTO_RESUME_INTERVAL_MS);
+    }
+  }
+
+  async function resumeTerminal(id: string, options: { auto?: boolean } = {}) {
+    const terminal = terminalsRef.current.find((item) => item.id === id);
     if (!terminal || !terminal.alive || terminal.recoveryState === "recovering") return;
+    if (options.auto && terminal.recoveryState !== "resumable" && terminal.recoveryState !== "interrupted") return;
     let spec: { supported: boolean; command?: string; reason?: string; mode?: string; note?: string };
     try {
       spec = await window.termbeacon.getResumeSpec({
@@ -1300,6 +1374,12 @@ function App() {
         codexArgs: terminal.agentType === "codex" ? defaultCodexArgs : undefined,
       });
     } catch (error) {
+      // A background attempt should not destroy the manual recovery path over
+      // a transient IPC failure; the pill stays available.
+      if (options.auto) {
+        console.error("[resume] automatic recovery failed", error);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       setTerminals((items) => items.map((item) => item.id === id
         ? { ...item, recoveryState: "unsupported", resumeAvailable: false, resumeError: message.slice(-500) }
@@ -1307,11 +1387,15 @@ function App() {
       return;
     }
     if (!spec.supported || !spec.command) {
+      if (options.auto) return;
       setTerminals((items) => items.map((item) => item.id === id
         ? { ...item, recoveryState: "unsupported", resumeAvailable: false, resumeError: spec.reason || "该 CLI 不支持会话恢复" }
         : item));
       return;
     }
+    // Never guess in the background. `latest`/`picker` can open a different
+    // conversation than the one this terminal owned, so those stay manual.
+    if (options.auto && spec.mode !== "session-id") return;
     setTerminals((items) => items.map((item) => item.id === id
       ? { ...item, recoveryState: "recovering", resumeError: undefined }
       : item));
@@ -1319,6 +1403,7 @@ function App() {
       ? { ...task, recoveryState: "recovering" }
       : task));
     window.termbeacon.launch({ terminalId: id, data: `${spec.command}\r` });
+    if (options.auto) return;
     // Explain any substitution: a picker opened because this terminal never
     // reported its session id, or a stored id was dropped as unusable.
     if (spec.note) {
@@ -1710,6 +1795,7 @@ function App() {
     {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={themeSetting} onTheme={setThemeSetting} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
       newTerminalAgent={defaultNewTerminalAgent} newTerminalAgentOptions={NEW_TERMINAL_AGENT_OPTIONS} onNewTerminalAgent={setDefaultNewTerminalAgent}
       codexArgs={defaultCodexArgs} onCodexArgs={setDefaultCodexArgs}
+      autoResumeOnStart={autoResumeOnStart} onAutoResumeOnStart={setAutoResumeOnStart}
       version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}
