@@ -149,6 +149,17 @@ function sanitizeState(parsed) {
     if (parsed.windowBounds.isMaximized === true) windowBounds.isMaximized = true;
     result.windowBounds = windowBounds;
   }
+  // Close-to-tray behavior. `ask` keeps showing the choice dialog on the next
+  // close; the balloon flag only suppresses the first-hide notification.
+  const CLOSE_TO_TRAY_PREFERENCES = new Set(["ask", "minimize-to-tray", "exit"]);
+  if (parsed.closeToTray && typeof parsed.closeToTray === "object") {
+    if (CLOSE_TO_TRAY_PREFERENCES.has(parsed.closeToTray.preference)) {
+      result.closeToTray = {
+        preference: parsed.closeToTray.preference,
+        balloonShown: parsed.closeToTray.balloonShown === true,
+      };
+    }
+  }
   return result;
 }
 

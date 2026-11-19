@@ -1,4 +1,4 @@
-import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, MessageChannelMain, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, screen, shell, Tray } from "electron";
 import type { MessageBoxOptions } from "electron";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { copyFile, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
-import type { AgentCliId, CliProgress, CliScan, CliPlan } from "../shared/types";
+import type { AgentCliId, CliProgress, CliScan, CliPlan, CloseToTraySettings, CloseToTrayPreference } from "../shared/types";
 
 const require = createRequire(import.meta.url);
 // electron-updater is CommonJS; a named ESM import fails at runtime with
@@ -83,6 +83,12 @@ let stateCache: PersistedState | null = null;
 let windowSaveTimer: NodeJS.Timeout | undefined;
 let updateConfigured = false;
 let quitPersisting = false;
+// Close-to-tray state. The tray keeps the app alive after the window is
+// "closed"; preference lives in state.json (`ask` shows the choice dialog
+// once and remembers the answer; `exit` restores the classic quit behavior).
+let tray: Tray | null = null;
+let trayBalloonShown = false;
+let closeToTrayPreference: CloseToTrayPreference = "ask";
 // Last update result, kept so the settings page can show it without
 // waiting for a new event (the renderer may open after the startup check).
 type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
@@ -172,6 +178,7 @@ interface PersistedState {
   autoResumeOnStart?: boolean;
   sidebarWidth?: number;
   windowBounds?: WindowBounds;
+  closeToTray?: CloseToTraySettings;
 }
 
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }
@@ -236,6 +243,134 @@ function scheduleWindowStateSave() {
     stateCache = { ...stateCache, windowBounds: bounds };
     void writeState(stateCache).catch((error) => console.error("[state] save failed", error));
   }, 400);
+}
+
+function persistCloseToTraySettings() {
+  if (!stateCache) return;
+  stateCache = { ...stateCache, closeToTray: { preference: closeToTrayPreference, balloonShown: trayBalloonShown } };
+  void writeState(stateCache).catch((error) => console.error("[state] close-to-tray save failed", error));
+}
+
+function trayIcon(): Electron.NativeImage {
+  // Prefer the packaged icon set; fall back to the executable's embedded icon
+  // so development runs still show something recognizable.
+  const candidates = app.isPackaged
+    ? [
+      path.join(process.resourcesPath, "icons", "icon-16.png"),
+      path.join(process.resourcesPath, "icons", "icon-32.png"),
+      path.join(__dirname, "../../icons/icon-16.png"),
+    ]
+    : [path.join(app.getAppPath(), "build/icons/icon-16.png")];
+  for (const candidate of candidates) {
+    const image = nativeImage.createFromPath(candidate);
+    if (!image.isEmpty()) return image;
+  }
+  return nativeImage.createEmpty();
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow(stateCache || defaultState());
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function createTray() {
+  if (tray || process.platform !== "win32") return;
+  const icon = trayIcon();
+  if (icon.isEmpty()) return;
+  tray = new Tray(icon);
+  tray.setToolTip("TermBeacon");
+  tray.on("click", () => showMainWindow());
+  tray.on("double-click", () => showMainWindow());
+  rebuildTrayMenu();
+}
+
+function rebuildTrayMenu() {
+  if (!tray) return;
+  const menu = Menu.buildFromTemplate([
+    { label: "显示主窗口", click: () => showMainWindow() },
+    { type: "separator" },
+    {
+      label: "关闭时驻留托盘",
+      type: "checkbox",
+      checked: closeToTrayPreference === "minimize-to-tray",
+      click: (item) => {
+        closeToTrayPreference = item.checked ? "minimize-to-tray" : "exit";
+        persistCloseToTraySettings();
+      },
+    },
+    { type: "separator" },
+    { label: "退出 TermBeacon", click: () => { void quitApplication(); } },
+  ]);
+  tray.setContextMenu(menu);
+}
+
+async function quitApplication() {
+  // Marks a user-initiated exit so the window close handler stops intercepting.
+  isQuitting = true;
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
+  app.quit();
+}
+
+async function handleWindowClose(event: Electron.Event): Promise<void> {
+  if (isQuitting || process.platform !== "win32") return;
+  if (closeToTrayPreference === "exit") return;
+  if (closeToTrayPreference === "ask") {
+    // One-time choice. "No" restores the classic quit-on-close behavior for
+    // every later close; "Yes" hides to the tray instead. On Windows the
+    // dialog must be synchronous or the window disappears behind it.
+    event.preventDefault();
+    const { response, checkboxChecked } = await dialog.showMessageBox(mainWindow!, {
+      type: "question",
+      buttons: ["驻留托盘", "退出程序"],
+      defaultId: 0,
+      cancelId: 1,
+      checkboxLabel: "记住我的选择，不再询问",
+      checkboxChecked: false,
+      noLink: true,
+      title: "TermBeacon",
+      message: "关闭窗口后要将 TermBeacon 驻留到任务栏托盘吗？",
+      detail: "驻留后终端与任务继续在后台运行，可从托盘图标随时恢复窗口或退出。",
+    });
+    const remember = checkboxChecked === true;
+    if (response === 0) {
+      closeToTrayPreference = "minimize-to-tray";
+    } else {
+      closeToTrayPreference = "exit";
+      if (remember) {
+        persistCloseToTraySettings();
+        return;
+      }
+      // Not remembered: quit right now, leave `ask` for the next launch.
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+    if (remember) persistCloseToTraySettings();
+  }
+  // Hide instead of closing. A first-time hide gets a balloon so the app does
+  // not look like it vanished from the taskbar. If the tray could not be
+  // created, keep the classic quit path so the app is never unreachable.
+  event.preventDefault();
+  createTray();
+  if (!tray) return;
+  mainWindow!.hide();
+  if (!trayBalloonShown && tray) {
+    trayBalloonShown = true;
+    persistCloseToTraySettings();
+    tray.displayBalloon({
+      iconType: "info",
+      title: "TermBeacon 仍在运行",
+      content: "窗口已驻留到任务栏托盘，终端与任务仍在后台运行。双击托盘图标可恢复窗口。",
+    });
+  }
 }
 
 function sendUpdateEvent(type: string, payload: Record<string, unknown> = {}) {
@@ -535,7 +670,7 @@ function registerMenu() {
         { role: "hide", label: "隐藏 TermBeacon" },
         { role: "hideOthers", label: "隐藏其他" },
         { type: "separator" },
-        { role: "quit", label: "退出" },
+        { label: "退出", click: () => { void quitApplication(); } },
       ],
     },
     {
@@ -596,6 +731,7 @@ function createWindow(savedState: PersistedState = stateCache || defaultState())
   mainWindow.on("move", scheduleWindowStateSave);
   mainWindow.on("maximize", scheduleWindowStateSave);
   mainWindow.on("unmaximize", scheduleWindowStateSave);
+  mainWindow.on("close", (event) => { void handleWindowClose(event); });
   mainWindow.webContents.on("did-start-loading", () => {
     rendererReady = false;
     try { rendererPort?.close(); } catch { /* renderer is reloading */ }
@@ -674,24 +810,40 @@ if (!hasSingleInstanceLock) {
   });
   app.whenReady().then(async () => {
     stateCache = await readState();
+    const traySettings = stateCache.closeToTray;
+    if (traySettings) {
+      closeToTrayPreference = traySettings.preference;
+      trayBalloonShown = traySettings.balloonShown;
+    }
     registerMenu();
     startPtyHost();
     createWindow(stateCache);
+    createTray();
     void checkForUpdatesNow();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(stateCache || defaultState()); });
   });
 }
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("window-all-closed", () => {
+  // Windows: the tray keeps the app alive after the window hides, so the
+  // classic quit-on-last-window only applies when nothing is resident.
+  if (process.platform !== "darwin" && !tray) app.quit();
+});
 app.on("before-quit", (event) => {
   if (!quitPersisting && stateCache) {
     event.preventDefault();
     quitPersisting = true;
     const bounds = currentWindowBounds();
     if (bounds) stateCache = { ...stateCache, windowBounds: bounds };
+    // Keep the latest close-to-tray choice with the rest of the state.
+    stateCache = { ...stateCache, closeToTray: { preference: closeToTrayPreference, balloonShown: trayBalloonShown } };
     void writeState(stateCache).catch(() => undefined).finally(() => app.quit());
     return;
   }
   isQuitting = true;
+  if (tray) {
+    tray.destroy();
+    tray = null;
+  }
   if (hostRestartTimer) clearTimeout(hostRestartTimer);
   if (hostConnectTimer) clearTimeout(hostConnectTimer);
   if (windowSaveTimer) clearTimeout(windowSaveTimer);
@@ -708,6 +860,14 @@ app.on("before-quit", (event) => {
 ipcMain.handle("state:load", async () => {
   if (!stateCache) stateCache = await readState();
   return stateCache;
+});
+ipcMain.handle("tray:get-settings", () => ({ preference: closeToTrayPreference, balloonShown: trayBalloonShown }));
+ipcMain.handle("tray:set-preference", (_event, preference: unknown) => {
+  if (preference !== "ask" && preference !== "minimize-to-tray" && preference !== "exit") return false;
+  closeToTrayPreference = preference;
+  persistCloseToTraySettings();
+  rebuildTrayMenu();
+  return true;
 });
 ipcMain.handle("cli:scan", () => agentManager().scan());
 ipcMain.handle("cli:plan", (_event, request) => agentManager().plan(request));

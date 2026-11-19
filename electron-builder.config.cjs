@@ -49,6 +49,7 @@ module.exports = {
     { from: "hooks/pi/termbeacon.js", to: "termbeacon-hooks/pi/termbeacon.js" },
     { from: "hooks/shared/status-reporter.js", to: "termbeacon-hooks/shared/status-reporter.js" },
     { from: "scripts/termbeacon-hook.cjs", to: "termbeacon-hooks/termbeacon-hook.cjs" },
+    { from: "build/icons", to: "icons" },
   ],
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],

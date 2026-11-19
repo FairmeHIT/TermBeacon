@@ -189,6 +189,8 @@ contextBridge.exposeInMainWorld("termbeacon", {
   getResumeSpec: (request) => ipcRenderer.invoke("session:resume-spec", request),
   restartHost: (request) => ipcRenderer.invoke("pty:restart-host", request),
   saveState: (state) => ipcRenderer.invoke("state:save", state),
+  getTraySettings: () => ipcRenderer.invoke("tray:get-settings"),
+  setTrayPreference: (preference) => ipcRenderer.invoke("tray:set-preference", preference),
   createTerminal: (request) => {
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {

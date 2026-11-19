@@ -96,6 +96,42 @@ test("preserves the automatic session-resume preference", () => {
   assert.equal(invalid.autoResumeOnStart, undefined);
 });
 
+test("preserves the close-to-tray preference and balloon flag", () => {
+  for (const preference of ["ask", "minimize-to-tray", "exit"]) {
+    const result = sanitizeState({
+      schemaVersion: 1,
+      workspaces: [],
+      terminals: [],
+      closeToTray: { preference, balloonShown: true },
+    });
+    assert.deepEqual(result.closeToTray, { preference, balloonShown: true });
+  }
+  // Unknown preference values drop the whole block so the ask dialog returns.
+  const invalidPreference = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    closeToTray: { preference: "hover", balloonShown: true },
+  });
+  assert.equal(invalidPreference.closeToTray, undefined);
+  // Missing balloon flag coerces to false rather than staying undefined.
+  const coerced = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    closeToTray: { preference: "minimize-to-tray" },
+  });
+  assert.deepEqual(coerced.closeToTray, { preference: "minimize-to-tray", balloonShown: false });
+  // A malformed block is dropped entirely.
+  const malformed = sanitizeState({
+    schemaVersion: 1,
+    workspaces: [],
+    terminals: [],
+    closeToTray: "yes",
+  });
+  assert.equal(malformed.closeToTray, undefined);
+});
+
 test("preserves workspace folder paths and manual name pins", () => {
   const result = sanitizeState({
     schemaVersion: 1,
