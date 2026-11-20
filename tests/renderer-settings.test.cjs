@@ -93,23 +93,20 @@ test("workspace removal remains available for the active workspace", () => {
   assert.doesNotMatch(app, /workspace\.id !== activeWorkspaceId && <span className="workspace-remove"/);
 });
 
-test("terminal rows have no pin toggle and batch clean targets visible terminals", () => {
+test("terminal rows have no pin toggle", () => {
   // No pin icon, no toggleRowPin, no rowPinned field anywhere.
   assert.doesNotMatch(app, /terminal-pin/);
   assert.doesNotMatch(app, /PinIcon/);
   assert.doesNotMatch(app, /toggleRowPin/);
   assert.doesNotMatch(app, /rowPinned/);
   assert.doesNotMatch(sharedTypes, /rowPinned\?: boolean/);
-  // The batch clean button renders when there are visible terminals.
-  assert.match(app, /workspaceTerminals\.length > 0 && <button className="workspace-add terminal-batch-clean"/);
-  const batch = app.match(/async function removeWorkspaceTerminals\(\) \{([\s\S]*?)\n  \}/)?.[1];
-  assert.ok(batch, "removeWorkspaceTerminals must exist");
-  // All visible rows are targeted, and the action confirms first.
-  assert.match(batch, /const targets = workspaceTerminals;/);
-  assert.match(batch, /window\.termbeacon\.confirm\(/);
+  // The visible-terminal batch clean was removed; deletion happens from the
+  // hidden terminal group instead.
+  assert.doesNotMatch(app, /terminal-batch-clean/);
+  assert.doesNotMatch(app, /removeWorkspaceTerminals/);
+  assert.doesNotMatch(styles, /\.terminal-batch-clean/);
   // No pin styles remain.
   assert.doesNotMatch(styles, /\.terminal-pin/);
-  assert.match(styles, /\.terminal-batch-clean:hover\s*\{/);
 });
 
 test("row close buttons only appear while hovering or focusing the item", () => {

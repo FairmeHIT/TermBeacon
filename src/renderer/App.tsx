@@ -352,15 +352,6 @@ function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 }
 
-// A small broom for the batch-clean action.
-function BroomIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M19 3 12.5 9.5" />
-    <path d="M11 8c2.5 0 5 2.5 5 5l-5 5H6l-3 4" />
-    <path d="M11 8 9 10l5 5 2-2c0-2.76-2.24-5-5-5Z" />
-  </svg>;
-}
-
 // "Open outside the app": an arrow leaving a window.
 function OpenInExplorerIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1886,66 +1877,6 @@ function App() {
     if (nextActiveId) focusTerminalView(nextActiveId);
   }
 
-  // Delete every visible (non-hidden) terminal of the active workspace in one
-  // action. Reuses the single-delete cleanup chain per terminal, then repairs
-  // the workspace membership and active selection in one pass.
-  async function removeWorkspaceTerminals() {
-    const owner = activeWorkspace;
-    if (!owner) return;
-    const targets = workspaceTerminals;
-    if (targets.length === 0) return;
-    const confirmed = await window.termbeacon.confirm({
-      message: t("删除工作区「{name}」中未隐藏的 {count} 个终端？正在运行的进程会被停止。", { name: displayWorkspaceName(owner), count: targets.length }),
-      okLabel: t("删除"),
-      cancelLabel: t("取消"),
-    });
-    if (!confirmed) return;
-    const removedIds = new Set(targets.map((terminal) => terminal.id));
-    for (const id of removedIds) {
-      window.termbeacon.forget(id);
-      try { terminalViews.current.get(id)?.dispose(); } catch { /* view may already be gone */ }
-      terminalViews.current.delete(id);
-      fitAddons.current.delete(id);
-      consumedLocal.current.delete(id);
-      outputStreams.current.delete(id);
-      activityAt.current.delete(id);
-      terminalNodes.current.delete(id);
-      pendingHistory.current.delete(id);
-      alternateScreenByTerminal.current.delete(id);
-      const pendingWheel = pendingOpenCodeWheel.current.get(id);
-      if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
-      pendingOpenCodeWheel.current.delete(id);
-      taskTitles.current.delete(id);
-      agentTypeByTerminal.current.delete(id);
-      lastInput.current.delete(id);
-      inputBuffers.current.delete(id);
-      sentSizes.current.delete(id);
-      pinnedTitles.current.delete(id);
-      const pendingResize = resizeTimers.current.get(id);
-      if (pendingResize) window.clearTimeout(pendingResize);
-      resizeTimers.current.delete(id);
-      void window.termbeacon.removeHistory(id);
-    }
-    setTasks((items) => items.filter((task) => !removedIds.has(task.terminalId)));
-    const remainingIds = owner.terminalIds.filter((id) => !removedIds.has(id));
-    setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: remainingIds } : workspace));
-    if (remainingIds.length === 0) {
-      // The workspace keeps at least one terminal, mirroring the single-delete
-      // rule, so batch-deleting everything does not leave an empty sidebar.
-      const replacementCwd = owner.cwd && isValidCwd(owner.cwd) ? owner.cwd : DEFAULT_CWD;
-      const replacement = newTerminal(terminals.length, defaultShell, replacementCwd);
-      setTerminals((items) => [...items.filter((item) => !removedIds.has(item.id)), replacement]);
-      setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
-      setActiveId(replacement.id);
-      focusTerminalView(replacement.id);
-      return;
-    }
-    const nextActiveId = removedIds.has(activeId) ? remainingIds[0] : activeId;
-    setActiveId(nextActiveId);
-    setTerminals((items) => items.filter((item) => !removedIds.has(item.id)));
-    if (nextActiveId) focusTerminalView(nextActiveId);
-  }
-
   function syncAgentTaskTitle(id: string, prompt: string) {
     if (pinnedTitles.current.has(id)) return;
     const agentType = agentTypeByTerminal.current.get(id);
@@ -2010,7 +1941,6 @@ function App() {
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("终端")}</span>
-          {workspaceTerminals.length > 0 && <button className="workspace-add terminal-batch-clean" onClick={() => void removeWorkspaceTerminals()} title={t("删除本工作区所有未隐藏的终端")} aria-label={t("删除本工作区所有未隐藏的终端")}><BroomIcon /></button>}
           <button className="workspace-add" onClick={addTerminal} title={t("新建终端")} aria-label={t("新建终端")}><PlusIcon /></button>
         </div>
         <div className="terminal-list">

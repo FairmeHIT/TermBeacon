@@ -619,9 +619,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--panel-active);
   box-shadow: inset 2px 0 0 var(--accent);
 }
-/* Batch clean for visible terminals: reuses the header add-button slot but
-   warns with the danger palette on hover. */
-.terminal-batch-clean:hover { color: var(--danger); background: var(--danger-soft); }
 .terminal-item-hidden { opacity: .72; }
 .terminal-item-hidden:hover,
 .terminal-item-hidden:focus-visible { opacity: 1; }
