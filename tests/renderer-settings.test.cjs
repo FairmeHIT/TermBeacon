@@ -657,9 +657,10 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   assert.doesNotMatch(section, /workspace-hidden-label|workspace-hidden-count|workspace-toggle-lamp/);
   assert.match(section, /<ChevronIcon open \/>/);
   // Both lists reuse one card so a workspace does not change shape on the way
-  // down, and the active row never offers to hide itself.
+  // down. The active row also offers to hide itself: collapsing it falls back
+  // to the next surviving workspace so the terminal panel stays pointed.
   assert.match(app, /function workspaceRow\(workspace: Workspace, hidden: boolean\)/);
-  assert.match(app, /: !isActive && <span className="workspace-hide"/);
+  assert.match(app, /: <span className="workspace-hide"/);
   assert.match(app, /<span className="workspace-unhide"/);
   const toggle = styles.match(/\.workspace-hidden-toggle\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(toggle, "hidden toggle styles must exist");

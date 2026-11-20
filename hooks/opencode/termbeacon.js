@@ -177,11 +177,18 @@ export default {
         // Working. A new prompt/execution event updates `reporter.latest` and
         // is the authoritative signal that a new turn has started.
         const latestStatus = reporter.latest?.status;
+        // A session's `outcome` field persists across turns. Re-reporting a
+        // stale `failed`/`error` outcome from a previous turn would overwrite
+        // a newer `completed` delivered by the event stream (e.g. a successful
+        // retry after a transient tool failure), leaving the sidebar stuck on
+        // the error lamp even though the task finished normally. Only let a
+        // snapshot repair a missing terminal state, never downgrade a known one.
         const status = isActive
           ? latestStatus === "waiting" ? "waiting"
             : latestStatus === "completed" || latestStatus === "failed" ? undefined
               : "running"
-          : statusOf(info?.outcome);
+          : (latestStatus === "completed" || latestStatus === "failed"
+            ? undefined : statusOf(info?.outcome));
         if (status) reporter.report("session.snapshot", status, selected);
       } catch { /* The next poll/reconnect retries the snapshot. */ }
       finally { refreshing = false; }

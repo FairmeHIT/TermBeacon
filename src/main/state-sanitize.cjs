@@ -61,6 +61,7 @@ function sanitizeState(parsed) {
       ...(SHELL_TYPES.has(terminal.shell) ? { shell: terminal.shell } : {}),
       ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
       ...(typeof terminal.rowPinned === "boolean" ? { rowPinned: terminal.rowPinned } : {}),
+      ...(typeof terminal.hidden === "boolean" ? { hidden: terminal.hidden } : {}),
       ...(typeof terminal.lastSessionId === "string"
         && terminal.lastSessionAgent === terminal.agentType
         && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId)
@@ -137,10 +138,11 @@ function sanitizeState(parsed) {
   // Cell-sized opencode themes are an opt-out: older states regain the default.
   if (typeof parsed.opencodeThemeSync === "boolean") result.opencodeThemeSync = parsed.opencodeThemeSync;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
-  // Fraction of the sidebar height the workspace block may claim. Clamped to
-  // keep both sections usable; anything else falls back to the CSS default.
+  // Fraction of the sidebar height the workspace block may claim. Clamped to a
+  // generous band: the renderer tightens the live drag bounds from the actual
+  // layout, so the persisted value only needs a sanity guard.
   if (Number.isFinite(parsed.workspaceSectionRatio)) {
-    result.workspaceSectionRatio = Math.min(0.8, Math.max(0.2, parsed.workspaceSectionRatio));
+    result.workspaceSectionRatio = Math.min(0.95, Math.max(0.1, parsed.workspaceSectionRatio));
   }
   if (parsed.windowBounds && typeof parsed.windowBounds === "object") {
     const width = Number.isFinite(parsed.windowBounds.width) ? Math.round(parsed.windowBounds.width) : 1280;

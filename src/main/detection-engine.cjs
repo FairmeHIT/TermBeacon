@@ -350,6 +350,15 @@ function createDetector(agentType = "generic", emit = () => {}) {
       runtime.hookOccurredAt = metadata.occurredAt;
     }
     if (runtime.hookStatus === status) return true;
+    // A `failed` that arrives after `completed` (without an intervening
+    // `running`) is almost always a stale snapshot or a delayed network
+    // retransmission. Real failures are preceded by a `running`/`started`
+    // event that re-arms the turn. Letting a late `failed` overwrite a
+    // known completion would leave the sidebar stuck on the error lamp
+    // even though the task finished normally.
+    if (config.id === "opencode"
+      && status === "failed"
+      && runtime.hookStatus === "completed") return false;
     resetTask();
     runtime.hookStatus = status;
     if (status === "started" || status === "running") {

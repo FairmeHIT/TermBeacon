@@ -91,7 +91,7 @@ test("preserves the terminal row pin and drops malformed values", () => {
   assert.equal(invalid.terminals[0].rowPinned, undefined);
 });
 
-test("clamps the workspace/terminal section ratio into a usable band", () => {  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.2], [1.2, 0.8], [-3, 0.2], [0.42, 0.42]]) {
+test("clamps the workspace/terminal section ratio into a usable band", () => {  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.1], [1.2, 0.95], [-3, 0.1], [0.42, 0.42]]) {
     const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionRatio: input });
     assert.equal(result.workspaceSectionRatio, expected);
   }

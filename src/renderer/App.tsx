@@ -411,6 +411,7 @@ function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>(() => [{ id: "default", name: "默认工作区", terminalIds: [], lastUsedAt: Date.now() }]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>("default");
   const [hiddenWorkspacesOpen, setHiddenWorkspacesOpen] = useState(false);
+  const [hiddenTerminalsOpen, setHiddenTerminalsOpen] = useState(false);
   const [activeId, setActiveId] = useState<string>(() => terminals[0].id);
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [hydrated, setHydrated] = useState(false);
@@ -524,17 +525,14 @@ function App() {
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
-  // Pinned rows stay on top (by recency within the pinned group), then the
-  // rest by recency. Usage means real activity: PTY output or a submitted
-  // task, not merely clicking to view. Live output timestamps win; the
-  // persisted lastActivityAt covers terminals that have not produced output
-  // in this session. Array.prototype.sort is stable in every runtime we
-  // target, so terminals with the same timestamp keep their creation order.
-  const workspaceTerminals = useMemo(() => terminals
+  // Pinned rows stay on top, then the rest by creation order (newest first).
+  // Stable and predictable: output and task events never reshuffle rows.
+  // Hidden terminals are split into a separate group rendered at the bottom.
+  const sortedWorkspaceTerminals = useMemo(() => terminals
     .filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id))
-    .map((terminal, index) => ({ terminal, index, usedAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0 }))
-    .sort((a, b) => Number(b.terminal.rowPinned === true) - Number(a.terminal.rowPinned === true) || b.usedAt - a.usedAt || a.index - b.index)
-    .map((entry) => entry.terminal), [terminals, activeWorkspace]);
+    .sort((a, b) => Number(b.rowPinned === true) - Number(a.rowPinned === true) || b.lastActivityAt - a.lastActivityAt), [terminals, activeWorkspace]);
+  const workspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => !terminal.hidden), [sortedWorkspaceTerminals]);
+  const hiddenWorkspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => terminal.hidden), [sortedWorkspaceTerminals]);
   // One lamp per workspace, derived from the terminals it owns.
   const workspaceLampStates = useMemo(() => {
     const lamps = new Map<string, AgentState>();
@@ -743,7 +741,7 @@ function App() {
         ? normalizePiCursorOutput(event.data, initialAlternate).normalData
         : event.data;
       view?.write(renderData, () => window.termbeacon.acknowledgeOutput(receipt));
-      activityAt.current.set(event.terminalId, event.at);
+      if (!event.replay) activityAt.current.set(event.terminalId, event.at);
       if (!event.replay && screen.normalData) {
         const pending = pendingHistory.current.get(event.terminalId) || { chunks: [], start: 0, length: 0 };
         pending.chunks.push(screen.normalData);
@@ -1154,6 +1152,7 @@ function App() {
         title: terminal.title,
         titlePinned: terminal.titlePinned === true,
         rowPinned: terminal.rowPinned === true,
+        hidden: terminal.hidden === true,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
         agentType: terminal.agentType,
@@ -1316,16 +1315,32 @@ function App() {
   // Vertical divider between the workspace and terminal blocks. The position
   // is stored as a fraction of the sidebar's inner height so it survives
   // window and sidebar resizes; persistence rides the existing state save.
+  // The drag bounds are computed from the live layout so the divider can travel
+  // the full height minus what each section needs to stay usable: on tall
+  // sidebars a fixed 0.2–0.8 band would stop the divider well short of the
+  // bottom because the brand row and footer eat into the space the ratio never
+  // accounts for.
   function beginSectionResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    const sidebar = event.currentTarget.parentElement;
+    const resizer = event.currentTarget;
+    const sidebar = resizer.parentElement;
     if (!sidebar) return;
     const total = sidebar.clientHeight;
     if (total <= 0) return;
+    // Fixed siblings outside the workspace/terminal split: brand row at the top
+    // and the footer at the bottom, plus the resizer strip itself.
+    const brand = sidebar.querySelector<HTMLElement>(".brand-row");
+    const footer = sidebar.querySelector<HTMLElement>(".sidebar-footer");
+    const fixedHeight = (brand?.offsetHeight ?? 0) + (footer?.offsetHeight ?? 0) + resizer.offsetHeight;
+    // Each section keeps room for its header plus at least one row so neither
+    // side collapses to nothing; the list inside scrolls when it is squeezed.
+    const minSectionHeight = 80;
+    const maxRatio = Math.max(0.5, (total - fixedHeight - minSectionHeight) / total);
+    const minRatio = Math.min(0.5, Math.max(0.1, minSectionHeight / total));
     const startY = event.clientY;
     const startRatio = workspaceRatio ?? null;
     const move = (moveEvent: PointerEvent) => {
-      const next = Math.min(0.8, Math.max(0.2, (startRatio ?? fallbackWorkspaceRatio()) + (moveEvent.clientY - startY) / total));
+      const next = Math.min(maxRatio, Math.max(minRatio, (startRatio ?? fallbackWorkspaceRatio()) + (moveEvent.clientY - startY) / total));
       setWorkspaceRatio(next);
     };
     const stop = () => {
@@ -1346,7 +1361,7 @@ function App() {
     const section = document.querySelector<HTMLElement>(".workspaces-section");
     const sidebar = section?.parentElement;
     if (!section || !sidebar || sidebar.clientHeight <= 0) return 0.42;
-    return Math.min(0.8, Math.max(0.2, section.getBoundingClientRect().height / sidebar.clientHeight));
+    return Math.min(0.95, Math.max(0.1, section.getBoundingClientRect().height / sidebar.clientHeight));
   }
 
   function restartHost() {
@@ -1656,8 +1671,8 @@ function App() {
     // the first surviving member, then to any terminal in the workspace.
     const remembered = target?.lastActiveTerminalId;
     const nextTerminalId = [remembered, target?.terminalIds[0]]
-      .find((candidate) => candidate && members.has(candidate) && terminals.some((terminal) => terminal.id === candidate))
-      ?? terminals.find((terminal) => members.has(terminal.id))?.id;
+      .find((candidate) => candidate && members.has(candidate) && terminals.some((terminal) => terminal.id === candidate && !terminal.hidden))
+      ?? terminals.find((terminal) => members.has(terminal.id) && !terminal.hidden)?.id;
     if (nextTerminalId) {
       setActiveId(nextTerminalId);
       // The workspace switch also brings that terminal on screen, so its
@@ -1697,10 +1712,14 @@ function App() {
   }
 
   // Manual collapse is the only way a workspace leaves the visible list at
-  // once. The active one stays put: hiding it would leave the terminal panel
-  // showing a workspace the sidebar cannot point at.
+  // once. Collapsing the active one picks the next surviving workspace so the
+  // terminal panel never points at a workspace the sidebar has hidden.
   function collapseWorkspace(id: string) {
-    if (id === activeWorkspaceId) return;
+    if (id === activeWorkspaceId) {
+      const survivor = workspaces.find((workspace) => workspace.id !== id && !workspace.hidden);
+      if (survivor) setActiveWorkspaceId(survivor.id);
+      else return;
+    }
     setWorkspaces((items) => hideWorkspace(items, id));
   }
 
@@ -1775,6 +1794,79 @@ function App() {
   // delete of unpinned terminals.
   function toggleRowPin(id: string) {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, rowPinned: !item.rowPinned } : item));
+  }
+
+  // Collapse a terminal into the hidden group at the bottom of the list.
+  // Hiding the active one picks the next visible terminal so the panel never
+  // points at a hidden terminal.
+  function hideTerminal(id: string) {
+    setTerminals((items) => items.map((item) => item.id === id ? { ...item, hidden: true } : item));
+    if (id === activeId) {
+      const next = sortedWorkspaceTerminals.find((terminal) => terminal.id !== id && !terminal.hidden);
+      if (next) setActiveId(next.id);
+    }
+  }
+
+  // Restore a hidden terminal back into the visible list.
+  function restoreTerminal(id: string) {
+    setTerminals((items) => items.map((item) => item.id === id ? { ...item, hidden: false } : item));
+  }
+
+  // Delete every hidden terminal of the active workspace in one action.
+  // Reuses the single-delete cleanup chain per terminal.
+  async function removeHiddenTerminals() {
+    const owner = activeWorkspace;
+    if (!owner) return;
+    const targets = hiddenWorkspaceTerminals;
+    if (targets.length === 0) return;
+    const confirmed = await window.termbeacon.confirm({
+      message: t("删除工作区「{name}」中隐藏的 {count} 个终端？正在运行的进程会被停止。", { name: displayWorkspaceName(owner), count: targets.length }),
+      okLabel: t("删除"),
+      cancelLabel: t("取消"),
+    });
+    if (!confirmed) return;
+    const removedIds = new Set(targets.map((terminal) => terminal.id));
+    for (const id of removedIds) {
+      window.termbeacon.forget(id);
+      try { terminalViews.current.get(id)?.dispose(); } catch { /* view may already be gone */ }
+      terminalViews.current.delete(id);
+      fitAddons.current.delete(id);
+      consumedLocal.current.delete(id);
+      outputStreams.current.delete(id);
+      activityAt.current.delete(id);
+      terminalNodes.current.delete(id);
+      pendingHistory.current.delete(id);
+      alternateScreenByTerminal.current.delete(id);
+      const pendingWheel = pendingOpenCodeWheel.current.get(id);
+      if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
+      pendingOpenCodeWheel.current.delete(id);
+      taskTitles.current.delete(id);
+      agentTypeByTerminal.current.delete(id);
+      lastInput.current.delete(id);
+      inputBuffers.current.delete(id);
+      sentSizes.current.delete(id);
+      pinnedTitles.current.delete(id);
+      const pendingResize = resizeTimers.current.get(id);
+      if (pendingResize) window.clearTimeout(pendingResize);
+      resizeTimers.current.delete(id);
+      void window.termbeacon.removeHistory(id);
+    }
+    setTasks((items) => items.filter((task) => !removedIds.has(task.terminalId)));
+    const remainingIds = owner.terminalIds.filter((id) => !removedIds.has(id));
+    setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: remainingIds } : workspace));
+    if (remainingIds.length === 0) {
+      const replacementCwd = owner.cwd && isValidCwd(owner.cwd) ? owner.cwd : DEFAULT_CWD;
+      const replacement = newTerminal(terminals.length, defaultShell, replacementCwd);
+      setTerminals((items) => [...items.filter((item) => !removedIds.has(item.id)), replacement]);
+      setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
+      setActiveId(replacement.id);
+      focusTerminalView(replacement.id);
+      return;
+    }
+    const nextActiveId = removedIds.has(activeId) ? remainingIds[0] : activeId;
+    setActiveId(nextActiveId);
+    setTerminals((items) => items.filter((item) => !removedIds.has(item.id)));
+    if (nextActiveId) focusTerminalView(nextActiveId);
   }
 
   // Delete every unpinned terminal of the active workspace in one action.
@@ -1870,7 +1962,7 @@ function App() {
         {isValidCwd(workspace.cwd) && <span className="workspace-open" role="button" onClick={(event) => { event.stopPropagation(); void openWorkspaceFolder(workspace); }} title={t("在文件资源管理器中打开")} aria-label={t("在文件资源管理器中打开「{name}」", { name })}><OpenInExplorerIcon /></span>}
         {hidden
           ? <span className="workspace-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreWorkspace(workspace.id); }} title={t("取消隐藏「{name}」", { name })} aria-label={t("取消隐藏「{name}」", { name })}><ChevronIcon open /></span>
-          : !isActive && <span className="workspace-hide" role="button" onClick={(event) => { event.stopPropagation(); collapseWorkspace(workspace.id); }} title={t("收起工作区「{name}」", { name })} aria-label={t("收起工作区「{name}」", { name })}><ChevronIcon open /></span>}
+          : <span className="workspace-hide" role="button" onClick={(event) => { event.stopPropagation(); collapseWorkspace(workspace.id); }} title={t("收起工作区「{name}」", { name })} aria-label={t("收起工作区「{name}」", { name })}><ChevronIcon open /></span>}
         {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name })} role="button" aria-label={t("删除工作区「{name}」", { name })}>×</span>}
       </span>
     </button>;
@@ -1911,9 +2003,25 @@ function App() {
           {terminal.id === activeId && <span className="active-mark">●</span>}
           <span className={`terminal-pin ${terminal.rowPinned ? "pinned" : ""}`} role="button" onClick={(event) => { event.stopPropagation(); toggleRowPin(terminal.id); }} title={terminal.rowPinned ? t("取消固定") : t("固定")} aria-label={terminal.rowPinned ? t("取消固定「{title}」", { title: displayTerminalTitle(terminal) }) : t("固定「{title}」", { title: displayTerminalTitle(terminal) })}><PinIcon /></span>
           {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
+          <span className="terminal-hide" role="button" onClick={(event) => { event.stopPropagation(); hideTerminal(terminal.id); }} title={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
         </button>)}
         </div>
+        {/* Hidden terminals: collapsed into a quiet group at the bottom, mirroring
+            the workspace hidden group. Supports per-terminal restore and a batch
+            delete of all hidden terminals in this workspace. */}
+        {hiddenWorkspaceTerminals.length > 0 && <button className={`workspace-hidden-toggle ${hiddenTerminalsOpen ? "expanded" : ""}`} onClick={() => setHiddenTerminalsOpen((open) => !open)} aria-expanded={hiddenTerminalsOpen} aria-controls="hidden-terminals" title={hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端")} aria-label={hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端")}>
+          <ChevronIcon open />
+        </button>}
+        {hiddenTerminalsOpen && hiddenWorkspaceTerminals.length > 0 && <div className="terminal-list terminal-hidden-list" id="hidden-terminals">
+          {hiddenWorkspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item terminal-item-hidden`} onClick={() => { restoreTerminal(terminal.id); selectTerminal(terminal.id); }}>
+            <span className={`status-dot ${stateClass[terminal.state]}`} />
+            <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
+            <span className="terminal-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreTerminal(terminal.id); }} title={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
+            <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
+          </button>)}
+          <button className="terminal-hidden-clean" onClick={() => void removeHiddenTerminals()} title={t("删除本工作区所有隐藏的终端")} aria-label={t("删除本工作区所有隐藏的终端")}>{t("删除全部隐藏终端")}</button>
+        </div>}
       </section>
       {hostDown && <div className="host-alert">
         <span>{hostMessage ? settingsText(settingsLocale, hostMessage) : t("PTY Host 已断开")}</span>

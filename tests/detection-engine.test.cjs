@@ -427,6 +427,18 @@ test("native failure is sticky across output and recovers from a native retry", 
   assert.equal(detector.runtime.state, "working");
 });
 
+test("late failed snapshot cannot overwrite a native completion", () => {
+  const { detector } = makeAgent("opencode");
+  detector.hook("session.execution.failed", "failed");
+  detector.hook("session.status", "running");
+  detector.hook("session.execution.succeeded", "completed");
+  assert.equal(detector.runtime.state, "completed-unseen");
+  // A stale snapshot or delayed retransmission reporting `failed` after
+  // completion must not relight the error lamp.
+  assert.equal(detector.hook("session.snapshot", "failed"), false);
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
 test("legacy Claude child completion cannot complete the main turn", () => {
   const { detector } = makeAgent("claude");
   detector.hook("UserPromptSubmit", "running");

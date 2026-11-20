@@ -398,8 +398,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   color: var(--muted);
   border-radius: 4px;
@@ -409,8 +409,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   transition: opacity .12s ease, color .12s ease;
 }
 .workspace-open svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -429,12 +429,12 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 14px;
+  font-size: 15px;
+  line-height: 18px;
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
@@ -522,8 +522,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   color: var(--muted);
   border-radius: 4px;
@@ -534,8 +534,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .workspace-unhide { opacity: 1; visibility: visible; }
 .workspace-hide svg,
 .workspace-unhide svg {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -597,12 +597,16 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   line-height: 18px;
   text-align: center;
   border-radius: 4px;
-  background: var(--panel-active);
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 4px var(--panel-soft);
 }
+.terminal-item.active .terminal-remove { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 .terminal-item:hover .terminal-remove, .terminal-item:focus-within .terminal-remove { display: inline; }
-.terminal-remove:hover { color: var(--danger); background: var(--danger-soft); }
+.terminal-remove:hover { color: var(--danger); background: var(--danger-soft); box-shadow: none; }
 /* Pin toggle: hidden like the remove button until hover, but a pinned row
-   always shows it highlighted so the state is visible without hovering. */
+   always shows it highlighted so the state is visible without hovering.
+   The solid box-shadow halo matches the workspace overlay so the button
+   never reads as a transparent hole over the row text behind it. */
 .terminal-pin {
   position: absolute;
   top: 6px;
@@ -613,12 +617,14 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   padding: 2px;
   color: var(--muted);
   border-radius: 4px;
-  background: var(--panel-active);
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 4px var(--panel-soft);
   cursor: pointer;
 }
 .terminal-pin svg { width: 12px; height: 12px; }
+.terminal-item.active .terminal-pin { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 .terminal-item:hover .terminal-pin, .terminal-item:focus-within .terminal-pin { display: inline-flex; align-items: center; justify-content: center; }
-.terminal-pin:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.terminal-pin:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .terminal-pin.pinned {
   display: inline-flex;
   align-items: center;
@@ -629,6 +635,53 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 /* Batch clean for unpinned terminals: reuses the header add-button slot but
    warns with the danger palette on hover. */
 .terminal-batch-clean:hover { color: var(--danger); background: var(--danger-soft); }
+/* Hide button on a visible terminal row: same placement and halo as the pin
+   and remove buttons, hidden until hover. */
+.terminal-hide,
+.terminal-unhide {
+  position: absolute;
+  top: 6px;
+  right: 52px;
+  display: none;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: var(--muted);
+  border-radius: 4px;
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 4px var(--panel-soft);
+  cursor: pointer;
+}
+.terminal-hide svg,
+.terminal-unhide svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.terminal-item:hover .terminal-hide,
+.terminal-item:focus-within .terminal-hide { display: inline-flex; align-items: center; justify-content: center; }
+.terminal-item.active .terminal-hide { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
+.terminal-hide:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+/* In the hidden group the unhide button is always visible: that group is
+   where the row lives, so the way back out must not require hovering. */
+.terminal-unhide { display: inline-flex; align-items: center; justify-content: center; right: 30px; }
+.terminal-unhide svg { transform: rotate(180deg); }
+.terminal-unhide:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
+.terminal-item-hidden { opacity: .72; }
+.terminal-item-hidden:hover,
+.terminal-item-hidden:focus-visible { opacity: 1; }
+.terminal-hidden-list { flex: 0 1 auto; max-height: 200px; margin-top: 2px; }
+/* Batch delete button at the bottom of the hidden terminal group. */
+.terminal-hidden-clean {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  transition: color .12s ease, background-color .12s ease, border-color .12s ease;
+}
+.terminal-hidden-clean:hover { color: var(--danger); border-color: var(--border); background: var(--danger-soft); }
 .terminal-resume {
   position: absolute;
   right: 30px;
@@ -639,9 +692,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   line-height: 16px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--panel-active);
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 4px var(--panel-soft);
   cursor: pointer;
 }
+.terminal-item.active .terminal-resume { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 .terminal-resume:hover { color: var(--text); border-color: var(--accent); }
 .status-dot {
   position: relative;
