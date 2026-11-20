@@ -515,7 +515,15 @@ function App() {
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
-  const workspaceTerminals = useMemo(() => terminals.filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id)), [terminals, activeWorkspace]);
+  // Most recently used first. Live output timestamps win; the persisted
+  // lastActivityAt covers terminals that have not produced output in this
+  // session. Array.prototype.sort is stable in every runtime we target, so
+  // terminals with the same timestamp keep their creation order.
+  const workspaceTerminals = useMemo(() => terminals
+    .filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id))
+    .map((terminal, index) => ({ terminal, index, usedAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0 }))
+    .sort((a, b) => b.usedAt - a.usedAt || a.index - b.index)
+    .map((entry) => entry.terminal), [terminals, activeWorkspace]);
   // One lamp per workspace, derived from the terminals it owns.
   const workspaceLampStates = useMemo(() => {
     const lamps = new Map<string, AgentState>();
@@ -1469,6 +1477,8 @@ function App() {
 
   function markTerminalViewed(id: string) {
     window.termbeacon.viewed(id);
+    // Viewing a terminal is usage: it floats the row to the top of the list.
+    activityAt.current.set(id, Math.max(Date.now(), activityAt.current.get(id) ?? 0));
     setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
   }
 
