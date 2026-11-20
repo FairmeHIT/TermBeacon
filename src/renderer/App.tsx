@@ -70,7 +70,8 @@ declare global {
       checkForUpdates(): Promise<UpdateStatus>;
       getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
       restartHost(request?: { force: boolean }): Promise<boolean>;
-      createTerminal(request: unknown): Promise<unknown>;
+      createTerminal(request: unknown, options?: { priority?: boolean }): Promise<unknown>;
+      prioritizeCreate(terminalId: string): void;
       write(request: unknown): void;
       launch(request: unknown): void;
       resize(request: unknown): void;
@@ -308,6 +309,8 @@ function newTerminal(index: number, shell: ShellType = DEFAULT_SHELL, cwd: strin
 }
 
 const MAX_TITLE_LENGTH = 60;
+// Each sidebar section keeps its header plus one row while the other grows.
+const SECTION_MIN_HEIGHT = 80;
 
 function normalizeTitleInput(value: string): string {
   return value.trim().slice(0, MAX_TITLE_LENGTH);
@@ -435,9 +438,15 @@ function App() {
   const [hostDown, setHostDown] = useState(false);
   const [hostMessage, setHostMessage] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(300);
-  // Share of the sidebar claimed by the workspace block (0.2-0.8). The
-  // terminals block takes the rest; the divider between them is draggable.
-  const [workspaceRatio, setWorkspaceRatio] = useState<number | null>(null);
+  // Pixel height of the workspace block. A pixel height (not a ratio of the
+  // sidebar) is what keeps the divider glued to the pointer: the terminal block
+  // is the only growing flex item, so its content (one terminal or twenty)
+  // never competes with the workspace block for the split.
+  const [workspaceHeight, setWorkspaceHeight] = useState<number | null>(null);
+  // Older state files saved the split as a ratio; convert it once the sidebar
+  // has a real measured height.
+  const legacyWorkspaceRatio = useRef<number | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
   const [updateState, setUpdateState] = useState<UpdateStatus | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [appPackaged, setAppPackaged] = useState(true);
@@ -623,7 +632,8 @@ function App() {
         .map((task) => [task.id, task]));
       setTasks(markInterrupted(state.tasks ?? [], restoredAt));
       if (typeof state.sidebarWidth === "number") setSidebarWidth(state.sidebarWidth);
-      if (typeof state.workspaceSectionRatio === "number") setWorkspaceRatio(state.workspaceSectionRatio);
+      if (typeof state.workspaceSectionHeight === "number") setWorkspaceHeight(state.workspaceSectionHeight);
+      else if (typeof state.workspaceSectionRatio === "number") legacyWorkspaceRatio.current = state.workspaceSectionRatio;
       const freshTerminal = state.terminals.length === 0 ? newTerminal(1, restoredDefaultShell, info.cwd) : null;
       if (state.terminals.length > 0) {
         const restoredTerminals = state.terminals.map((terminal) => {
@@ -923,6 +933,20 @@ function App() {
     document.documentElement.style.setProperty("--sidebar-width", `${sidebarWidth}px`);
   }, [sidebarWidth]);
 
+  // One-time conversion of the retired ratio field. The old value was a share
+  // of the whole sidebar, so multiplying by the measured height lands on the
+  // same visual split; from then on the value is stored as pixels.
+  useEffect(() => {
+    const ratio = legacyWorkspaceRatio.current;
+    if (!hydrated || ratio === null) return;
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    const bounds = sectionResizeBounds(sidebar);
+    if (!bounds) return;
+    legacyWorkspaceRatio.current = null;
+    setWorkspaceHeight(Math.min(bounds.max, Math.max(bounds.min, Math.round(ratio * sidebar.clientHeight))));
+  }, [hydrated, sidebarCollapsed]);
+
   // The workspace list scrolls vertically, so a workspace that was just created
   // or selected can sit outside the visible area. Keep the active one in view
   // without letting the browser scroll the window itself.
@@ -965,7 +989,11 @@ function App() {
 
   useEffect(() => {
     if (!hydrated) return;
-    terminals.forEach((terminal) => {
+    // Restore the terminal the user is looking at first. Creation is serialized
+    // in the preload bridge, so this order decides which shell becomes usable
+    // while the rest of a large workspace is still starting.
+    const attachOrder = [...terminals].sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId));
+    attachOrder.forEach((terminal) => {
       if (terminalViews.current.has(terminal.id)) return;
       agentTypeByTerminal.current.set(terminal.id, terminal.agentType);
       const term = new Terminal({
@@ -1086,6 +1114,10 @@ function App() {
             agentType: terminal.agentType,
             appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
             ...(opencodeThemeSync ? { theme } : {}),
+          }, {
+            // The terminal in view and terminals the user just created must not
+            // wait behind a long restore queue.
+            priority: terminal.id === activeId || !restoredTerminalIds.current.has(terminal.id),
           });
           const pendingCommand = pendingCliLaunch.current.get(terminal.id);
           if (pendingCommand) {
@@ -1176,7 +1208,7 @@ function App() {
         autoResumeOnStart,
         opencodeThemeSync,
         sidebarWidth,
-        workspaceSectionRatio: workspaceRatio ?? undefined,
+        workspaceSectionHeight: workspaceHeight ?? undefined,
       };
       const serialized = JSON.stringify(state);
       if (serialized === lastSavedState.current) return;
@@ -1186,7 +1218,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceRatio, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceHeight, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1310,45 +1342,36 @@ function App() {
     window.addEventListener("pointerup", stop, { once: true });
   }
 
-  // Vertical divider between the workspace and terminal blocks. The position
-  // is stored as a fraction of the sidebar's inner height so it survives
-  // window and sidebar resizes; persistence rides the existing state save.
-  // The drag bounds are computed from the live layout so the divider can travel
-  // the full height minus what each section needs to stay usable: on tall
-  // sidebars a fixed 0.2–0.8 band would stop the divider well short of the
-  // bottom because the brand row and footer eat into the space the ratio never
-  // accounts for.
+  // Vertical divider between the workspace and terminal blocks. The workspace
+  // block stores a pixel height; the terminal block is the only flexible item
+  // and takes whatever is left. The old ratio model measured the workspace
+  // against the whole sidebar and let both blocks shrink in proportion to
+  // their content, so a tall terminal list would steal space from the
+  // workspace block and the divider would stop following the pointer.
+  // Upper bound comes from the live layout: whatever the terminal block can
+  // give up while still keeping its header and one row.
+  function sectionResizeBounds(sidebar: HTMLElement) {
+    const workspaceSection = sidebar.querySelector<HTMLElement>(".workspaces-section");
+    const terminalsSection = sidebar.querySelector<HTMLElement>(".terminals-section");
+    if (!workspaceSection || !terminalsSection) return null;
+    const current = workspaceSection.getBoundingClientRect().height;
+    const terminalHeight = terminalsSection.getBoundingClientRect().height;
+    const max = Math.max(SECTION_MIN_HEIGHT, Math.round(current + terminalHeight - SECTION_MIN_HEIGHT));
+    return { min: SECTION_MIN_HEIGHT, max };
+  }
+
   function beginSectionResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
-    const resizer = event.currentTarget;
-    const sidebar = resizer.parentElement;
+    const sidebar = sidebarRef.current ?? event.currentTarget.parentElement;
     if (!sidebar) return;
-    const total = sidebar.clientHeight;
-    if (total <= 0) return;
-    // Fixed siblings outside the workspace/terminal split: brand row at the top
-    // and the footer at the bottom, plus the resizer strip itself. The workspace
-    // section's margin-top and the resizer's top margin also consume layout
-    // space, so they are counted here — the available height for the two
-    // flexible sections is total minus everything fixed around them.
-    const footer = sidebar.querySelector<HTMLElement>(".sidebar-footer");
     const workspaceSection = sidebar.querySelector<HTMLElement>(".workspaces-section");
-    // Measure the actual fixed overhead: everything from the top of the sidebar
-    // to the top of the workspace section (brand row + workspace margin-top),
-    // plus everything below the resizer (footer). The resizer itself sits
-    // between the two flexible sections, so its height is fixed too.
-    const workspaceTop = workspaceSection?.offsetTop ?? 0;
-    const bottomFixed = (footer?.offsetHeight ?? 0) + resizer.offsetHeight;
-    const fixedHeight = workspaceTop + bottomFixed;
-    // Each section keeps room for its header plus at least one row so neither
-    // side collapses to nothing; the list inside scrolls when it is squeezed.
-    const minSectionHeight = 80;
-    const maxRatio = (total - fixedHeight - minSectionHeight) / total;
-    const minRatio = Math.max(0.1, minSectionHeight / total);
+    const bounds = sectionResizeBounds(sidebar);
+    if (!workspaceSection || !bounds) return;
     const startY = event.clientY;
-    const startRatio = workspaceRatio ?? null;
+    const startHeight = workspaceSection.getBoundingClientRect().height;
     const move = (moveEvent: PointerEvent) => {
-      const next = Math.min(maxRatio, Math.max(minRatio, (startRatio ?? fallbackWorkspaceRatio()) + (moveEvent.clientY - startY) / total));
-      setWorkspaceRatio(next);
+      const next = Math.min(bounds.max, Math.max(bounds.min, Math.round(startHeight + moveEvent.clientY - startY)));
+      setWorkspaceHeight(next);
     };
     const stop = () => {
       document.body.style.cursor = "";
@@ -1360,15 +1383,6 @@ function App() {
     document.body.style.userSelect = "none";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
-  }
-
-  // Without a saved ratio the CSS keeps the workspace block at max-height 42%;
-  // the first drag continues from where the rendered layout actually is.
-  function fallbackWorkspaceRatio() {
-    const section = document.querySelector<HTMLElement>(".workspaces-section");
-    const sidebar = section?.parentElement;
-    if (!section || !sidebar || sidebar.clientHeight <= 0) return 0.42;
-    return Math.min(0.95, Math.max(0.1, section.getBoundingClientRect().height / sidebar.clientHeight));
   }
 
   function restartHost() {
@@ -1415,7 +1429,7 @@ function App() {
       agentType: terminal.agentType,
       appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
       ...(opencodeThemeSync ? { theme } : {}),
-    }).then(() => {
+    }, { priority: true }).then(() => {
       setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready", resumeError: undefined } : item));
       requestAnimationFrame(() => fitTerminal(id));
     }).catch((error: Error) => {
@@ -1531,6 +1545,7 @@ function App() {
   function selectTerminal(id: string) {
     setSettingsOpen(false);
     setActiveId(id);
+    window.termbeacon.prioritizeCreate(id);
     touchWorkspaceOfTerminal(id);
     markTerminalViewed(id);
     focusTerminalView(id);
@@ -1682,6 +1697,7 @@ function App() {
       ?? terminals.find((terminal) => members.has(terminal.id) && !terminal.hidden)?.id;
     if (nextTerminalId) {
       setActiveId(nextTerminalId);
+      window.termbeacon.prioritizeCreate(nextTerminalId);
       // The workspace switch also brings that terminal on screen, so its
       // "finished" lamp must clear exactly like clicking the row does.
       markTerminalViewed(nextTerminalId);
@@ -1970,10 +1986,10 @@ function App() {
   }
 
   return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${settingsOpen ? "settings-mode" : ""}`}>
-    <aside className="sidebar">
+    <aside className="sidebar" ref={sidebarRef}>
       {!sidebarCollapsed && <>
       <div className="brand-row"><div className="brand-lockup"><BrandMark /><div className="brand">TermBeacon</div></div></div>
-      <section className="sidebar-section workspaces-section" style={workspaceRatio !== null ? { flexBasis: `${Math.round(workspaceRatio * 100)}%`, maxHeight: `${Math.round(workspaceRatio * 100)}%`, flexGrow: 0 } : undefined}>
+      <section className="sidebar-section workspaces-section" style={workspaceHeight !== null ? { height: `${workspaceHeight}px`, maxHeight: "none" } : undefined}>
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("工作区")}</span>
           <button className="workspace-add" onClick={addWorkspace} title={t("添加工作区（选择本地文件夹）")} aria-label={t("添加工作区（选择本地文件夹）")}><PlusIcon /></button>
@@ -1990,7 +2006,7 @@ function App() {
         </button>
         {hiddenWorkspacesOpen && <div className="workspace-list workspace-hidden-list" id="hidden-workspaces">{hiddenWorkspaces.map((workspace) => workspaceRow(workspace, true))}</div>}
       </section>
-      <div className="sidebar-section-resizer" onPointerDown={beginSectionResize} title={t("拖动调整工作区与终端的高度比例")} role="separator" aria-orientation="horizontal" />
+      <div className="sidebar-section-resizer" onPointerDown={beginSectionResize} title={t("拖动调整工作区与终端的高度")} role="separator" aria-orientation="horizontal" />
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("终端")}</span>
@@ -2003,8 +2019,10 @@ function App() {
           <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
           {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
-          <span className="terminal-hide" role="button" onClick={(event) => { event.stopPropagation(); hideTerminal(terminal.id); }} title={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
-          <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
+          <span className="terminal-actions">
+            <span className="terminal-hide" role="button" onClick={(event) => { event.stopPropagation(); hideTerminal(terminal.id); }} title={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
+            <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")} role="button" aria-label={t("删除终端")}>×</span>
+          </span>
         </button>)}
         </div>
         {/* Hidden terminals: collapsed into a quiet group at the bottom, mirroring
@@ -2017,8 +2035,10 @@ function App() {
           {hiddenWorkspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item terminal-item-hidden`} onClick={() => { restoreTerminal(terminal.id); selectTerminal(terminal.id); }}>
             <span className={`status-dot ${stateClass[terminal.state]}`} />
             <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
-            <span className="terminal-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreTerminal(terminal.id); }} title={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
-            <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
+            <span className="terminal-actions">
+              <span className="terminal-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreTerminal(terminal.id); }} title={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
+              <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")} role="button" aria-label={t("删除终端")}>×</span>
+            </span>
           </button>)}
           <button className="terminal-hidden-clean" onClick={() => void removeHiddenTerminals()} title={t("删除本工作区所有隐藏的终端")} aria-label={t("删除本工作区所有隐藏的终端")}>{t("删除全部隐藏终端")}</button>
         </div>}

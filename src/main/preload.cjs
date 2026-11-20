@@ -3,6 +3,16 @@ const { contextBridge, ipcRenderer } = require("electron");
 let dataPort = null;
 const queued = [];
 const pendingCreates = new Map();
+// The host spawns PTYs on one thread: each create blocks until the process is
+// created. A cold start after an update restores every terminal at once, so
+// firing all creates together puts the later ones behind tens of synchronous
+// spawns. They used to hit the per-request timeout while the host was still
+// working through the queue, which marked healthy terminals as errors and
+// skipped their auto-resume. Keep one create in flight; the timeout starts
+// only when the request is actually sent.
+const createQueue = [];
+let createInFlight = null;
+const CREATE_TIMEOUT_MS = 60_000;
 const replayNeeds = new Map();
 const consumedSequences = new Map();
 const outputStreams = new Map();
@@ -43,6 +53,80 @@ function removeQueued(requestId) {
   }
 }
 
+// The renderer asks for this when the user switches to a terminal that is still
+// waiting in the restore queue. Moving its request to the front makes the
+// terminal usable after at most the spawn that is already in flight.
+function prioritizeCreate(terminalId) {
+  if (typeof terminalId !== "string" || !terminalId) return;
+  for (let index = 0; index < createQueue.length; index += 1) {
+    const pending = pendingCreates.get(createQueue[index]);
+    if (pending?.terminalId !== terminalId) continue;
+    const [requestId] = createQueue.splice(index, 1);
+    createQueue.unshift(requestId);
+    return;
+  }
+}
+
+function pumpCreateQueue() {
+  // Do not start the watchdog while the data plane is down: the request has
+  // not reached the host yet, and reconnect handling must not turn latency
+  // into a terminal error.
+  if (createInFlight || !dataPort) return;
+  while (createQueue.length > 0) {
+    const requestId = createQueue.shift();
+    const pending = pendingCreates.get(requestId);
+    if (!pending) continue;
+    createInFlight = requestId;
+    pending.sent = true;
+    pending.timer = setTimeout(() => {
+      if (pendingCreates.get(requestId) !== pending) return;
+      pendingCreates.delete(requestId);
+      removeQueued(requestId);
+      if (createInFlight === requestId) createInFlight = null;
+      const error = Object.assign(new Error("PTY creation timed out"), { code: "TIMEOUT", requestId, terminalId: pending.terminalId });
+      pending.reject(error);
+      errorListeners.forEach((listener) => listener({
+        type: "pty:error",
+        operation: "pty:create",
+        requestId,
+        terminalId: pending.terminalId,
+        code: error.code,
+        message: error.message,
+        at: Date.now(),
+      }));
+      pumpCreateQueue();
+    }, CREATE_TIMEOUT_MS);
+    send({ type: "pty:create", requestId, ...pending.request });
+    return;
+  }
+}
+
+// The request is no longer pending, but the host may still answer. A late
+// answer means the PTY exists after all; release the queue and let the host
+// clean it up instead of leaving an orphan process behind.
+function settleCreate(requestId) {
+  const pending = pendingCreates.get(requestId);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingCreates.delete(requestId);
+  }
+  if (createInFlight === requestId) createInFlight = null;
+  pumpCreateQueue();
+  return pending;
+}
+
+function requeueInFlightCreate() {
+  if (!createInFlight) return;
+  const requestId = createInFlight;
+  createInFlight = null;
+  const pending = pendingCreates.get(requestId);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pending.timer = null;
+  pending.sent = false;
+  createQueue.unshift(requestId);
+}
+
 function rejectPendingCreates(reason) {
   const error = reason instanceof Error ? reason : Object.assign(new Error(reason?.message || "PTY host disconnected"), reason || {});
   for (const [requestId, pending] of pendingCreates) {
@@ -51,30 +135,32 @@ function rejectPendingCreates(reason) {
     pending.reject(error);
   }
   pendingCreates.clear();
+  createQueue.length = 0;
+  createInFlight = null;
 }
 
 function handleDataMessage(payload) {
   if (!payload || typeof payload !== "object") return;
   if (payload.type === "pty:create-result" && payload.requestId) {
-    const pending = pendingCreates.get(payload.requestId);
+    const pending = settleCreate(payload.requestId);
     if (pending) {
-      clearTimeout(pending.timer);
-      pendingCreates.delete(payload.requestId);
       if (!payload.existing) {
         consumedSequences.delete(payload.terminalId);
         outputStreams.delete(payload.terminalId);
       }
       pending.resolve(payload);
+    } else if (typeof payload.terminalId === "string" && payload.terminalId) {
+      // The renderer already gave up on this request. The process exists now;
+      // kill it rather than leaving a shell nobody can reach.
+      send({ type: "pty:forget", terminalId: payload.terminalId });
     }
     return;
   }
   if (payload.type === "pty:error") {
     const error = Object.assign(new Error(payload.message || "PTY request failed"), payload);
     if (payload.requestId) {
-      const pending = pendingCreates.get(payload.requestId);
+      const pending = settleCreate(payload.requestId);
       if (pending) {
-        clearTimeout(pending.timer);
-        pendingCreates.delete(payload.requestId);
         removeQueued(payload.requestId);
         pending.reject(error);
       }
@@ -130,6 +216,10 @@ ipcRenderer.on("pty:connect", (_event) => {
   const nextPort = _event.ports[0];
   if (!nextPort) return;
   try { dataPort?.close(); } catch { /* old port may already be closed */ }
+  // Responses from the old data plane are gone with it. Requeue the create
+  // that was waiting on them; the host answers `existing: true` if it already
+  // spawned the PTY, so this does not create a duplicate.
+  requeueInFlightCreate();
   dataPort = nextPort;
   activeFlowId = null;
   // A different host may own this port; never replay a snapshot from the old one.
@@ -139,6 +229,7 @@ ipcRenderer.on("pty:connect", (_event) => {
     if (dataPort !== nextPort) return;
     dataPort = null;
     activeFlowId = null;
+    requeueInFlightCreate();
     if (consumedSequences.size > 0) {
       for (const [terminalId, sequenceNumber] of consumedSequences) replayNeeds.set(terminalId, sequenceNumber);
     }
@@ -148,6 +239,7 @@ ipcRenderer.on("pty:connect", (_event) => {
   queued.splice(0).forEach((message) => {
     try { dataPort?.postMessage(message); } catch { queued.push(message); }
   });
+  pumpCreateQueue();
 });
 
 ipcRenderer.on("pty:host-exit", (_event, payload) => {
@@ -191,28 +283,19 @@ contextBridge.exposeInMainWorld("termbeacon", {
   saveState: (state) => ipcRenderer.invoke("state:save", state),
   getTraySettings: () => ipcRenderer.invoke("tray:get-settings"),
   setTrayPreference: (preference) => ipcRenderer.invoke("tray:set-preference", preference),
-  createTerminal: (request) => {
+  createTerminal: (request, options) => {
     const requestId = crypto.randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pendingCreates.delete(requestId);
-        removeQueued(requestId);
-        const error = Object.assign(new Error("PTY creation timed out"), { code: "TIMEOUT", requestId, terminalId: request?.terminalId });
-        reject(error);
-        errorListeners.forEach((listener) => listener({
-          type: "pty:error",
-          operation: "pty:create",
-          requestId,
-          terminalId: request?.terminalId,
-          code: error.code,
-          message: error.message,
-          at: Date.now(),
-        }));
-      }, 10000);
-      pendingCreates.set(requestId, { resolve, reject, timer, terminalId: request?.terminalId });
-      send({ type: "pty:create", requestId, ...request });
+      pendingCreates.set(requestId, { resolve, reject, timer: null, sent: false, terminalId: request?.terminalId, request });
+      // The visible terminal must not wait behind a long background restore.
+      // A priority request jumps ahead of the terminals still queued, though it
+      // cannot preempt the single spawn that is already in flight.
+      if (options?.priority === true) createQueue.unshift(requestId);
+      else createQueue.push(requestId);
+      pumpCreateQueue();
     });
   },
+  prioritizeCreate,
   write: (request) => send({ type: "pty:write", ...request }),
   launch: (request) => send({ type: "pty:write", ...request, launch: true }),
   resize: (request) => send({ type: "pty:resize", ...request }),
@@ -223,9 +306,13 @@ contextBridge.exposeInMainWorld("termbeacon", {
       if (pending.terminalId !== terminalId) continue;
       clearTimeout(pending.timer);
       pendingCreates.delete(requestId);
+      const queuedAt = createQueue.indexOf(requestId);
+      if (queuedAt >= 0) createQueue.splice(queuedAt, 1);
+      if (createInFlight === requestId) createInFlight = null;
       removeQueued(requestId);
       pending.reject(Object.assign(new Error("Terminal creation cancelled"), { code: "CANCELLED", terminalId }));
     }
+    pumpCreateQueue();
     consumedSequences.delete(terminalId);
     outputStreams.delete(terminalId);
     replayNeeds.delete(terminalId);

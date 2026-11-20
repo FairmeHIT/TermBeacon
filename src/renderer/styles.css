@@ -251,12 +251,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   user-select: none;
 }
 .workspaces-section {
+  /* Fixed pixel height once the user drags; the terminal block below absorbs
+     every remaining pixel. Content height never influences the split. */
   flex: 0 1 auto;
   max-height: 42%;
+  min-height: 80px;
   margin-top: 8px;
 }
 .terminals-section {
-  flex: 1 1 auto;
+  /* Zero basis: the terminal list scrolls instead of pushing the divider up,
+     however many terminals exist. */
+  flex: 1 1 0;
+  min-height: 80px;
   margin-top: 0;
   padding-top: 4px;
 }
@@ -361,11 +367,14 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   white-space: nowrap;
 }
 .workspace-item:not(.active) .workspace-copy strong { color: var(--text-soft); }
-/* Floating overlay: the actions sit absolutely on the row's top-right corner so
-   they occupy no layout width. The text keeps its full width when the buttons
-   are hidden; on hover the buttons float over the row's trailing edge and the
-   copy fades under them, so nothing shifts. */
-.workspace-actions {
+/* Floating overlay shared by workspace and terminal rows: the actions sit
+   absolutely on the row's top-right corner so they occupy no layout width. The
+   text keeps its full width when the buttons are hidden; on hover the buttons
+   float over the row's trailing edge, so nothing shifts. One grouped plate (and
+   one halo) covers both actions, which keeps the two row types visually and
+   behaviourally identical. */
+.workspace-actions,
+.terminal-actions {
   position: absolute;
   top: 5px;
   right: 5px;
@@ -381,16 +390,23 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .workspace-item:hover .workspace-actions,
 .workspace-item:focus-visible .workspace-actions,
-.workspace-item:focus-within .workspace-actions {
+.workspace-item:focus-within .workspace-actions,
+.terminal-item:hover .terminal-actions,
+.terminal-item:focus-visible .terminal-actions,
+.terminal-item:focus-within .terminal-actions {
   opacity: 1;
   visibility: visible;
 }
 /* The hidden group's rows always show their unhide chip, so the overlay stays
    visible there without the hover wash. */
-.workspace-item-hidden .workspace-actions { opacity: 1; visibility: visible; background: transparent; box-shadow: none; }
+.workspace-item-hidden .workspace-actions,
+.terminal-item-hidden .terminal-actions { opacity: 1; visibility: visible; background: transparent; box-shadow: none; }
 /* Hover wash matches the row background so the floating buttons read as part of
    the card instead of floating over raw text. */
-.workspace-item.active:hover .workspace-actions { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
+.workspace-item.active:hover .workspace-actions,
+.workspace-item.active:focus-within .workspace-actions,
+.terminal-item.active:hover .terminal-actions,
+.terminal-item.active:focus-within .terminal-actions { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 /* Hidden like the close button so the row stays quiet, then revealed on hover
    or keyboard focus. The box keeps its size, so nothing shifts on reveal. */
 .workspace-open {
@@ -424,7 +440,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   visibility: visible;
 }
 .workspace-open:hover { color: var(--accent); }
-.workspace-remove {
+.workspace-remove,
+.terminal-remove {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -442,11 +459,16 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   transition: opacity .12s ease;
 }
 .workspace-item:hover .workspace-remove,
-.workspace-item:focus-visible .workspace-remove {
+.workspace-item:focus-visible .workspace-remove,
+.workspace-item:focus-within .workspace-remove,
+.terminal-item:hover .terminal-remove,
+.terminal-item:focus-visible .terminal-remove,
+.terminal-item:focus-within .terminal-remove {
   opacity: 1;
   visibility: visible;
 }
-.workspace-remove:hover { color: var(--danger); }
+.workspace-remove:hover,
+.terminal-remove:hover { color: var(--danger); }
 .workspace-add {
   display: inline-flex;
   flex: 0 0 22px;
@@ -517,7 +539,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 /* Sending a workspace down stays a hover action like the other row tools; the
    way back out is always visible, because that group is where the row lives. */
 .workspace-hide,
-.workspace-unhide {
+.workspace-unhide,
+.terminal-hide,
+.terminal-unhide {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -530,10 +554,14 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   cursor: pointer;
   transition: opacity .12s ease, color .12s ease;
 }
-.workspace-hide { opacity: 0; visibility: hidden; }
-.workspace-unhide { opacity: 1; visibility: visible; }
+.workspace-hide,
+.terminal-hide { opacity: 0; visibility: hidden; }
+.workspace-unhide,
+.terminal-unhide { opacity: 1; visibility: visible; }
 .workspace-hide svg,
-.workspace-unhide svg {
+.workspace-unhide svg,
+.terminal-hide svg,
+.terminal-unhide svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -542,11 +570,18 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   stroke-linejoin: round;
   stroke-width: 1.8;
 }
-.workspace-unhide svg { transform: rotate(180deg); }
+.workspace-unhide svg,
+.terminal-unhide svg { transform: rotate(180deg); }
 .workspace-item:hover .workspace-hide,
-.workspace-item:focus-visible .workspace-hide { opacity: 1; visibility: visible; }
+.workspace-item:focus-visible .workspace-hide,
+.workspace-item:focus-within .workspace-hide,
+.terminal-item:hover .terminal-hide,
+.terminal-item:focus-visible .terminal-hide,
+.terminal-item:focus-within .terminal-hide { opacity: 1; visibility: visible; }
 .workspace-hide:hover,
-.workspace-unhide:hover { color: var(--accent); }
+.workspace-unhide:hover,
+.terminal-hide:hover,
+.terminal-unhide:hover { color: var(--accent); }
 
 .terminal-list {
   display: flex;
@@ -584,56 +619,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--panel-active);
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.terminal-remove {
-  position: absolute;
-  top: 6px;
-  right: 7px;
-  display: none;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  color: var(--muted);
-  font-size: 15px;
-  line-height: 18px;
-  text-align: center;
-  border-radius: 4px;
-  background: var(--panel-soft);
-  box-shadow: 0 0 0 4px var(--panel-soft);
-}
-.terminal-item.active .terminal-remove { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
-.terminal-item:hover .terminal-remove, .terminal-item:focus-within .terminal-remove { display: inline; }
-.terminal-remove:hover { color: var(--danger); background: var(--danger-soft); box-shadow: none; }
 /* Batch clean for visible terminals: reuses the header add-button slot but
    warns with the danger palette on hover. */
 .terminal-batch-clean:hover { color: var(--danger); background: var(--danger-soft); }
-/* Hide button on a visible terminal row: same placement and halo as the
-   remove button, hidden until hover. */
-.terminal-hide,
-.terminal-unhide {
-  position: absolute;
-  top: 6px;
-  right: 30px;
-  display: none;
-  width: 20px;
-  height: 20px;
-  padding: 2px;
-  color: var(--muted);
-  border-radius: 4px;
-  background: var(--panel-soft);
-  box-shadow: 0 0 0 4px var(--panel-soft);
-  cursor: pointer;
-}
-.terminal-hide svg,
-.terminal-unhide svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
-.terminal-item:hover .terminal-hide,
-.terminal-item:focus-within .terminal-hide { display: inline-flex; align-items: center; justify-content: center; }
-.terminal-item.active .terminal-hide { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
-.terminal-hide:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
-/* In the hidden group the unhide button is always visible: that group is
-   where the row lives, so the way back out must not require hovering. */
-.terminal-unhide { display: inline-flex; align-items: center; justify-content: center; right: 30px; }
-.terminal-unhide svg { transform: rotate(180deg); }
-.terminal-unhide:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
 .terminal-item-hidden { opacity: .72; }
 .terminal-item-hidden:hover,
 .terminal-item-hidden:focus-visible { opacity: 1; }

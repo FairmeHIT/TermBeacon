@@ -87,6 +87,13 @@ test("drops any terminal rowPinned field left over from older versions", () => {
   assert.equal(result.terminals[0].rowPinned, undefined);
 });
 
+test("clamps the persisted workspace section height in pixels", () => {
+  assert.equal(sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionHeight: 312 }).workspaceSectionHeight, 312);
+  assert.equal(sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionHeight: 5 }).workspaceSectionHeight, 80);
+  assert.equal(sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionHeight: 99999 }).workspaceSectionHeight, 4000);
+  assert.equal(sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionHeight: "tall" }).workspaceSectionHeight, undefined);
+});
+
 test("clamps the workspace/terminal section ratio into a usable band", () => {  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.1], [1.2, 0.95], [-3, 0.1], [0.42, 0.42]]) {
     const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionRatio: input });
     assert.equal(result.workspaceSectionRatio, expected);

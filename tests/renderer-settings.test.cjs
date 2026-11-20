@@ -67,9 +67,12 @@ test("workspaces and terminals render as distinct labeled sections", () => {
   // Two columns only: the action buttons float over the row, never reserving a
   // third column of blank space.
   assert.match(item, /grid-template-columns:\s*16px minmax\(0, 1fr\);/);
-  const actions = styles.match(/\.workspace-actions\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(actions, "workspace actions styles must exist");
+  // Workspace and terminal rows share one floating action overlay so both move
+  // and reveal together. The first selector keeps the workspace card's shape.
+  const actions = styles.match(/\.workspace-actions,\s*\n\.terminal-actions\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(actions, "row action styles must exist");
   assert.match(actions, /position:\s*absolute/);
+  assert.match(actions, /display:\s*inline-flex/);
   assert.doesNotMatch(item, /height:\s*26px/, "workspace items are cards, not one-row chips");
   assert.match(app, /aria-label=\{t\("添加工作区（选择本地文件夹）"\)\}><PlusIcon/);
   assert.match(app, /ref=\{workspaceStrip\}/);
@@ -109,16 +112,33 @@ test("terminal rows have no pin toggle and batch clean targets visible terminals
   assert.match(styles, /\.terminal-batch-clean:hover\s*\{/);
 });
 
-test("workspace close button only appears while hovering or focusing the item", () => {
-  const remove = styles.match(/\.workspace-remove\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(remove, "workspace remove styles must exist");
+test("row close buttons only appear while hovering or focusing the item", () => {
+  const remove = styles.match(/\.workspace-remove,\s*\n\.terminal-remove\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(remove, "row remove styles must exist");
   assert.match(remove, /opacity:\s*0/);
   assert.match(remove, /visibility:\s*hidden/);
-  const reveal = styles.match(/\.workspace-item:hover \.workspace-remove,\s*\n\.workspace-item:focus-visible \.workspace-remove\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(reveal, "workspace remove must be revealed on hover");
+  const reveal = styles.match(/\.workspace-item:hover \.workspace-remove,[\s\S]*?\.terminal-item:focus-within \.terminal-remove\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(reveal, "row remove must be revealed on hover");
   assert.match(reveal, /opacity:\s*1/);
   assert.match(reveal, /visibility:\s*visible/);
   assert.doesNotMatch(app, /<span>新建工作区<\/span>/);
+});
+
+test("terminal actions reuse the workspace row's overlay and icon styles", () => {
+  // One wrapper per terminal row, like workspace rows, so the two buttons share
+  // a plate and halo instead of rendering as separate transparent chips.
+  assert.match(app, /<span className="terminal-actions">\s*\n\s*<span className="terminal-hide"/);
+  assert.match(app, /<span className="terminal-actions">\s*\n\s*<span className="terminal-unhide"/);
+  // The hide/unhide and remove glyphs are defined once for both row types.
+  const hide = styles.match(/\.workspace-hide,\s*\n\.workspace-unhide,\s*\n\.terminal-hide,\s*\n\.terminal-unhide\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(hide, "shared hide/unhide styles must exist");
+  assert.match(hide, /width:\s*20px/);
+  const icon = styles.match(/\.workspace-hide svg,\s*\n\.workspace-unhide svg,\s*\n\.terminal-hide svg,\s*\n\.terminal-unhide svg\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(icon, "shared chevron styles must exist");
+  assert.match(icon, /width:\s*14px/);
+  // The old per-button absolute positioning is gone.
+  assert.doesNotMatch(styles, /\.terminal-hide,\s*\n\.terminal-unhide\s*\{[^}]*position:\s*absolute/);
+  assert.doesNotMatch(styles, /\.terminal-remove\s*\{[^}]*position:\s*absolute/);
 });
 
 test("workspaces are created from a picked local folder", () => {
@@ -145,17 +165,28 @@ test("terminals spawn with the fitted size instead of a hardcoded grid", () => {
   // A PTY created at 120x32 while xterm renders at the real container size
   // makes TUI apps paint at wrong coordinates until the first resize — the
   // "garbled right panel that a window resize fixes" bug.
-  const mount = app.match(/const node = terminalNodes\.current\.get\(terminal\.id\);([\s\S]*?)await window\.termbeacon\.createTerminal\(\{([\s\S]*?)\}\);/)?.[0];
+  const mount = app.match(/const node = terminalNodes\.current\.get\(terminal\.id\);([\s\S]*?)await window\.termbeacon\.createTerminal\(\{([\s\S]*?)\}, \{([\s\S]*?)\}\);/)?.[0];
   assert.ok(mount, "terminal mount + createTerminal block must exist");
   assert.match(mount, /fit\.fit\(\)/);
   assert.doesNotMatch(mount, /cols:\s*120,\s*\n\s*rows:\s*32/);
   assert.match(mount, /cols,\s*\n\s*rows,/);
+  assert.match(mount, /priority: terminal\.id === activeId \|\| !restoredTerminalIds\.current\.has\(terminal\.id\)/);
   assert.match(app, /sentSizes\.current\.set\(terminal\.id, `\$\{cols\}x\$\{rows\}`\)/);
   // Restarting a stopped terminal uses the live view size too.
   const restart = app.match(/function restartTerminal\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(restart, "restartTerminal must exist");
   assert.match(restart, /term\.cols > 1 \? term\.cols : 120/);
   assert.match(restart, /term\.rows > 1 \? term\.rows : 32/);
+});
+
+test("startup mount restores the active terminal before the rest of the workspace", () => {
+  // Creates are serialized in the preload bridge; the first call must be the
+  // terminal the user is looking at, not the oldest terminal in state.json.
+  assert.match(app, /const attachOrder = \[\.\.\.terminals\]\.sort\(\(a, b\) => Number\(b\.id === activeId\) - Number\(a\.id === activeId\)\)/);
+  assert.match(app, /attachOrder\.forEach\(\(terminal\) => \{/);
+  // Switching to a terminal that is still queued moves its create forward.
+  assert.match(app, /window\.termbeacon\.prioritizeCreate\(id\)/);
+  assert.match(app, /window\.termbeacon\.prioritizeCreate\(nextTerminalId\)/);
 });
 
 test("TUI output keeps native LF handling", () => {
@@ -451,7 +482,7 @@ test("new terminals launch the configured default agent", () => {
   // rest of the terminal preferences.
   assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
   assert.match(app, /defaultNewTerminalAgent,\s*\n\s*autoResumeOnStart,\s*\n\s*opencodeThemeSync,\s*\n\s*sidebarWidth,/);
-  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceRatio, hydrated\]\)/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceHeight, hydrated\]\)/);
   const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
@@ -616,18 +647,23 @@ test("restart downgrades persisted error terminals to stopped", () => {
   assert.match(restore, /state: interrupted \|\| deadError \? "stopped" as AgentState : terminal\.state/);
 });
 
-test("section divider drag bounds have no artificial 0.5 floor or ceiling", () => {
-  // The drag bounds must be derived from the live layout, not capped at 0.5.
-  // A Math.max(0.5, ...) floor on maxRatio prevents dragging the divider
-  // past the midpoint on short sidebars even when there is room, and a
-  // Math.min(0.5, ...) ceiling on minRatio does the same in the other
-  // direction. Both were removed so the divider travels the full height
-  // minus what each section needs to stay usable.
+test("section divider stores pixels so a tall terminal list cannot steal the split", () => {
+  // The old ratio model let both blocks shrink in proportion to their content:
+  // with many terminals the workspace block lost height to the terminal block's
+  // intrinsic size, so the divider stopped following the pointer. The workspace
+  // block now owns a pixel height and the terminal block takes the rest.
+  assert.match(app, /const \[workspaceHeight, setWorkspaceHeight\] = useState<number \| null>\(null\)/);
   const resizer = app.match(/function beginSectionResize\([\s\S]*?\n  \}/)?.[0];
   assert.ok(resizer, "beginSectionResize must exist");
-  assert.doesNotMatch(resizer, /Math\.max\(0\.5/, "maxRatio must not have a 0.5 floor");
-  assert.doesNotMatch(resizer, /Math\.min\(0\.5/, "minRatio must not have a 0.5 ceiling");
-  assert.match(resizer, /workspaceSection\?\.offsetTop/, "fixedHeight must measure workspace offsetTop");
+  assert.match(resizer, /workspaceSection\.getBoundingClientRect\(\)\.height/, "drag must start from the rendered pixel height");
+  assert.match(resizer, /setWorkspaceHeight\(next\)/);
+  assert.doesNotMatch(resizer, /workspaceRatio/, "drag must not depend on a ratio");
+  const workspaces = styles.match(/\.workspaces-section\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(workspaces, "workspace section styles must exist");
+  assert.match(workspaces, /flex:\s*0 1 auto/, "workspace block may only shrink when the window itself is too short");
+  const terminals = styles.match(/\.terminals-section\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(terminals, "terminal section styles must exist");
+  assert.match(terminals, /flex:\s*1 1 0/, "terminal block must ignore its content size when filling the remainder");
 });
 
 test("settings occupy an independent page while terminal views remain mounted", () => {

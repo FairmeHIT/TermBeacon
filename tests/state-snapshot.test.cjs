@@ -9,7 +9,7 @@ const preloadSource = fs.readFileSync(path.join(root, "src", "main", "preload.cj
 const app = fs.readFileSync(path.join(root, "src", "renderer", "App.tsx"), "utf8");
 const types = fs.readFileSync(path.join(root, "src", "shared", "types.ts"), "utf8");
 
-function loadPreload() {
+function loadPreload(timers = {}) {
   const ipcHandlers = new Map();
   const bridge = {};
   const ipcRenderer = {
@@ -28,8 +28,8 @@ function loadPreload() {
       throw new Error(`unexpected require: ${request}`);
     },
     crypto,
-    setTimeout,
-    clearTimeout,
+    setTimeout: timers.setTimeout || setTimeout,
+    clearTimeout: timers.clearTimeout || clearTimeout,
     console,
   }, { filename: "preload.cjs" });
   return { api: bridge.termbeacon, ipcHandlers };
@@ -193,4 +193,113 @@ test("forget cancels queued creations before a renderer port is connected", asyn
   const { sent } = connectPort(ipcHandlers);
   assert.equal(sent.some((m) => m.type === "pty:create"), false);
   assert.equal(sent.at(-1).type, "pty:forget");
+});
+
+test("cold-start PTY creation is serialized instead of timing out in the host queue", async () => {
+  // Regression: after an update the host owns no PTYs, so every terminal is
+  // created at once. The host spawns synchronously; requests queued behind
+  // dozens of spawns hit the old 10 s timeout, were reported as errors, and
+  // never reached the post-create auto-resume path even though the PTY existed.
+  const { api, ipcHandlers } = loadPreload();
+  const { port, sent } = connectPort(ipcHandlers);
+  const creates = () => sent.filter((message) => message.type === "pty:create");
+
+  const first = api.createTerminal({ terminalId: "t1" });
+  const second = api.createTerminal({ terminalId: "t2" });
+  assert.equal(creates().length, 1, "only one create may be in flight");
+  assert.equal(creates()[0].terminalId, "t1");
+
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[0].requestId, terminalId: "t1", ok: true } });
+  await first;
+  assert.equal(creates().length, 2, "the next create starts after the first result");
+  assert.equal(creates()[1].terminalId, "t2");
+
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[1].requestId, terminalId: "t2", ok: true } });
+  await second;
+});
+
+test("a priority create jumps ahead of queued background restores", async () => {
+  const { api, ipcHandlers } = loadPreload();
+  const { port, sent } = connectPort(ipcHandlers);
+  const creates = () => sent.filter((message) => message.type === "pty:create");
+
+  const first = api.createTerminal({ terminalId: "active" });
+  const second = api.createTerminal({ terminalId: "background-1" });
+  const third = api.createTerminal({ terminalId: "background-2" });
+  const fourth = api.createTerminal({ terminalId: "background-3" });
+  assert.equal(creates().length, 1);
+  assert.equal(creates()[0].terminalId, "active");
+
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[0].requestId, terminalId: "active", ok: true } });
+  await first;
+  // background-1 was already in flight; the rest can still be reordered.
+  assert.equal(creates()[1].terminalId, "background-1");
+  api.prioritizeCreate("background-3");
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[1].requestId, terminalId: "background-1", ok: true } });
+  await second;
+  assert.equal(creates()[2].terminalId, "background-3", "the terminal the user switched to must start next");
+
+  const clicked = api.createTerminal({ terminalId: "new-terminal" }, { priority: true });
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[2].requestId, terminalId: "background-3", ok: true } });
+  await fourth;
+  assert.equal(creates()[3].terminalId, "new-terminal", "a new terminal must not wait for background restores");
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[3].requestId, terminalId: "new-terminal", ok: true } });
+  await clicked;
+  port.onmessage({ data: { type: "pty:create-result", requestId: creates()[4].requestId, terminalId: "background-2", ok: true } });
+  await third;
+});
+
+test("a new data plane re-sends the create that was waiting on the old one", async () => {
+  const { api, ipcHandlers } = loadPreload();
+  const first = connectPort(ipcHandlers);
+  const creating = api.createTerminal({ terminalId: "reconnect" });
+  assert.equal(first.sent.filter((message) => message.type === "pty:create").length, 1);
+
+  const second = connectPort(ipcHandlers);
+  const resent = second.sent.filter((message) => message.type === "pty:create");
+  assert.equal(resent.length, 1, "the in-flight create must survive a data-plane reconnect");
+  assert.equal(resent[0].terminalId, "reconnect");
+  second.port.onmessage({ data: { type: "pty:create-result", requestId: resent[0].requestId, terminalId: "reconnect", existing: true, ok: true } });
+  await creating;
+});
+
+test("a create timeout starts only after the request reaches the host", () => {
+  const timers = [];
+  const { api, ipcHandlers } = loadPreload({
+    setTimeout: (callback) => {
+      const handle = { callback, cleared: false };
+      timers.push(handle);
+      return handle;
+    },
+    clearTimeout: (handle) => { if (handle) handle.cleared = true; },
+  });
+
+  const creating = api.createTerminal({ terminalId: "queued" });
+  creating.catch(() => {});
+  assert.equal(timers.length, 0, "a request waiting for the data plane must not age out");
+
+  const { sent } = connectPort(ipcHandlers);
+  assert.equal(timers.length, 1, "the watchdog starts when the request is sent");
+  assert.equal(sent.filter((message) => message.type === "pty:create").length, 1);
+});
+
+test("a create result that arrives after the timeout kills the orphaned PTY", async () => {
+  const timers = [];
+  const { api, ipcHandlers } = loadPreload({
+    setTimeout: (callback) => {
+      const handle = { callback };
+      timers.push(handle);
+      return handle;
+    },
+    clearTimeout: () => {},
+  });
+  const { port, sent } = connectPort(ipcHandlers);
+  const creating = api.createTerminal({ terminalId: "late" });
+  const failed = assert.rejects(creating, { code: "TIMEOUT" });
+  timers[0].callback();
+  await failed;
+
+  port.onmessage({ data: { type: "pty:create-result", requestId: sent.find((message) => message.type === "pty:create").requestId, terminalId: "late", ok: true } });
+  assert.equal(sent.at(-1).type, "pty:forget");
+  assert.equal(sent.at(-1).terminalId, "late");
 });

@@ -187,6 +187,7 @@ interface PersistedState {
   autoResumeOnStart?: boolean;
   opencodeThemeSync?: boolean;
   sidebarWidth?: number;
+  workspaceSectionHeight?: number;
   workspaceSectionRatio?: number;
   windowBounds?: WindowBounds;
   closeToTray?: CloseToTraySettings;

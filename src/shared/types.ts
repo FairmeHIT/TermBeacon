@@ -215,5 +215,5 @@ export interface PtyHostReadyEvent {
 export type CloseToTrayPreference = "ask" | "minimize-to-tray" | "exit";
 export interface CloseToTraySettings { preference: CloseToTrayPreference; balloonShown: boolean; }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; autoResumeOnStart?: boolean; opencodeThemeSync?: boolean; sidebarWidth?: number; workspaceSectionRatio?: number; windowBounds?: WindowBounds; closeToTray?: CloseToTraySettings; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; autoResumeOnStart?: boolean; opencodeThemeSync?: boolean; sidebarWidth?: number; workspaceSectionHeight?: number; workspaceSectionRatio?: number; windowBounds?: WindowBounds; closeToTray?: CloseToTraySettings; }
 

@@ -137,9 +137,12 @@ function sanitizeState(parsed) {
   // Cell-sized opencode themes are an opt-out: older states regain the default.
   if (typeof parsed.opencodeThemeSync === "boolean") result.opencodeThemeSync = parsed.opencodeThemeSync;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
-  // Fraction of the sidebar height the workspace block may claim. Clamped to a
-  // generous band: the renderer tightens the live drag bounds from the actual
-  // layout, so the persisted value only needs a sanity guard.
+  // Pixel height of the workspace block. The renderer clamps it to the live
+  // sidebar during layout, so this only rejects a corrupted or absurd value.
+  if (Number.isFinite(parsed.workspaceSectionHeight)) {
+    result.workspaceSectionHeight = Math.min(4000, Math.max(80, Math.round(parsed.workspaceSectionHeight)));
+  }
+  // Retired ratio field, kept so existing state files can be migrated once.
   if (Number.isFinite(parsed.workspaceSectionRatio)) {
     result.workspaceSectionRatio = Math.min(0.95, Math.max(0.1, parsed.workspaceSectionRatio));
   }

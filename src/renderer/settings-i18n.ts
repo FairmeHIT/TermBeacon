@@ -66,6 +66,7 @@ const english: Record<string, string> = {
   "切换到浅色主题": "Switch to light theme",
   "切换到深色主题": "Switch to dark theme",
   "拖动调整侧栏宽度": "Drag to resize sidebar",
+  "拖动调整工作区与终端的高度": "Drag to resize the workspace and terminal panels",
   "目录": "Directory",
   "终端已停止，点击重启": "Terminal stopped; click to restart",
   "重启终端": "Restart terminal",
