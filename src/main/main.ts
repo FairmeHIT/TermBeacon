@@ -762,7 +762,11 @@ function createWindow(savedState: PersistedState = stateCache || defaultState())
     rendererReady = true;
     connectDataPlane();
   });
-  if (process.env.VITE_DEV_SERVER_URL) void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+  if (process.env.VITE_DEV_SERVER_URL) {
+    void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
+    const target = mainWindow;
+    target.webContents.on("did-finish-load", () => { target.webContents.openDevTools({ mode: "detach" }); });
+  }
   else void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
 }
 
