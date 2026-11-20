@@ -515,10 +515,11 @@ function App() {
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
-  // Most recently used first. Live output timestamps win; the persisted
-  // lastActivityAt covers terminals that have not produced output in this
-  // session. Array.prototype.sort is stable in every runtime we target, so
-  // terminals with the same timestamp keep their creation order.
+  // Most recently used first. Usage means real activity: PTY output or a
+  // submitted task, not merely clicking to view. Live output timestamps win;
+  // the persisted lastActivityAt covers terminals that have not produced
+  // output in this session. Array.prototype.sort is stable in every runtime
+  // we target, so terminals with the same timestamp keep their creation order.
   const workspaceTerminals = useMemo(() => terminals
     .filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id))
     .map((terminal, index) => ({ terminal, index, usedAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0 }))
@@ -784,6 +785,9 @@ function App() {
     const disposeState = window.termbeacon.onState((event) => {
       const prompt = lastInput.current.get(event.terminalId);
       lastStateAt.current.set(event.terminalId, typeof event.at === "number" ? event.at : Date.now());
+      // A task actually running in this terminal is usage for the recency
+      // ordering, independent of whether output events also arrive.
+      if (event.current === "working") activityAt.current.set(event.terminalId, Math.max(Date.now(), activityAt.current.get(event.terminalId) ?? 0));
       if (event.current === "working" && prompt) syncAgentTaskTitle(event.terminalId, prompt);
       setTerminals((items) => items.map((item) => item.id === event.terminalId ? { ...item, state: event.current, lastOutputSummary: event.summary ?? item.lastOutputSummary, alive: event.current !== "stopped", recoveryState: item.recoveryState === "recovering" ? "recovered" : item.recoveryState } : item));
       setTasks((items) => applyTaskEvent(items, event, prompt));
@@ -999,6 +1003,9 @@ function App() {
       term.onData((data) => {
         const buffer = inputBuffers.current.get(terminal.id) || "";
         const submitted = data.includes("\r") || data.includes("\n");
+        // Submitting a command is real usage: the terminal floats to the top
+        // of the recency-ordered list. Merely viewing does not.
+        if (submitted) activityAt.current.set(terminal.id, Math.max(Date.now(), activityAt.current.get(terminal.id) ?? 0));
         let candidate: string | undefined;
         if (submitted) {
           candidate = cleanTaskPrompt(`${buffer}${data.replace(/[\r\n].*$/, "")}`);
@@ -1477,8 +1484,6 @@ function App() {
 
   function markTerminalViewed(id: string) {
     window.termbeacon.viewed(id);
-    // Viewing a terminal is usage: it floats the row to the top of the list.
-    activityAt.current.set(id, Math.max(Date.now(), activityAt.current.get(id) ?? 0));
     setTerminals((items) => items.map((item) => item.id === id && item.state === "completed-unseen" ? { ...item, state: "ready" } : item));
   }
 
