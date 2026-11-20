@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { PALETTE_MODES, syncOpencodeThemes, themeName } = require("./opencode-theme.cjs");
 
 // opencode paints its entire viewport with its own palette. On Windows it never
 // asks the terminal for its background colour (no OSC 10/11 query, no
@@ -107,21 +108,29 @@ function resolveCliConfigPath({ home = os.homedir(), env = process.env } = {}) {
 // True when the user already owns this decision: a present theme.mode, an
 // unreadable file, or a cli.json we cannot parse (do not override what we cannot
 // see). A missing file means the CLI is still on its default dark mode.
-function themeModeConfigured({ home = os.homedir(), env = process.env } = {}) {
+function themeModeConfigured(options) {
+  const choice = readThemeChoice(options);
+  return choice === "configured" || choice === "legacy" || choice === "unreadable";
+}
+
+// Describes how much of the theme the user has already chosen:
+// "absent" (no theme at all), "named" (name only, mode still free),
+// "configured" (a mode is set), "legacy" (old scalar theme) or "unreadable".
+function readThemeChoice({ home = os.homedir(), env = process.env } = {}) {
   let text;
   try {
     text = fs.readFileSync(resolveCliConfigPath({ home, env }), "utf8");
   } catch (error) {
-    return error?.code !== "ENOENT";
+    return error?.code === "ENOENT" ? "absent" : "unreadable";
   }
   const config = parseJsonc(text);
-  if (!config) return true;
+  if (!config) return "unreadable";
   const theme = config?.theme;
+  if (theme === undefined) return "absent";
   // A legacy scalar theme ("tokyonight") would be replaced wholesale by our
   // inline object, so leave it alone instead of guessing at its mode.
-  if (theme === undefined) return false;
-  if (typeof theme !== "object" || theme === null) return true;
-  return typeof theme.mode === "string";
+  if (typeof theme !== "object" || theme === null) return "legacy";
+  return typeof theme.mode === "string" ? "configured" : "named";
 }
 
 function buildCliAppearanceEnv(mode, { home = os.homedir(), env = process.env } = {}) {
@@ -132,4 +141,27 @@ function buildCliAppearanceEnv(mode, { home = os.homedir(), env = process.env } 
   return { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ theme: { mode } }) };
 }
 
-module.exports = { buildCliAppearanceEnv, parseJsonc, resolveCliConfigPath, themeModeConfigured };
+// Hands opencode a complete custom theme so its whole viewport matches the
+// TermBeacon palette, not just the light/dark axis. The theme file is written
+// into opencode's own themes directory because that is the only discovery path
+// it offers; the name is namespaced so it cannot collide with a user theme.
+// When the user has any theme preference of their own, we fall back to the
+// pre-existing mode-only behaviour (or stay out of the way entirely).
+function buildOpencodeThemeEnv(palette, { home = os.homedir(), env = process.env } = {}) {
+  const mode = PALETTE_MODES[palette];
+  if (!mode) return {};
+  if (typeof env.OPENCODE_CLI_CONFIG_CONTENT === "string" && env.OPENCODE_CLI_CONFIG_CONTENT.trim()) return {};
+  const choice = readThemeChoice({ home, env });
+  if (choice === "configured" || choice === "legacy" || choice === "unreadable") return {};
+  if (choice === "named") return { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ theme: { mode } }) };
+  try {
+    syncOpencodeThemes({ home, env, palettes: [palette] });
+  } catch {
+    // If the theme file cannot be written, keep following light/dark rather
+    // than pointing opencode at a theme that does not exist.
+    return { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ theme: { mode } }) };
+  }
+  return { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ theme: { name: themeName(palette), mode } }) };
+}
+
+module.exports = { buildCliAppearanceEnv, buildOpencodeThemeEnv, parseJsonc, readThemeChoice, resolveCliConfigPath, themeModeConfigured };

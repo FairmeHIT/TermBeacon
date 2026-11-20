@@ -5,12 +5,9 @@ import type { ThemeSetting } from "./App";
 import "./settings.css";
 
 const THEME_OPTIONS: Array<{ value: ThemeSetting; label: string }> = [
-  { value: "system", label: "跟随系统" },
   { value: "dark", label: "深色" },
-  { value: "light", label: "浅色" },
-  { value: "midnight", label: "午夜蓝" },
-  { value: "forest", label: "森林绿" },
   { value: "sepia", label: "暖纸米色" },
+  { value: "light", label: "浅色" },
 ];
 
 type Props = {
@@ -24,10 +21,10 @@ type Props = {
   newTerminalAgent: AgentType;
   newTerminalAgentOptions: { value: AgentType; label: string }[];
   onNewTerminalAgent: (agent: AgentType) => void;
-  codexArgs: string;
-  onCodexArgs: (args: string) => void;
   autoResumeOnStart: boolean;
   onAutoResumeOnStart: (enabled: boolean) => void;
+  opencodeThemeSync: boolean;
+  onOpencodeThemeSync: (enabled: boolean) => void;
   version: string;
   updateHint: string;
   updateBusy: boolean;
@@ -173,8 +170,8 @@ export default function SettingsPage(props: Props) {
           <section className="preference-row"><div><h2><label htmlFor="settings-language">{props.locale === "zh-CN" ? "语言 / Language" : t("语言")}</label></h2><p>{t("选择设置页面的显示语言，即时生效并自动保存。")}</p></div><select id="settings-language" value={props.locale} onChange={(event) => props.onLocale(event.target.value as SettingsLocale)}><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></section>
           <section className="preference-row"><div><h2>{t("默认 Shell")}</h2><p>{t("用于之后新建的终端。")}</p></div><select value={props.shell} onChange={(event) => props.onShell(event.target.value as ShellType)} aria-label={t("默认 Shell")}>{props.shellOptions.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}</select></section>
           <section className="preference-row"><div><h2><label htmlFor="settings-new-terminal">{t("新建终端默认启动")}</label></h2><p>{t("点击“新建终端”时启动的程序。")}</p></div><select id="settings-new-terminal" value={props.newTerminalAgent} onChange={(event) => props.onNewTerminalAgent(event.target.value as AgentType)}>{props.newTerminalAgentOptions.map((option) => <option key={option.value} value={option.value}>{t(option.label)}</option>)}</select></section>
-          <section className="preference-row"><div><h2><label htmlFor="settings-codex-args">{t("Codex 启动参数")}</label></h2><p>{t("由 TermBeacon 启动 Codex 时追加。支持引号。留空使用 Codex 默认配置。")}</p></div><input id="settings-codex-args" className="settings-input" value={props.codexArgs} placeholder="--yolo -m wb/cn:kimi-k3.1-pro" maxLength={400} spellCheck={false} autoComplete="off" onChange={(event) => props.onCodexArgs(event.target.value.trim())} /></section>
           <section className="preference-row"><div><h2 id="settings-auto-resume">{t("启动时自动恢复会话")}</h2><p>{t("终端后台服务不在时，自动恢复已记录会话 ID 的 Agent 终端；无法确定会话的终端仍保留“恢复”，可手动处理。")}</p></div><button type="button" id="settings-auto-resume-switch" role="switch" aria-checked={props.autoResumeOnStart} aria-labelledby="settings-auto-resume" className={`settings-switch ${props.autoResumeOnStart ? "on" : ""}`} onClick={() => props.onAutoResumeOnStart(!props.autoResumeOnStart)}><span aria-hidden="true" /></button></section>
+          <section className="preference-row"><div><h2 id="settings-opencode-theme">{t("opencode 主题跟随")}</h2><p>{t("启动 opencode 时下发 TermBeacon 的完整配色（深色、浅色或暖纸米色）。若已在 opencode 中自行设置主题，则保持你的选择；仅对新启动的终端生效。")}</p></div><button type="button" id="settings-opencode-theme-switch" role="switch" aria-checked={props.opencodeThemeSync} aria-labelledby="settings-opencode-theme" className={`settings-switch ${props.opencodeThemeSync ? "on" : ""}`} onClick={() => props.onOpencodeThemeSync(!props.opencodeThemeSync)}><span aria-hidden="true" /></button></section>
           <section className="preference-row"><div><h2>{t("应用更新")} <span className="settings-version">{props.version || t("版本未知")}</span></h2><p role="status">{props.updateHint || t("检查并获取 TermBeacon 的新版本。")}</p></div><button className="settings-button" onClick={props.updateDownloaded ? props.onInstallUpdate : props.onCheckUpdate} disabled={props.updateBusy}>{t(props.updateDownloaded ? "重启并安装" : props.updateBusy ? "检查中…" : "检查更新")}</button></section>
           <section className="preference-row"><div><h2>{t("终端后台服务")}</h2><p>{t("升级状态检测组件后，可在任务结束时重启服务。此操作会关闭当前所有终端进程。")}</p></div><button className="settings-button" disabled={restarting} onClick={() => {
             setRestarting(true);

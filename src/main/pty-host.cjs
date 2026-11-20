@@ -22,7 +22,7 @@ const { createHookServer } = require("./hook-server.cjs");
 const { sessionIdFitsAgent } = require("./session-resume.cjs");
 const { resolveCodexHome, collectSessions, findStartedSession, findRecentSession } = require("./codex-sessions.cjs");
 const { managedEnvironment } = require("./cli-runtime.cjs");
-const { buildCliAppearanceEnv } = require("./cli-appearance.cjs");
+const { buildCliAppearanceEnv, buildOpencodeThemeEnv } = require("./cli-appearance.cjs");
 const { summarize } = require("./summary-utils.cjs");
 const { utf8Tail } = require("./utf8-utils.cjs");
 const { createOutputFlow } = require("./output-flow.cjs");
@@ -575,9 +575,13 @@ function createSession(message, hookWaited = false) {
     } : {}),
   };
   // A full-screen TUI such as opencode cannot be recoloured after it starts, so
-  // the app hands the shell its light/dark intent up front. Explicit request
-  // env still wins, and cli-appearance skips users who set their own theme.
-  const appearanceEnv = request.appearance ? buildCliAppearanceEnv(request.appearance, { env: process.env }) : {};
+  // the app hands the shell its light/dark intent up front. When the app also
+  // sends the concrete palette, opencode receives a complete custom theme
+  // instead. Explicit request env still wins, and cli-appearance skips users
+  // who set their own theme.
+  const appearanceEnv = request.theme
+    ? buildOpencodeThemeEnv(request.theme, { env: process.env })
+    : request.appearance ? buildCliAppearanceEnv(request.appearance, { env: process.env }) : {};
   let session;
   try {
     session = pty.spawn(request.shell, request.args, {

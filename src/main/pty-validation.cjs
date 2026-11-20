@@ -1,6 +1,7 @@
 const { defaultCwd, defaultShell, isAbsoluteCwd } = require("./platform.cjs");
 
 const AGENT_TYPES = new Set(["generic", "opencode", "codex", "claude", "pi"]);
+const THEME_PALETTES = new Set(["dark", "light", "sepia"]);
 const MAX_TERMINAL_ID_LENGTH = 128;
 const MAX_TITLE_LENGTH = 200;
 const MAX_CWD_LENGTH = 32760;
@@ -62,6 +63,10 @@ function normalizeCreateRequest(message) {
   if (appearance !== undefined && appearance !== "light" && appearance !== "dark") {
     throw protocolError("INVALID_APPEARANCE", `unsupported appearance: ${appearance}`, { field: "appearance" });
   }
+  const theme = message.theme;
+  if (theme !== undefined && !THEME_PALETTES.has(theme)) {
+    throw protocolError("INVALID_THEME", `unsupported theme: ${theme}`, { field: "theme" });
+  }
   return {
     terminalId,
     title,
@@ -73,6 +78,7 @@ function normalizeCreateRequest(message) {
     rows: normalizeDimension(message.rows, "rows", 32),
     agentType,
     ...(appearance ? { appearance } : {}),
+    ...(theme ? { theme } : {}),
   };
 }
 

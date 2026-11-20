@@ -235,7 +235,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
     } catch (error) { progress("error", error.message); throw error; }
     finally { busy.delete(id); scanPending = undefined; }
   }
-  async function launch({ id, shell = "cmd.exe", codexArgs, args } = {}) {
+  async function launch({ id, shell = "cmd.exe", args } = {}) {
     checkedId(id);
     const state = await manifest();
     const record = state.agents[id];
@@ -248,7 +248,6 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
     if (!executable) throw new Error("未找到可启动的 CLI，请先安装或重新检测");
     const cliArgs = args || [
       ...(id === "opencode" ? ["--standalone"] : []),
-      ...(id === "codex" ? parseCodexArgs(codexArgs) : []),
     ];
     if (!Array.isArray(cliArgs) || cliArgs.some((arg) => typeof arg !== "string" || /[\r\n\x00]/.test(arg))) throw new Error("CLI 参数无效");
     return { command: shellCommand(executable, cliArgs, shell), executable };
@@ -256,34 +255,4 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
   return { scan, plan, execute, launch };
 }
 
-module.exports = { createCliManager, CATALOG, registryPackage, versionNumber, parseCodexArgs };
-
-function parseCodexArgs(value) {
-  if (typeof value !== "string" || !value.trim()) return [];
-  if (value.length > 400) throw new Error("Codex 启动参数过长");
-  const parsed = [];
-  let current = "";
-  let quote;
-  for (let index = 0; index < value.length; index++) {
-    const char = value[index];
-    if (char === quote) {
-      quote = undefined;
-      continue;
-    }
-    if (!quote && (char === '"' || char === "'")) {
-      quote = char;
-      continue;
-    }
-    if (!quote && /\s/.test(char)) {
-      if (current) parsed.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (quote) throw new Error("Codex 启动参数中的引号未闭合");
-  if (current) parsed.push(current);
-  if (!parsed.length) return [];
-  if (parsed.some((arg) => /[\r\n\x00]/.test(arg))) throw new Error("Codex 启动参数无效");
-  return parsed;
-}
+module.exports = { createCliManager, CATALOG, registryPackage, versionNumber };

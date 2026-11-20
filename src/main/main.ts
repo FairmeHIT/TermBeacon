@@ -10,6 +10,16 @@ import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 import type { AgentCliId, CliProgress, CliScan, CliPlan, CloseToTraySettings, CloseToTrayPreference } from "../shared/types";
 
+// Running from source must not collide with the installed build. The packaged
+// app already owns the default profile and its single-instance lock, so a dev
+// launch would otherwise quit immediately (exit 0) and take Vite down with it.
+// Give the dev UI its own profile: both builds can run side by side, and dev
+// experiments never touch the installed app's state or terminal history.
+if (!app.isPackaged) {
+  app.setName("TermBeacon Dev");
+  app.setPath("userData", path.join(app.getPath("appData"), "termbeacon-dev"));
+}
+
 const require = createRequire(import.meta.url);
 // electron-updater is CommonJS; a named ESM import fails at runtime with
 // "Named export 'autoUpdater' not found". Load it through createRequire.
@@ -19,14 +29,13 @@ const { FreshGitHubProvider, checkForUpdatesWithRetry, formatUpdateError } = req
   checkForUpdatesWithRetry: <T>(check: () => Promise<T>, options?: { onRetry?: (attempt: number, total: number) => void }) => Promise<T>;
   formatUpdateError: (error: unknown) => string;
 };
-const { createCliManager, CATALOG: cliCatalog, parseCodexArgs } = require("./cli-manager.cjs") as {
+const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") as {
   CATALOG: Record<string, { docs: string }>;
-  parseCodexArgs: (value: string | undefined) => string[];
   createCliManager: (options: { assets: unknown; onProgress: (event: CliProgress) => void }) => {
     scan(): Promise<CliScan>;
     plan(request: unknown): Promise<CliPlan>;
     execute(request: unknown): Promise<unknown>;
-    launch(request: { id: AgentCliId; shell?: string; codexArgs?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
+    launch(request: { id: AgentCliId; shell?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
   };
 };
 const { createHistoryStore } = require("./terminal-history.cjs") as {
@@ -176,6 +185,7 @@ interface PersistedState {
   activeWorkspaceId?: string;
   defaultShell?: ShellType;
   autoResumeOnStart?: boolean;
+  opencodeThemeSync?: boolean;
   sidebarWidth?: number;
   workspaceSectionRatio?: number;
   windowBounds?: WindowBounds;
@@ -876,7 +886,6 @@ ipcMain.handle("cli:execute", (_event, request) => agentManager().execute(reques
 ipcMain.handle("cli:launch-spec", (_event, request) => agentManager().launch({
   id: request?.id,
   shell: request?.shell,
-  codexArgs: request?.codexArgs,
 }));
 ipcMain.handle("cli:docs", async (_event, id) => {
   if (typeof id !== "string" || !Object.hasOwn(cliCatalog, id)) throw new Error("不支持的 Agent CLI");
@@ -898,13 +907,8 @@ ipcMain.handle("session:resume-spec", async (_event, request) => {
   if (!spec.supported) return spec;
   // A resume command is a fresh CLI process; it needs the same provider and
   // permission flags as a normal launch, or `codex resume` starts against a
-  // different profile than the session was created with. A malformed saved
-  // argument string must not block recovery, so it degrades to no extra flags.
-  let extra: string[] = [];
-  if (spec.agentType === "codex") {
-    try { extra = parseCodexArgs(request?.codexArgs); } catch { extra = []; }
-  }
-  const launch = await agentManager().launch({ id: request.agentType, shell: request.shell, args: [...(spec.args || []), ...extra] });
+  // different profile than the session was created with.
+  const launch = await agentManager().launch({ id: request.agentType, shell: request.shell, args: spec.args || [] });
   return { ...spec, command: launch.command };
 });
 ipcMain.handle("cwd:pick", async () => {

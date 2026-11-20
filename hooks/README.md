@@ -150,7 +150,7 @@ Hook HTTP 最多尝试 3 次，每次超时 800ms，重试间隔 100ms / 250ms�
 
 Codex 原生 Hook 会写入 `~/.codex/hooks.json`（或 `CODEX_HOME/hooks.json`），上报 `SessionStart`、`UserPromptSubmit` 和 `Stop` 三类生命周期事件。设置页、`npm run hooks:configure:codex` 和 `node scripts/hooks-install.cjs --configure-codex` 共用同一合并实现：写入前备份原文件，保留用户已有的其他 Hook，并替换旧版 TermBeacon 命令。配置后需要重启 Codex 会话使 Hook 生效。
 
-终端恢复 Codex 时优先使用 Hook 上报的会话 ID；没有会话 ID 时，`codex-sessions.cjs` 会读取 `$CODEX_HOME/sessions/YYYY/MM/DD/` 下的 rollout 文件，按工作目录、启动时间和文件 mtime 把会话绑定到启动它的终端。绑定成功后恢复命令使用 `codex resume <session-id>`，并保留该终端配置的启动参数；无法确认会话归属时打开 `codex resume` 选择器，不再使用会误恢复同目录其他会话的 `--last`。
+终端恢复 Codex 时优先使用 Hook 上报的会话 ID；没有会话 ID 时，`codex-sessions.cjs` 会读取 `$CODEX_HOME/sessions/YYYY/MM/DD/` 下的 rollout 文件，按工作目录、启动时间和文件 mtime 把会话绑定到启动它的终端。绑定成功后恢复命令使用 `codex resume <session-id>`；无法确认会话归属时打开 `codex resume` 选择器，不再使用会误恢复同目录其他会话的 `--last`。
 
 OSC 0/2 标题仍作为原生事件缺失时的兜底：Braille spinner（`⠋⠙⠹…`）表示工作，静止标题表示空闲（2.5s 确认窗口）。标题和 OSC 9;4 进度均使用流式解析，支持任意跨块位置、同块多条序列及 BEL / ST 终止符，OSC 内容不会误当作普通完成/报错文本。
 

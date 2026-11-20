@@ -64,7 +64,12 @@ test("workspaces and terminals render as distinct labeled sections", () => {
   assert.match(list, /overflow-y:\s*auto/);
   const item = styles.match(/\.workspace-item\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(item, "workspace item styles must exist");
-  assert.match(item, /grid-template-columns:\s*16px minmax\(0, 1fr\) auto/);
+  // Two columns only: the action buttons float over the row, never reserving a
+  // third column of blank space.
+  assert.match(item, /grid-template-columns:\s*16px minmax\(0, 1fr\);/);
+  const actions = styles.match(/\.workspace-actions\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(actions, "workspace actions styles must exist");
+  assert.match(actions, /position:\s*absolute/);
   assert.doesNotMatch(item, /height:\s*26px/, "workspace items are cards, not one-row chips");
   assert.match(app, /aria-label=\{t\("添加工作区（选择本地文件夹）"\)\}><PlusIcon/);
   assert.match(app, /ref=\{workspaceStrip\}/);
@@ -83,6 +88,30 @@ test("workspace sections keep their own add actions next to the title", () => {
 test("workspace removal remains available for the active workspace", () => {
   assert.match(app, /workspaces\.length > 1 && <span className="workspace-remove"/);
   assert.doesNotMatch(app, /workspace\.id !== activeWorkspaceId && <span className="workspace-remove"/);
+});
+
+test("terminal rows expose a pin toggle and a batch clean for unpinned terminals", () => {
+  // The pin sits left of the remove button and flips rowPinned on click.
+  const pin = app.match(/<span className=\{`terminal-pin \$\{terminal\.rowPinned \? "pinned" : ""\}`\}[\s\S]*?toggleRowPin\(terminal\.id\); \}\} title=\{terminal\.rowPinned \? t\("取消固定"\) : t\("固定"\)\}/)?.[0];
+  assert.ok(pin, "terminal pin toggle must exist");
+  const toggle = app.match(/function toggleRowPin\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(toggle, "toggleRowPin must exist");
+  assert.match(toggle, /rowPinned: !item\.rowPinned/);
+  // Pin state persists with the rest of the terminal fields.
+  assert.match(app, /rowPinned: terminal\.rowPinned === true,/);
+  assert.match(sharedTypes, /rowPinned\?: boolean/);
+  // The batch clean button only renders when unpinned terminals exist.
+  assert.match(app, /workspaceTerminals\.some\(\(terminal\) => terminal\.rowPinned !== true\) && <button className="workspace-add terminal-batch-clean"/);
+  const batch = app.match(/async function removeUnpinnedTerminals\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(batch, "removeUnpinnedTerminals must exist");
+  // Only unpinned rows are targeted, and the action confirms first.
+  assert.match(batch, /workspaceTerminals\.filter\(\(terminal\) => terminal\.rowPinned !== true\)/);
+  assert.match(batch, /window\.termbeacon\.confirm\(/);
+  // Pinned rows are exempt; the workspace keeps at least one terminal.
+  const pinStyles = styles.match(/\.terminal-pin\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(pinStyles, "terminal pin styles must exist");
+  assert.match(styles, /\.terminal-pin\.pinned\s*\{/);
+  assert.match(styles, /\.terminal-batch-clean:hover\s*\{/);
 });
 
 test("workspace close button only appears while hovering or focusing the item", () => {
@@ -150,7 +179,7 @@ test("Unicode 11 width tables are enabled with xterm's proposed API", () => {
 test("native title bar colors follow every app theme", () => {
   const chrome = app.match(/const themeChrome: Record<Theme, \{ caption: string; text: string; border: string \}> = \{([\s\S]*?)\n\};/)?.[1];
   assert.ok(chrome, "themeChrome palette must exist");
-  for (const theme of ["dark", "light", "midnight", "forest", "sepia"]) {
+  for (const theme of ["dark", "light", "sepia"]) {
     assert.match(chrome, new RegExp(`${theme}: \\{ caption: "#[0-9a-f]{6}", text: "#[0-9a-f]{6}", border: "#[0-9a-f]{6}" \\}`));
   }
   assert.match(app, /setNativeTheme\(\{\s*\n\s*mode:[\s\S]*?\.\.\.themeChrome\[theme\]/);
@@ -195,12 +224,88 @@ test("light terminal palettes keep PowerShell's ANSI colors readable", () => {
     assert.match(body, /cursorAccent: "#[0-9a-f]{6}"/);
     assert.match(body, /selectionBackground: "rgba\(/);
   }
-  // Dark palettes keep xterm's ramp, which already suits them.
-  for (const theme of ["dark", "midnight", "forest"]) {
+  // The dark palette keeps xterm's ramp, which already suits it.
+  for (const theme of ["dark"]) {
     const line = block.match(new RegExp(`\\n  ${theme}: \\{[^\\n]*\\},`))?.[0];
     assert.ok(line, `${theme} palette must stay compact`);
     assert.doesNotMatch(line, /brightYellow/);
   }
+});
+
+test("the appearance palette is limited to the three maintained themes", () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8");
+  const settingsStyles = fs.readFileSync(path.join(__dirname, "../src/renderer/settings.css"), "utf8");
+  const html = fs.readFileSync(path.join(__dirname, "../src/renderer/index.html"), "utf8");
+  assert.match(app, /export type ThemeSetting = "dark" \| "light" \| "sepia";/);
+  assert.match(app, /const THEME_SETTINGS: ThemeSetting\[\] = \["dark", "sepia", "light"\];/);
+  const options = settings.match(/const THEME_OPTIONS:[\s\S]*?\n\];/)?.[0];
+  assert.ok(options, "theme options must exist");
+  const values = [...options.matchAll(/value: "(\w+)"/g)].map((match) => match[1]);
+  assert.deepEqual(values, ["dark", "sepia", "light"]);
+  // Retired palettes must not leave a theme block or a settings preview behind.
+  for (const theme of ["midnight", "forest"]) {
+    assert.doesNotMatch(styles, new RegExp(`data-theme="${theme}"`));
+    assert.doesNotMatch(settingsStyles, new RegExp(`appearance-preview\\.${theme}`));
+    assert.doesNotMatch(html, new RegExp(`\\b${theme}:\\s*"#`));
+  }
+  assert.doesNotMatch(settingsStyles, /appearance-preview\.system/);
+});
+
+test("status lamps stay legible and distinct across the three themes", () => {
+  const themeBlock = (theme) => theme === "dark"
+    ? styles.match(/:root \{([\s\S]*?)\n\}/)?.[1]
+    : styles.match(new RegExp(`:root\\[data-theme="${theme}"\\] \\{([\\s\\S]*?)\\n\\}`))?.[1];
+  const luminance = (hex) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    const [r, g, b] = [value >> 16 & 255, value >> 8 & 255, value & 255].map((channel) => {
+      const c = channel / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [lighter, darker] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (lighter + 0.05) / (darker + 0.05);
+  };
+  const saturation = (hex) => {
+    const value = Number.parseInt(hex.slice(1), 16);
+    const [r, g, b] = [value >> 16 & 255, value >> 8 & 255, value & 255].map((channel) => channel / 255);
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const lightness = (max + min) / 2;
+    return max === min ? 0 : (max - min) / (1 - Math.abs(2 * lightness - 1));
+  };
+  const read = (body, name) => body.match(new RegExp(`--${name}: (#[0-9a-f]{6})`))?.[1];
+  const statuses = ["ready", "working", "completed", "awaiting", "error", "stopped"];
+  for (const theme of ["dark", "light", "sepia"]) {
+    const body = themeBlock(theme);
+    assert.ok(body, `${theme} palette must exist`);
+    const backgrounds = ["app-bg", "panel-bg", "panel-soft", "panel-active"].map((name) => {
+      const value = read(body, name);
+      assert.match(value || "", /^#[0-9a-f]{6}$/, `${theme}.${name} must be defined`);
+      return value;
+    });
+    const colors = {};
+    for (const state of statuses) {
+      const value = read(body, `status-${state}`);
+      assert.match(value || "", /^#[0-9a-f]{6}$/, `${theme}.status-${state} must be defined`);
+      colors[state] = value;
+      // Solid fills must stay above 4.5:1; the hollow stopped ring may sit at
+      // the non-text 3:1 floor because its outline is still a visible shape.
+      const minimum = state === "stopped" ? 3 : 4.5;
+      const lowest = Math.min(...backgrounds.map((background) => contrast(value, background)));
+      assert.ok(lowest >= minimum, `${theme}.status-${state} must reach ${minimum}:1 (got ${lowest.toFixed(2)})`);
+    }
+    // The original complaint: ready and working looked like the same lamp.
+    // Keep ready neutral and working clearly saturated, then let the animated
+    // ring in the CSS carry the remaining difference.
+    assert.ok(saturation(colors.ready) <= 0.3, `${theme}.status-ready must stay neutral`);
+    assert.ok(saturation(colors.working) >= 0.5, `${theme}.status-working must stay saturated`);
+  }
+  assert.match(styles, /\.status-dot\.stopped \{[^}]*background: transparent/);
+  assert.match(styles, /\.status-dot::after \{[^}]*border: 1px solid currentColor/);
+  assert.match(styles, /\.status-dot\.working::after \{[^}]*animation: status-ping/);
+  assert.match(styles, /\.workspace-lamp \{[^}]*width: 8px/);
 });
 
 test("workspaces surface the most urgent terminal state as a lamp", () => {
@@ -350,17 +455,17 @@ test("new terminals launch the configured default agent", () => {
   // Codex is the out-of-the-box default, and the choice is persisted with the
   // rest of the terminal preferences.
   assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
-  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexArgs,\s*\n\s*autoResumeOnStart,\s*\n\s*sidebarWidth,/);
-  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, workspaceRatio, hydrated\]\)/);
+  assert.match(app, /defaultNewTerminalAgent,\s*\n\s*autoResumeOnStart,\s*\n\s*opencodeThemeSync,\s*\n\s*sidebarWidth,/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceRatio, hydrated\]\)/);
   const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
   assert.match(addTerminal, /await launchCli\(defaultNewTerminalAgent, cwd\)/);
   assert.match(addTerminal, /type: "error"/);
   assert.match(app, /newTerminalAgent=\{defaultNewTerminalAgent\}/);
-  assert.match(app, /codexArgs=\{defaultCodexArgs\} onCodexArgs=\{setDefaultCodexArgs\}/);
+  assert.doesNotMatch(app, /codexArgs/);
   assert.match(settings, /htmlFor="settings-new-terminal"/);
-  assert.match(settings, /htmlFor="settings-codex-args"/);
+  assert.doesNotMatch(settings, /codex-args/);
   assert.match(settings, /props\.onNewTerminalAgent\(event\.target\.value as AgentType\)/);
   assert.match(i18n, /"New terminal launches"/);
   assert.match(i18n, /"Plain shell"/);
@@ -388,6 +493,19 @@ test("startup recovery resumes only exact saved sessions, once, and after a fres
   assert.match(app, /autoResumeTimer\.current = window\.setTimeout\(runAutoResumeQueue, AUTO_RESUME_INTERVAL_MS\)/);
   assert.match(app, /options\.auto && spec\.mode !== "session-id"/);
   assert.match(app, /autoResumePending\.current\.delete\(terminal\.id\)/);
+});
+
+test("opencode theme sync is persisted and exposed as an opt-out switch", () => {
+  const settings = fs.readFileSync(path.join(__dirname, "../src/renderer/SettingsPage.tsx"), "utf8");
+  assert.match(sharedTypes, /opencodeThemeSync\?: boolean/);
+  assert.match(app, /const \[opencodeThemeSync, setOpencodeThemeSync\] = useState\(true\)/);
+  assert.match(app, /opencodeThemeSync=\{opencodeThemeSync\} onOpencodeThemeSync=\{setOpencodeThemeSync\}/);
+  assert.match(app, /setOpencodeThemeSync\(state\.opencodeThemeSync !== false\)/);
+  // Both terminal creation paths send the concrete palette only when enabled.
+  assert.equal((app.match(/\.\.\.\(opencodeThemeSync \? \{ theme \} : \{\}\)/g) || []).length, 2);
+  assert.match(settings, /aria-checked=\{props\.opencodeThemeSync\}/);
+  assert.match(settings, /props\.onOpencodeThemeSync\(!props\.opencodeThemeSync\)/);
+  assert.match(i18n, /"Follow TermBeacon theme in opencode"/);
 });
 
 test("renderer tracks the CLI that owns a resumable session id", () => {

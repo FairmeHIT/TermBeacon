@@ -386,6 +386,24 @@ test("PTY host tells opencode the app appearance when the user has no theme mode
   }
 });
 
+test("PTY host hands opencode the full TermBeacon palette when one is requested", () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "tb-theme-"));
+  try {
+    const { dataPort, spawnedOptions } = createHarness({ env: { OPENCODE_CONFIG_DIR: dir } });
+    dataPort.emit("message", { data: { ...createMessage("t1"), appearance: "light", theme: "sepia" } });
+    assert.equal(spawnedOptions[0].env.OPENCODE_CLI_CONFIG_CONTENT, JSON.stringify({ theme: { name: "termbeacon-sepia", mode: "light" } }));
+    assert.ok(fs.existsSync(path.join(dir, "themes", "termbeacon-sepia.json")));
+
+    // A user theme still wins over both the concrete palette and the mode.
+    fs.writeFileSync(path.join(dir, "cli.json"), '{ "theme": { "name": "tokyonight", "mode": "dark" } }');
+    const second = createHarness({ env: { OPENCODE_CONFIG_DIR: dir } });
+    second.dataPort.emit("message", { data: { ...createMessage("t2"), appearance: "light", theme: "sepia" } });
+    assert.equal(second.spawnedOptions[0].env.OPENCODE_CLI_CONFIG_CONTENT, undefined);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("PTY host routes bridge events to the terminal detector", () => {
   const hooks = [];
   const { dataPort, messages, emitHook } = createHarness({

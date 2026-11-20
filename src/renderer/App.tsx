@@ -52,7 +52,7 @@ declare global {
       scanCli(): Promise<CliScan>;
       planCli(request: { id: AgentCliId; action: CliAction }): Promise<CliPlan>;
       executeCli(request: { token: string }): Promise<unknown>;
-      getCliLaunchSpec(request: { id: AgentCliId; shell: ShellType; codexArgs?: string }): Promise<{ command: string }>;
+      getCliLaunchSpec(request: { id: AgentCliId; shell: ShellType }): Promise<{ command: string }>;
       openCliDocs(id: AgentCliId): Promise<void>;
       onCliProgress(listener: (event: CliProgress) => void): () => void;
       getPlatformInfo(): Promise<PlatformInfo>;
@@ -68,7 +68,7 @@ declare global {
       installUpdate(): Promise<boolean>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
-      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType; codexArgs?: string }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
+      getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
       restartHost(request?: { force: boolean }): Promise<boolean>;
       createTerminal(request: unknown): Promise<unknown>;
       write(request: unknown): void;
@@ -155,13 +155,14 @@ function isGeneratedTerminalTitle(title: string): boolean {
   return /^(?:终端|Terminal)\s+\d+$/i.test(title.trim()) || isClaudeStatusTitle(title);
 }
 
-// The persisted setting. "system" follows the OS and resolves to dark/light.
-export type ThemeSetting = "system" | "dark" | "light" | "midnight" | "forest" | "sepia";
+// The persisted setting. Only the three maintained palettes are accepted;
+// retired values ("system", "midnight", "forest") migrate on first load.
+export type ThemeSetting = "dark" | "light" | "sepia";
 // The concrete palette actually applied to the DOM and terminals.
-type Theme = Exclude<ThemeSetting, "system">;
+type Theme = ThemeSetting;
 
-const THEME_SETTINGS: ThemeSetting[] = ["system", "dark", "light", "midnight", "forest", "sepia"];
-const DARK_THEMES: Theme[] = ["dark", "midnight", "forest"];
+const THEME_SETTINGS: ThemeSetting[] = ["dark", "sepia", "light"];
+const DARK_THEMES: Theme[] = ["dark"];
 
 function isThemeSetting(value: unknown): value is ThemeSetting {
   return typeof value === "string" && THEME_SETTINGS.includes(value as ThemeSetting);
@@ -169,14 +170,14 @@ function isThemeSetting(value: unknown): value is ThemeSetting {
 
 type TerminalTheme = ITheme & { background: string; foreground: string; cursor: string };
 
-// Dark themes keep xterm's built-in ANSI ramp, which is tuned for a dark
+// The dark theme keeps xterm's built-in ANSI ramp, which is tuned for a dark
 // canvas. The light palettes spell out all 16 slots: PowerShell (PSReadLine)
 // paints the command being typed with "bright yellow" (#fce94f by default) and
 // parameters with "white", and once those defaults land on a cream or white
 // background they sit at roughly 1.1:1 contrast, so the line the user is typing
 // all but disappears. Every light slot below stays at or above 4.5:1 against
 // its own background, which means ANSI background blocks render darker than
-// they do on the dark themes.
+// they do on the dark theme.
 const terminalThemes: Record<Theme, TerminalTheme> = {
   dark: { background: "#101215", foreground: "#d7dce3", cursor: "#8ab8ed" },
   light: {
@@ -202,8 +203,6 @@ const terminalThemes: Record<Theme, TerminalTheme> = {
     brightCyan: "#0d666d",
     brightWhite: "#3b434d",
   },
-  midnight: { background: "#0a1022", foreground: "#ccd6e8", cursor: "#8fb0f2" },
-  forest: { background: "#0d1410", foreground: "#cfdad2", cursor: "#8cc7a5" },
   sepia: {
     background: "#faf4e6",
     foreground: "#43392a",
@@ -232,12 +231,10 @@ const terminalThemes: Record<Theme, TerminalTheme> = {
 // The Windows title bar can only choose light or dark through nativeTheme, so
 // the main process receives these panel colors and paints the DWM caption with
 // them. Keeping the frame in the same palette avoids a white strip above the
-// app, most visibly with the warm-paper and colored dark themes.
+// app, most visibly with the warm-paper theme.
 const themeChrome: Record<Theme, { caption: string; text: string; border: string }> = {
   dark: { caption: "#15181c", text: "#e7eaf0", border: "#292e35" },
   light: { caption: "#f8f9fb", text: "#20252c", border: "#dce1e7" },
-  midnight: { caption: "#0f1730", text: "#e3e9f8", border: "#233055" },
-  forest: { caption: "#111a15", text: "#e4ebe5", border: "#26332b" },
   sepia: { caption: "#f9f3e6", text: "#3a3226", border: "#ddd0b6" },
 };
 
@@ -265,7 +262,6 @@ const IS_WINDOWS = FALLBACK_PLATFORM.isWindows;
 
 const DEFAULT_SHELL: ShellType = FALLBACK_PLATFORM.shell as ShellType;
 const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex";
-const DEFAULT_CODEX_ARGS = "";
 // Space out automatic resumes so a machine restart does not launch every agent
 // at once. Each command is a full CLI process with its own startup work.
 const AUTO_RESUME_INTERVAL_MS = 700;
@@ -289,10 +285,6 @@ function isSupportedShell(value: unknown): value is ShellType {
 
 function isSupportedNewTerminalAgent(value: unknown): value is AgentType {
   return NEW_TERMINAL_AGENT_OPTIONS.some((option) => option.value === value);
-}
-
-function normalizeCodexArgs(value: unknown): string {
-  return typeof value === "string" ? value.trim().slice(0, 400) : "";
 }
 
 function isValidCwd(path: unknown): path is string {
@@ -357,6 +349,23 @@ function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 }
 
+// A pushpin: filled look when pinned, outline when not (the caller sets the
+// color class, this only draws the shape).
+function PinIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M14.5 2.5 21.5 9.5 18 13l-1-1-4 4 .5 3.5L12 21l-3-3-4.5 4.5L3 21 7.5 16.5 4.5 13.5 7 11l3.5.5 4-4-1-1Z" />
+  </svg>;
+}
+
+// A small broom for the batch-clean action.
+function BroomIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M19 3 12.5 9.5" />
+    <path d="M11 8c2.5 0 5 2.5 5 5l-5 5H6l-3 4" />
+    <path d="M11 8 9 10l5 5 2-2c0-2.76-2.24-5-5-5Z" />
+  </svg>;
+}
+
 // "Open outside the app": an arrow leaving a window.
 function OpenInExplorerIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -408,22 +417,22 @@ function App() {
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo>(FALLBACK_PLATFORM);
   const [defaultShell, setDefaultShell] = useState<ShellType>(DEFAULT_SHELL);
   const [defaultNewTerminalAgent, setDefaultNewTerminalAgent] = useState<AgentType>(DEFAULT_NEW_TERMINAL_AGENT);
-  const [defaultCodexArgs, setDefaultCodexArgs] = useState<string>(DEFAULT_CODEX_ARGS);
   const [autoResumeOnStart, setAutoResumeOnStart] = useState(true);
+  // Whether opencode receives TermBeacon's full palette (not just light/dark)
+  // when a terminal starts. Users who configured their own opencode theme are
+  // left alone either way; this switch is the app-level opt-out.
+  const [opencodeThemeSync, setOpencodeThemeSync] = useState(true);
   const [themeSetting, setThemeSetting] = useState<ThemeSetting>(() => {
     const saved = window.localStorage.getItem("termbeacon-theme");
-    return isThemeSetting(saved) ? saved : "system";
+    if (isThemeSetting(saved)) return saved;
+    // One-time migration from the retired options: "system" keeps the OS
+    // preference, while "midnight"/"forest" collapse into the dark palette.
+    if (saved === "system") return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+    return "dark";
   });
-  const [systemPrefersLight, setSystemPrefersLight] = useState(() => Boolean(window.matchMedia?.("(prefers-color-scheme: light)")?.matches));
-  useEffect(() => {
-    const query = window.matchMedia?.("(prefers-color-scheme: light)");
-    if (!query || typeof query.addEventListener !== "function") return;
-    const listener = (event: MediaQueryListEvent) => setSystemPrefersLight(event.matches);
-    query.addEventListener("change", listener);
-    return () => query.removeEventListener("change", listener);
-  }, []);
-  // "system" resolves through the OS preference; every other setting is concrete.
-  const theme: Theme = themeSetting === "system" ? (systemPrefersLight ? "light" : "dark") : themeSetting;
+  // Every persisted setting is concrete: the three palettes are the only ones
+  // the CSS and terminal themes need to maintain.
+  const theme: Theme = themeSetting;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLocale, setSettingsLocale] = useState<SettingsLocale>(() => readSettingsLocale(window.localStorage));
   useEffect(() => { saveSettingsLocale(window.localStorage, settingsLocale); }, [settingsLocale]);
@@ -515,15 +524,16 @@ function App() {
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
-  // Most recently used first. Usage means real activity: PTY output or a
-  // submitted task, not merely clicking to view. Live output timestamps win;
-  // the persisted lastActivityAt covers terminals that have not produced
-  // output in this session. Array.prototype.sort is stable in every runtime
-  // we target, so terminals with the same timestamp keep their creation order.
+  // Pinned rows stay on top (by recency within the pinned group), then the
+  // rest by recency. Usage means real activity: PTY output or a submitted
+  // task, not merely clicking to view. Live output timestamps win; the
+  // persisted lastActivityAt covers terminals that have not produced output
+  // in this session. Array.prototype.sort is stable in every runtime we
+  // target, so terminals with the same timestamp keep their creation order.
   const workspaceTerminals = useMemo(() => terminals
     .filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id))
     .map((terminal, index) => ({ terminal, index, usedAt: activityAt.current.get(terminal.id) ?? terminal.lastActivityAt ?? 0 }))
-    .sort((a, b) => b.usedAt - a.usedAt || a.index - b.index)
+    .sort((a, b) => Number(b.terminal.rowPinned === true) - Number(a.terminal.rowPinned === true) || b.usedAt - a.usedAt || a.index - b.index)
     .map((entry) => entry.terminal), [terminals, activeWorkspace]);
   // One lamp per workspace, derived from the terminals it owns.
   const workspaceLampStates = useMemo(() => {
@@ -600,15 +610,14 @@ function App() {
       const runtimeDefaultShell = isSupportedShell(info.shell) ? info.shell : DEFAULT_SHELL;
       const restoredDefaultShell = isSupportedShell(state.defaultShell) ? state.defaultShell : runtimeDefaultShell;
       const restoredDefaultNewTerminalAgent = isSupportedNewTerminalAgent(state.defaultNewTerminalAgent) ? state.defaultNewTerminalAgent : DEFAULT_NEW_TERMINAL_AGENT;
-      const restoredDefaultCodexArgs = normalizeCodexArgs(state.defaultCodexArgs ?? "");
       setDefaultShell(restoredDefaultShell);
       setDefaultNewTerminalAgent(restoredDefaultNewTerminalAgent);
-      setDefaultCodexArgs(restoredDefaultCodexArgs);
       const restoredAt = Date.now();
       // Older state files have no flag. Auto-resume is the new default so a
       // restart does not ask for the same click on every agent terminal again.
       const restoredAutoResume = state.autoResumeOnStart !== false;
       setAutoResumeOnStart(restoredAutoResume);
+      setOpencodeThemeSync(state.opencodeThemeSync !== false);
       const autoResumeIds = autoResumeCandidates(state.terminals, restoredAutoResume);
       // Resume the terminal the user was looking at first; the rest follow in
       // the saved order.
@@ -1079,6 +1088,7 @@ function App() {
             rows,
             agentType: terminal.agentType,
             appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
+            ...(opencodeThemeSync ? { theme } : {}),
           });
           const pendingCommand = pendingCliLaunch.current.get(terminal.id);
           if (pendingCommand) {
@@ -1143,6 +1153,7 @@ function App() {
         id: terminal.id,
         title: terminal.title,
         titlePinned: terminal.titlePinned === true,
+        rowPinned: terminal.rowPinned === true,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
         agentType: terminal.agentType,
@@ -1165,8 +1176,8 @@ function App() {
         tasks,
         defaultShell,
         defaultNewTerminalAgent,
-        defaultCodexArgs,
         autoResumeOnStart,
+        opencodeThemeSync,
         sidebarWidth,
         workspaceSectionRatio: workspaceRatio ?? undefined,
       };
@@ -1178,7 +1189,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, workspaceRatio, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, autoResumeOnStart, opencodeThemeSync, sidebarWidth, workspaceRatio, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1381,6 +1392,7 @@ function App() {
       rows,
       agentType: terminal.agentType,
       appearance: DARK_THEMES.includes(theme) ? "dark" : "light",
+      ...(opencodeThemeSync ? { theme } : {}),
     }).then(() => {
       setTerminals((items) => items.map((item) => item.id === id ? { ...item, alive: true, state: "ready", resumeError: undefined } : item));
       requestAnimationFrame(() => fitTerminal(id));
@@ -1427,7 +1439,6 @@ function App() {
         sessionAgent: terminal.lastSessionAgent,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
-        codexArgs: terminal.agentType === "codex" ? defaultCodexArgs : undefined,
       });
     } catch (error) {
       // A background attempt should not destroy the manual recovery path over
@@ -1507,7 +1518,6 @@ function App() {
     const spec = await window.termbeacon.getCliLaunchSpec({
       id,
       shell: defaultShell,
-      codexArgs: id === "codex" ? defaultCodexArgs : undefined,
     });
     const terminal = newTerminal(terminals.length + 1, defaultShell, cwd);
     terminal.agentType = id;
@@ -1761,6 +1771,72 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title, titlePinned: true } : item));
   }
 
+  // Pinned rows stay at the top of the list and are exempt from the batch
+  // delete of unpinned terminals.
+  function toggleRowPin(id: string) {
+    setTerminals((items) => items.map((item) => item.id === id ? { ...item, rowPinned: !item.rowPinned } : item));
+  }
+
+  // Delete every unpinned terminal of the active workspace in one action.
+  // Reuses the single-delete cleanup chain per terminal, then repairs the
+  // workspace membership and active selection in one pass.
+  async function removeUnpinnedTerminals() {
+    const owner = activeWorkspace;
+    if (!owner) return;
+    const targets = workspaceTerminals.filter((terminal) => terminal.rowPinned !== true);
+    if (targets.length === 0) return;
+    const confirmed = await window.termbeacon.confirm({
+      message: t("删除工作区「{name}」中未固定的 {count} 个终端？正在运行的进程会被停止。", { name: displayWorkspaceName(owner), count: targets.length }),
+      okLabel: t("删除"),
+      cancelLabel: t("取消"),
+    });
+    if (!confirmed) return;
+    const removedIds = new Set(targets.map((terminal) => terminal.id));
+    for (const id of removedIds) {
+      window.termbeacon.forget(id);
+      try { terminalViews.current.get(id)?.dispose(); } catch { /* view may already be gone */ }
+      terminalViews.current.delete(id);
+      fitAddons.current.delete(id);
+      consumedLocal.current.delete(id);
+      outputStreams.current.delete(id);
+      activityAt.current.delete(id);
+      terminalNodes.current.delete(id);
+      pendingHistory.current.delete(id);
+      alternateScreenByTerminal.current.delete(id);
+      const pendingWheel = pendingOpenCodeWheel.current.get(id);
+      if (pendingWheel) window.cancelAnimationFrame(pendingWheel.frame);
+      pendingOpenCodeWheel.current.delete(id);
+      taskTitles.current.delete(id);
+      agentTypeByTerminal.current.delete(id);
+      lastInput.current.delete(id);
+      inputBuffers.current.delete(id);
+      sentSizes.current.delete(id);
+      pinnedTitles.current.delete(id);
+      const pendingResize = resizeTimers.current.get(id);
+      if (pendingResize) window.clearTimeout(pendingResize);
+      resizeTimers.current.delete(id);
+      void window.termbeacon.removeHistory(id);
+    }
+    setTasks((items) => items.filter((task) => !removedIds.has(task.terminalId)));
+    const remainingIds = owner.terminalIds.filter((id) => !removedIds.has(id));
+    setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: remainingIds } : workspace));
+    if (remainingIds.length === 0) {
+      // The workspace keeps at least one terminal, mirroring the single-delete
+      // rule, so batch-deleting everything does not leave an empty sidebar.
+      const replacementCwd = owner.cwd && isValidCwd(owner.cwd) ? owner.cwd : DEFAULT_CWD;
+      const replacement = newTerminal(terminals.length, defaultShell, replacementCwd);
+      setTerminals((items) => [...items.filter((item) => !removedIds.has(item.id)), replacement]);
+      setWorkspaces((items) => items.map((workspace) => workspace.id === owner.id ? { ...workspace, terminalIds: [replacement.id] } : workspace));
+      setActiveId(replacement.id);
+      focusTerminalView(replacement.id);
+      return;
+    }
+    const nextActiveId = removedIds.has(activeId) ? remainingIds[0] : activeId;
+    setActiveId(nextActiveId);
+    setTerminals((items) => items.filter((item) => !removedIds.has(item.id)));
+    if (nextActiveId) focusTerminalView(nextActiveId);
+  }
+
   function syncAgentTaskTitle(id: string, prompt: string) {
     if (pinnedTitles.current.has(id)) return;
     const agentType = agentTypeByTerminal.current.get(id);
@@ -1825,6 +1901,7 @@ function App() {
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("终端")}</span>
+          {workspaceTerminals.some((terminal) => terminal.rowPinned !== true) && <button className="workspace-add terminal-batch-clean" onClick={() => void removeUnpinnedTerminals()} title={t("删除本工作区所有未固定的终端")} aria-label={t("删除本工作区所有未固定的终端")}><BroomIcon /></button>}
           <button className="workspace-add" onClick={addTerminal} title={t("新建终端")} aria-label={t("新建终端")}><PlusIcon /></button>
         </div>
         <div className="terminal-list">
@@ -1832,6 +1909,7 @@ function App() {
           <span className={`status-dot ${stateClass[terminal.state]}`} />
           <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
+          <span className={`terminal-pin ${terminal.rowPinned ? "pinned" : ""}`} role="button" onClick={(event) => { event.stopPropagation(); toggleRowPin(terminal.id); }} title={terminal.rowPinned ? t("取消固定") : t("固定")} aria-label={terminal.rowPinned ? t("取消固定「{title}」", { title: displayTerminalTitle(terminal) }) : t("固定「{title}」", { title: displayTerminalTitle(terminal) })}><PinIcon /></span>
           {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>
         </button>)}
@@ -1851,8 +1929,8 @@ function App() {
     </aside>
     {settingsOpen && <SettingsPage locale={settingsLocale} onLocale={setSettingsLocale} theme={themeSetting} onTheme={setThemeSetting} shell={defaultShell} shellOptions={SHELL_OPTIONS} onShell={setDefaultShell}
       newTerminalAgent={defaultNewTerminalAgent} newTerminalAgentOptions={NEW_TERMINAL_AGENT_OPTIONS} onNewTerminalAgent={setDefaultNewTerminalAgent}
-      codexArgs={defaultCodexArgs} onCodexArgs={setDefaultCodexArgs}
       autoResumeOnStart={autoResumeOnStart} onAutoResumeOnStart={setAutoResumeOnStart}
+      opencodeThemeSync={opencodeThemeSync} onOpencodeThemeSync={setOpencodeThemeSync}
       version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
       onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}

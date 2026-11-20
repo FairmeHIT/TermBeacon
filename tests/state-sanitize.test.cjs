@@ -52,39 +52,16 @@ test("preserves a valid default new terminal agent and drops invalid values", ()
   assert.equal(invalid.defaultNewTerminalAgent, undefined);
 });
 
-test("preserves default Codex launch arguments and migrates the legacy profile", () => {
+test("drops the removed Codex launch-argument preference", () => {
   const result = sanitizeState({
     schemaVersion: 1,
     workspaces: [],
     terminals: [],
     defaultCodexArgs: " --yolo -m wb/cn:kimi-k3.1-pro ",
-  });
-  assert.equal(result.defaultCodexArgs, "--yolo -m wb/cn:kimi-k3.1-pro");
-
-  const legacy = sanitizeState({
-    schemaVersion: 1,
-    workspaces: [],
-    terminals: [],
     defaultCodexProfile: " bifrost ",
   });
-  assert.equal(legacy.defaultCodexArgs, "-p bifrost");
-  assert.equal(legacy.defaultCodexProfile, undefined);
-
-  const invalid = sanitizeState({
-    schemaVersion: 1,
-    workspaces: [],
-    terminals: [],
-    defaultCodexArgs: 42,
-  });
-  assert.equal(invalid.defaultCodexArgs, undefined);
-
-  const blank = sanitizeState({
-    schemaVersion: 1,
-    workspaces: [],
-    terminals: [],
-    defaultCodexArgs: "   ",
-  });
-  assert.equal(blank.defaultCodexArgs, undefined);
+  assert.equal(result.defaultCodexArgs, undefined);
+  assert.equal(result.defaultCodexProfile, undefined);
 });
 
 test("preserves the automatic session-resume preference", () => {
@@ -96,8 +73,25 @@ test("preserves the automatic session-resume preference", () => {
   assert.equal(invalid.autoResumeOnStart, undefined);
 });
 
-test("clamps the workspace/terminal section ratio into a usable band", () => {
-  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.2], [1.2, 0.8], [-3, 0.2], [0.42, 0.42]]) {
+test("preserves the opencode theme-sync preference", () => {
+  for (const value of [true, false]) {
+    const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], opencodeThemeSync: value });
+    assert.equal(result.opencodeThemeSync, value);
+  }
+  const invalid = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], opencodeThemeSync: "on" });
+  assert.equal(invalid.opencodeThemeSync, undefined);
+});
+
+test("preserves the terminal row pin and drops malformed values", () => {
+  for (const value of [true, false]) {
+    const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [{ ...validTerminal, rowPinned: value }] });
+    assert.equal(result.terminals[0].rowPinned, value);
+  }
+  const invalid = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [{ ...validTerminal, rowPinned: "yes" }] });
+  assert.equal(invalid.terminals[0].rowPinned, undefined);
+});
+
+test("clamps the workspace/terminal section ratio into a usable band", () => {  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.2], [1.2, 0.8], [-3, 0.2], [0.42, 0.42]]) {
     const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionRatio: input });
     assert.equal(result.workspaceSectionRatio, expected);
   }

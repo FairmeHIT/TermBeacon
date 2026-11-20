@@ -18,6 +18,16 @@
   --danger: #f08080;
   --danger-soft: rgba(240, 128, 128, .09);
   --overlay-shadow: 0 12px 32px rgba(0, 0, 0, .32);
+  /* Status lamps: one hue family per state. Solid fills clear 4.5:1 against
+     every sidebar surface; the hollow "stopped" ring clears 3:1. "Ready" is a
+     neutral slate and "working" a saturated blue, so the two never read as the
+     same lamp even at 8px. */
+  --status-ready: #93a3b5;
+  --status-working: #58b0ff;
+  --status-completed: #45d483;
+  --status-awaiting: #f5b64c;
+  --status-error: #ff6b6b;
+  --status-stopped: #7d8a98;
   --sidebar-width: 300px;
   /* Terminal frame: gutter outside the card, inset between card edge and text,
      and the card's corner radius. */
@@ -45,48 +55,12 @@
   --danger: #b83f46;
   --danger-soft: rgba(184, 63, 70, .07);
   --overlay-shadow: 0 12px 30px rgba(32, 42, 54, .14);
-}
-
-:root[data-theme="midnight"] {
-  color-scheme: dark;
-  --app-bg: #0a1022;
-  --panel-bg: #0f1730;
-  --panel-soft: #141e3c;
-  --panel-active: #1a2650;
-  --border: #233055;
-  --border-strong: #35477a;
-  --text: #e3e9f8;
-  --text-soft: #b9c4e4;
-  --muted: #8493bd;
-  --muted-strong: #93a1c8;
-  --quiet: #8290b8;
-  --accent: #7c9ff5;
-  --accent-soft: rgba(124, 159, 245, .12);
-  --terminal-bg: #0a1022;
-  --danger: #f08080;
-  --danger-soft: rgba(240, 128, 128, .09);
-  --overlay-shadow: 0 12px 32px rgba(0, 0, 0, .42);
-}
-
-:root[data-theme="forest"] {
-  color-scheme: dark;
-  --app-bg: #0d1410;
-  --panel-bg: #111a15;
-  --panel-soft: #17221c;
-  --panel-active: #1d2b23;
-  --border: #26332b;
-  --border-strong: #3a4f42;
-  --text: #e4ebe5;
-  --text-soft: #bccabf;
-  --muted: #8aa094;
-  --muted-strong: #98ada1;
-  --quiet: #8a9c92;
-  --accent: #6fbf97;
-  --accent-soft: rgba(111, 191, 151, .12);
-  --terminal-bg: #0d1410;
-  --danger: #f08080;
-  --danger-soft: rgba(240, 128, 128, .09);
-  --overlay-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+  --status-ready: #4a5866;
+  --status-working: #0f62c4;
+  --status-completed: #147a46;
+  --status-awaiting: #9d5400;
+  --status-error: #c62828;
+  --status-stopped: #727f8c;
 }
 
 :root[data-theme="sepia"] {
@@ -108,6 +82,12 @@
   --danger: #b83f46;
   --danger-soft: rgba(184, 63, 70, .07);
   --overlay-shadow: 0 12px 30px rgba(84, 70, 45, .16);
+  --status-ready: #57534a;
+  --status-working: #225f96;
+  --status-completed: #2d6a3f;
+  --status-awaiting: #8f5300;
+  --status-error: #a92f36;
+  --status-stopped: #7f725c;
 }
 
 * { box-sizing: border-box; }
@@ -309,7 +289,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   position: relative;
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -381,11 +361,36 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   white-space: nowrap;
 }
 .workspace-item:not(.active) .workspace-copy strong { color: var(--text-soft); }
+/* Floating overlay: the actions sit absolutely on the row's top-right corner so
+   they occupy no layout width. The text keeps its full width when the buttons
+   are hidden; on hover the buttons float over the row's trailing edge and the
+   copy fades under them, so nothing shifts. */
 .workspace-actions {
+  position: absolute;
+  top: 5px;
+  right: 5px;
   display: inline-flex;
   align-items: center;
   gap: 2px;
+  border-radius: 4px;
+  background: var(--panel-soft);
+  box-shadow: 0 0 0 4px var(--panel-soft);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .12s ease;
 }
+.workspace-item:hover .workspace-actions,
+.workspace-item:focus-visible .workspace-actions,
+.workspace-item:focus-within .workspace-actions {
+  opacity: 1;
+  visibility: visible;
+}
+/* The hidden group's rows always show their unhide chip, so the overlay stays
+   visible there without the hover wash. */
+.workspace-item-hidden .workspace-actions { opacity: 1; visibility: visible; background: transparent; box-shadow: none; }
+/* Hover wash matches the row background so the floating buttons read as part of
+   the card instead of floating over raw text. */
+.workspace-item.active:hover .workspace-actions { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 /* Hidden like the close button so the row stays quiet, then revealed on hover
    or keyboard focus. The box keeps its size, so nothing shifts on reveal. */
 .workspace-open {
@@ -596,6 +601,34 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .terminal-item:hover .terminal-remove, .terminal-item:focus-within .terminal-remove { display: inline; }
 .terminal-remove:hover { color: var(--danger); background: var(--danger-soft); }
+/* Pin toggle: hidden like the remove button until hover, but a pinned row
+   always shows it highlighted so the state is visible without hovering. */
+.terminal-pin {
+  position: absolute;
+  top: 6px;
+  right: 30px;
+  display: none;
+  width: 20px;
+  height: 20px;
+  padding: 2px;
+  color: var(--muted);
+  border-radius: 4px;
+  background: var(--panel-active);
+  cursor: pointer;
+}
+.terminal-pin svg { width: 12px; height: 12px; }
+.terminal-item:hover .terminal-pin, .terminal-item:focus-within .terminal-pin { display: inline-flex; align-items: center; justify-content: center; }
+.terminal-pin:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.terminal-pin.pinned {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  transform: rotate(35deg);
+}
+/* Batch clean for unpinned terminals: reuses the header add-button slot but
+   warns with the danger palette on hover. */
+.terminal-batch-clean:hover { color: var(--danger); background: var(--danger-soft); }
 .terminal-resume {
   position: absolute;
   right: 30px;
@@ -611,52 +644,71 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .terminal-resume:hover { color: var(--text); border-color: var(--accent); }
 .status-dot {
-  width: 7px;
-  height: 7px;
+  position: relative;
+  width: 8px;
+  height: 8px;
   margin-top: 5px;
   border-radius: 50%;
-  background: var(--quiet);
+  background: var(--status-ready);
+}
+/* Shared halo ring. Only attention states paint it, so a plain solid dot means
+   "ready" and a hollow ring means "stopped"; shape and motion stay readable
+   even when two hues sit close together. */
+.status-dot::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
 }
 .status-dot.working {
-  background: #70aef0;
-  box-shadow: 0 0 0 3px rgba(112, 174, 240, .1);
-  animation: pulse 1.8s ease-in-out infinite;
+  color: var(--status-working);
+  background: currentColor;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-working) 42%, transparent);
 }
+.status-dot.working::after { animation: status-ping 1.8s ease-out infinite; }
 .status-dot.completed {
-  background: #55c889;
-  box-shadow: 0 0 0 3px rgba(85, 200, 137, .12);
-  animation: pulse 1.1s ease-in-out infinite;
+  color: var(--status-completed);
+  background: currentColor;
+  box-shadow: 0 0 5px color-mix(in srgb, var(--status-completed) 32%, transparent);
 }
-.status-dot.ready { background: #829b91; }
+.status-dot.completed::after { inset: -2px; opacity: .7; }
+.status-dot.ready { background: var(--status-ready); }
 .status-dot.awaiting {
-  background: #e0ad54;
-  box-shadow: 0 0 0 3px rgba(224, 173, 84, .1);
-  animation: pulse 1.8s ease-in-out infinite;
+  color: var(--status-awaiting);
+  background: currentColor;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-awaiting) 40%, transparent);
 }
-.status-dot.error { background: var(--danger); }
-.status-dot.stopped { background: #58616c; }
-:root[data-theme="light"] .status-dot.working, :root[data-theme="sepia"] .status-dot.working { background: #347fc4; }
-:root[data-theme="light"] .status-dot.completed, :root[data-theme="sepia"] .status-dot.completed { background: #258657; }
-:root[data-theme="light"] .status-dot.ready, :root[data-theme="sepia"] .status-dot.ready { background: #668377; }
-:root[data-theme="light"] .status-dot.awaiting, :root[data-theme="sepia"] .status-dot.awaiting { background: #a66b13; }
-:root[data-theme="light"] .status-dot.stopped, :root[data-theme="sepia"] .status-dot.stopped { background: #a0a8b1; }
+.status-dot.awaiting::after { animation: status-ping 1.2s ease-out infinite; }
+.status-dot.error {
+  color: var(--status-error);
+  background: currentColor;
+  box-shadow: 0 0 7px color-mix(in srgb, var(--status-error) 45%, transparent);
+}
+.status-dot.error::after { inset: -2px; border-width: 1.5px; opacity: .8; }
+.status-dot.stopped {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--status-stopped);
+}
 /* Workspace lamp: the same palette as the terminal rows, pinned to the corner of
    the folder glyph so the row keeps its three-column layout. */
 .workspace-lamp {
   position: absolute;
   top: -2px;
   right: -3px;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   margin: 0;
   border: 1px solid var(--panel-bg);
 }
+.workspace-lamp::after { inset: -2px; }
 .workspace-item:hover .workspace-lamp { border-color: var(--panel-soft); }
 .workspace-item.active .workspace-lamp { border-color: var(--panel-active); }
 .terminal-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .terminal-copy strong {
   overflow: hidden;
-  padding-right: 24px;
   font-size: 12px;
   font-weight: 600;
   line-height: 17px;
@@ -842,7 +894,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .xterm .xterm-screen { background: var(--terminal-bg); }
 .terminal-host:focus-within { box-shadow: inset 0 0 0 1px var(--border-strong); }
 
-@keyframes pulse { 50% { opacity: .45; } }
+@keyframes status-ping {
+  0% { opacity: .7; transform: scale(.55); }
+  75%, 100% { opacity: 0; transform: scale(1.15); }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

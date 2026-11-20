@@ -17,7 +17,6 @@ const MAX_CWD_LENGTH = 32760;
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_RESUME_ERROR_LENGTH = 500;
 const MAX_TASK_BATCH_ID_LENGTH = 128;
-const MAX_CODEX_ARGS_LENGTH = 400;
 
 function validId(value) {
   return typeof value === "string"
@@ -61,6 +60,7 @@ function sanitizeState(parsed) {
       lastActivityAt: Number.isFinite(terminal.lastActivityAt) ? Math.max(0, Math.round(terminal.lastActivityAt)) : 0,
       ...(SHELL_TYPES.has(terminal.shell) ? { shell: terminal.shell } : {}),
       ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
+      ...(typeof terminal.rowPinned === "boolean" ? { rowPinned: terminal.rowPinned } : {}),
       ...(typeof terminal.lastSessionId === "string"
         && terminal.lastSessionAgent === terminal.agentType
         && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId)
@@ -133,12 +133,9 @@ function sanitizeState(parsed) {
   if (activeWorkspaceId !== undefined) result.activeWorkspaceId = activeWorkspaceId;
   if (SHELL_TYPES.has(parsed.defaultShell)) result.defaultShell = parsed.defaultShell;
   if (AGENT_TYPES.has(parsed.defaultNewTerminalAgent)) result.defaultNewTerminalAgent = parsed.defaultNewTerminalAgent;
-  const defaultCodexArgs = cleanText(
-    parsed.defaultCodexArgs ?? (typeof parsed.defaultCodexProfile === "string" && parsed.defaultCodexProfile.trim() ? `-p ${parsed.defaultCodexProfile.trim()}` : undefined),
-    MAX_CODEX_ARGS_LENGTH,
-  );
-  if (defaultCodexArgs) result.defaultCodexArgs = defaultCodexArgs;
   if (typeof parsed.autoResumeOnStart === "boolean") result.autoResumeOnStart = parsed.autoResumeOnStart;
+  // Cell-sized opencode themes are an opt-out: older states regain the default.
+  if (typeof parsed.opencodeThemeSync === "boolean") result.opencodeThemeSync = parsed.opencodeThemeSync;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
   // Fraction of the sidebar height the workspace block may claim. Clamped to
   // keep both sections usable; anything else falls back to the CSS default.

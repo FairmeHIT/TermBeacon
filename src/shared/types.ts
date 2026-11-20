@@ -47,6 +47,8 @@ export interface TerminalInstance {
   title: string;
   /** True after the user explicitly renamed the terminal. */
   titlePinned?: boolean;
+  /** Pinned to the top of the workspace's terminal list; survives batch delete. */
+  rowPinned?: boolean;
   cwd: string;
   shell?: ShellType;
   agentType: AgentType;
@@ -213,5 +215,5 @@ export interface PtyHostReadyEvent {
 export type CloseToTrayPreference = "ask" | "minimize-to-tray" | "exit";
 export interface CloseToTraySettings { preference: CloseToTrayPreference; balloonShown: boolean; }
 
-export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; defaultCodexArgs?: string; autoResumeOnStart?: boolean; sidebarWidth?: number; workspaceSectionRatio?: number; windowBounds?: WindowBounds; closeToTray?: CloseToTraySettings; }
+export interface PersistedState { schemaVersion: 1; workspaces: Workspace[]; terminals: TerminalInstance[]; tasks?: TaskRecord[]; activeTerminalId?: string; activeWorkspaceId?: string; defaultShell?: ShellType; defaultNewTerminalAgent?: AgentType; autoResumeOnStart?: boolean; opencodeThemeSync?: boolean; sidebarWidth?: number; workspaceSectionRatio?: number; windowBounds?: WindowBounds; closeToTray?: CloseToTraySettings; }
 
