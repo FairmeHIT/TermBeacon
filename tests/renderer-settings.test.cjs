@@ -10,7 +10,7 @@ const sharedTypes = fs.readFileSync(path.join(__dirname, "../src/shared/types.ts
 const styles = fs.readFileSync(path.join(__dirname, "../src/renderer/styles.css"), "utf8");
 
 test("brand header uses a beacon mark and only the product name", () => {
-  const brandRow = app.match(/<div className="brand-row">([\s\S]*?)<\/div>\s*<section className="sidebar-section workspaces-section">/)?.[1];
+  const brandRow = app.match(/<div className="brand-row">([\s\S]*?)<\/div>\s*<section className="sidebar-section workspaces-section"/)?.[1];
   assert.ok(brandRow, "brand row must exist");
   assert.match(brandRow, /<BrandMark\s*\/>/);
   assert.match(brandRow, /className="brand">TermBeacon<\/div>/);
@@ -49,14 +49,14 @@ test("sidebar controls expose collapse and a visible new-terminal action", () =>
 
 test("workspaces and terminals render as distinct labeled sections", () => {
   // Both sections live in the sidebar with their own headers and add actions.
-  assert.match(app, /<section className="sidebar-section workspaces-section">/);
+  assert.match(app, /<section className="sidebar-section workspaces-section"/);
   assert.match(app, /<section className="sidebar-section terminals-section">/);
   assert.match(app, /<span className="sidebar-section-title">\{t\("工作区"\)\}<\/span>/);
   assert.match(app, /<span className="sidebar-section-title">\{t\("终端"\)\}<\/span>/);
-  // The sections are visually separated, not one blended column.
-  const separators = styles.match(/\.terminals-section\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(separators, "terminals section styles must exist");
-  assert.match(separators, /border-top:\s*1px solid var\(--border\)/);
+  // The sections are visually separated by the draggable divider.
+  const resizer = styles.match(/\.sidebar-section-resizer\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(resizer, "section resizer styles must exist");
+  assert.match(resizer, /cursor:\s*row-resize/);
   // The workspace list is a vertical, scrollable list of folder cards.
   const list = styles.match(/\.workspace-list\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(list, "workspace list styles must exist");
@@ -72,7 +72,7 @@ test("workspaces and terminals render as distinct labeled sections", () => {
 
 test("workspace sections keep their own add actions next to the title", () => {
   // Each section header carries its own + button scoped to that section.
-  const workspacesHeader = app.match(/<section className="sidebar-section workspaces-section">([\s\S]*?)<\/section>/)?.[1];
+  const workspacesHeader = app.match(/<section className="sidebar-section workspaces-section"[\s\S]*?>((?:[^<]|<(?!\/section))*?)<\/section>/)?.[1];
   assert.ok(workspacesHeader, "workspaces section must exist");
   assert.match(workspacesHeader, /onClick=\{addWorkspace\}/);
   const terminalsHeader = app.match(/<section className="sidebar-section terminals-section">([\s\S]*?)<div className="terminal-list">/)?.[1];
@@ -351,7 +351,7 @@ test("new terminals launch the configured default agent", () => {
   // rest of the terminal preferences.
   assert.match(app, /const DEFAULT_NEW_TERMINAL_AGENT: AgentType = "codex"/);
   assert.match(app, /defaultNewTerminalAgent,\s*\n\s*defaultCodexArgs,\s*\n\s*autoResumeOnStart,\s*\n\s*sidebarWidth,/);
-  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, hydrated\]\)/);
+  assert.match(app, /\}, \[terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, workspaceRatio, hydrated\]\)/);
   const addTerminal = app.match(/async function addTerminal\(\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(addTerminal, "addTerminal must exist");
   assert.match(addTerminal, /if \(defaultNewTerminalAgent !== "generic"\)/);
@@ -522,7 +522,7 @@ test("the launch rewrite follows the alternate screen and the restored label", (
 });
 
 test("workspaces collapse into a hidden group below the visible list", () => {
-  const section = app.match(/<section className="sidebar-section workspaces-section">([\s\S]*?)<\/section>/)?.[1];
+  const section = app.match(/<section className="sidebar-section workspaces-section"[\s\S]*?>((?:[^<]|<(?!\/section))*?)<\/section>/)?.[1];
   assert.ok(section, "workspaces section must exist");
   // The dropdown lives at the bottom of the block, after the scrolling list.
   const listIndex = section.indexOf('className="workspace-list"');

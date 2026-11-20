@@ -177,6 +177,7 @@ interface PersistedState {
   defaultShell?: ShellType;
   autoResumeOnStart?: boolean;
   sidebarWidth?: number;
+  workspaceSectionRatio?: number;
   windowBounds?: WindowBounds;
   closeToTray?: CloseToTraySettings;
 }

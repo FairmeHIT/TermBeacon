@@ -96,8 +96,16 @@ test("preserves the automatic session-resume preference", () => {
   assert.equal(invalid.autoResumeOnStart, undefined);
 });
 
-test("preserves the close-to-tray preference and balloon flag", () => {
-  for (const preference of ["ask", "minimize-to-tray", "exit"]) {
+test("clamps the workspace/terminal section ratio into a usable band", () => {
+  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.2], [1.2, 0.8], [-3, 0.2], [0.42, 0.42]]) {
+    const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionRatio: input });
+    assert.equal(result.workspaceSectionRatio, expected);
+  }
+  const invalid = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [], workspaceSectionRatio: "half" });
+  assert.equal(invalid.workspaceSectionRatio, undefined);
+});
+
+test("preserves the close-to-tray preference and balloon flag", () => {  for (const preference of ["ask", "minimize-to-tray", "exit"]) {
     const result = sanitizeState({
       schemaVersion: 1,
       workspaces: [],

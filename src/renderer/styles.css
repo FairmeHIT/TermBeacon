@@ -277,9 +277,22 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 }
 .terminals-section {
   flex: 1 1 auto;
-  margin-top: 8px;
-  border-top: 1px solid var(--border);
+  margin-top: 0;
   padding-top: 4px;
+}
+/* Draggable horizontal divider between the workspace and terminal blocks. */
+.sidebar-section-resizer {
+  flex: 0 0 auto;
+  height: 9px;
+  margin: 4px -2px 0;
+  border-top: 1px solid var(--border);
+  cursor: row-resize;
+  touch-action: none;
+}
+.sidebar-section-resizer:hover,
+.sidebar-section-resizer:active {
+  border-top-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .workspace-list {
   display: flex;

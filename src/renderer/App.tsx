@@ -433,6 +433,9 @@ function App() {
   const [hostDown, setHostDown] = useState(false);
   const [hostMessage, setHostMessage] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(300);
+  // Share of the sidebar claimed by the workspace block (0.2-0.8). The
+  // terminals block takes the rest; the divider between them is draggable.
+  const [workspaceRatio, setWorkspaceRatio] = useState<number | null>(null);
   const [updateState, setUpdateState] = useState<UpdateStatus | null>(null);
   const [appVersion, setAppVersion] = useState("");
   const [appPackaged, setAppPackaged] = useState(true);
@@ -612,6 +615,7 @@ function App() {
         .map((task) => [task.id, task]));
       setTasks(markInterrupted(state.tasks ?? [], restoredAt));
       if (typeof state.sidebarWidth === "number") setSidebarWidth(state.sidebarWidth);
+      if (typeof state.workspaceSectionRatio === "number") setWorkspaceRatio(state.workspaceSectionRatio);
       const freshTerminal = state.terminals.length === 0 ? newTerminal(1, restoredDefaultShell, info.cwd) : null;
       if (state.terminals.length > 0) {
         const restoredTerminals = state.terminals.map((terminal) => {
@@ -1149,6 +1153,7 @@ function App() {
         defaultCodexArgs,
         autoResumeOnStart,
         sidebarWidth,
+        workspaceSectionRatio: workspaceRatio ?? undefined,
       };
       const serialized = JSON.stringify(state);
       if (serialized === lastSavedState.current) return;
@@ -1158,7 +1163,7 @@ function App() {
       });
     }, 150);
     return () => window.clearTimeout(handle);
-  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, hydrated]);
+  }, [terminals, workspaces, activeId, activeWorkspaceId, tasks, defaultShell, defaultNewTerminalAgent, defaultCodexArgs, autoResumeOnStart, sidebarWidth, workspaceRatio, hydrated]);
 
   useEffect(() => {
     terminalViews.current.forEach((term, id) => {
@@ -1280,6 +1285,42 @@ function App() {
     document.body.style.userSelect = "none";
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", stop, { once: true });
+  }
+
+  // Vertical divider between the workspace and terminal blocks. The position
+  // is stored as a fraction of the sidebar's inner height so it survives
+  // window and sidebar resizes; persistence rides the existing state save.
+  function beginSectionResize(event: ReactPointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const sidebar = event.currentTarget.parentElement;
+    if (!sidebar) return;
+    const total = sidebar.clientHeight;
+    if (total <= 0) return;
+    const startY = event.clientY;
+    const startRatio = workspaceRatio ?? null;
+    const move = (moveEvent: PointerEvent) => {
+      const next = Math.min(0.8, Math.max(0.2, (startRatio ?? fallbackWorkspaceRatio()) + (moveEvent.clientY - startY) / total));
+      setWorkspaceRatio(next);
+    };
+    const stop = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+    };
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop, { once: true });
+  }
+
+  // Without a saved ratio the CSS keeps the workspace block at max-height 42%;
+  // the first drag continues from where the rendered layout actually is.
+  function fallbackWorkspaceRatio() {
+    const section = document.querySelector<HTMLElement>(".workspaces-section");
+    const sidebar = section?.parentElement;
+    if (!section || !sidebar || sidebar.clientHeight <= 0) return 0.42;
+    return Math.min(0.8, Math.max(0.2, section.getBoundingClientRect().height / sidebar.clientHeight));
   }
 
   function restartHost() {
@@ -1748,7 +1789,7 @@ function App() {
     <aside className="sidebar">
       {!sidebarCollapsed && <>
       <div className="brand-row"><div className="brand-lockup"><BrandMark /><div className="brand">TermBeacon</div></div></div>
-      <section className="sidebar-section workspaces-section">
+      <section className="sidebar-section workspaces-section" style={workspaceRatio !== null ? { flexBasis: `${Math.round(workspaceRatio * 100)}%`, maxHeight: `${Math.round(workspaceRatio * 100)}%`, flexGrow: 0 } : undefined}>
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("工作区")}</span>
           <button className="workspace-add" onClick={addWorkspace} title={t("添加工作区（选择本地文件夹）")} aria-label={t("添加工作区（选择本地文件夹）")}><PlusIcon /></button>
@@ -1765,6 +1806,7 @@ function App() {
         </button>
         {hiddenWorkspacesOpen && <div className="workspace-list workspace-hidden-list" id="hidden-workspaces">{hiddenWorkspaces.map((workspace) => workspaceRow(workspace, true))}</div>}
       </section>
+      <div className="sidebar-section-resizer" onPointerDown={beginSectionResize} title={t("拖动调整工作区与终端的高度比例")} role="separator" aria-orientation="horizontal" />
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("终端")}</span>

@@ -140,6 +140,11 @@ function sanitizeState(parsed) {
   if (defaultCodexArgs) result.defaultCodexArgs = defaultCodexArgs;
   if (typeof parsed.autoResumeOnStart === "boolean") result.autoResumeOnStart = parsed.autoResumeOnStart;
   if (Number.isFinite(parsed.sidebarWidth)) result.sidebarWidth = Math.min(460, Math.max(220, Math.round(parsed.sidebarWidth)));
+  // Fraction of the sidebar height the workspace block may claim. Clamped to
+  // keep both sections usable; anything else falls back to the CSS default.
+  if (Number.isFinite(parsed.workspaceSectionRatio)) {
+    result.workspaceSectionRatio = Math.min(0.8, Math.max(0.2, parsed.workspaceSectionRatio));
+  }
   if (parsed.windowBounds && typeof parsed.windowBounds === "object") {
     const width = Number.isFinite(parsed.windowBounds.width) ? Math.round(parsed.windowBounds.width) : 1280;
     const height = Number.isFinite(parsed.windowBounds.height) ? Math.round(parsed.windowBounds.height) : 820;
