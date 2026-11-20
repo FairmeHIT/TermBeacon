@@ -603,45 +603,16 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .terminal-item.active .terminal-remove { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
 .terminal-item:hover .terminal-remove, .terminal-item:focus-within .terminal-remove { display: inline; }
 .terminal-remove:hover { color: var(--danger); background: var(--danger-soft); box-shadow: none; }
-/* Pin toggle: hidden like the remove button until hover, but a pinned row
-   always shows it highlighted so the state is visible without hovering.
-   The solid box-shadow halo matches the workspace overlay so the button
-   never reads as a transparent hole over the row text behind it. */
-.terminal-pin {
-  position: absolute;
-  top: 6px;
-  right: 30px;
-  display: none;
-  width: 20px;
-  height: 20px;
-  padding: 2px;
-  color: var(--muted);
-  border-radius: 4px;
-  background: var(--panel-soft);
-  box-shadow: 0 0 0 4px var(--panel-soft);
-  cursor: pointer;
-}
-.terminal-pin svg { width: 12px; height: 12px; }
-.terminal-item.active .terminal-pin { background: var(--panel-active); box-shadow: 0 0 0 4px var(--panel-active); }
-.terminal-item:hover .terminal-pin, .terminal-item:focus-within .terminal-pin { display: inline-flex; align-items: center; justify-content: center; }
-.terminal-pin:hover { color: var(--accent); background: var(--accent-soft); box-shadow: none; }
-.terminal-pin.pinned {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-  transform: rotate(35deg);
-}
-/* Batch clean for unpinned terminals: reuses the header add-button slot but
+/* Batch clean for visible terminals: reuses the header add-button slot but
    warns with the danger palette on hover. */
 .terminal-batch-clean:hover { color: var(--danger); background: var(--danger-soft); }
-/* Hide button on a visible terminal row: same placement and halo as the pin
-   and remove buttons, hidden until hover. */
+/* Hide button on a visible terminal row: same placement and halo as the
+   remove button, hidden until hover. */
 .terminal-hide,
 .terminal-unhide {
   position: absolute;
   top: 6px;
-  right: 52px;
+  right: 30px;
   display: none;
   width: 20px;
   height: 20px;

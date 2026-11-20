@@ -47,8 +47,6 @@ export interface TerminalInstance {
   title: string;
   /** True after the user explicitly renamed the terminal. */
   titlePinned?: boolean;
-  /** Pinned to the top of the workspace's terminal list; survives batch delete. */
-  rowPinned?: boolean;
   /** Collapsed into the sidebar's hidden terminal group by the user. */
   hidden?: boolean;
   cwd: string;

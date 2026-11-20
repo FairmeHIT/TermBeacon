@@ -349,14 +349,6 @@ function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
 }
 
-// A pushpin: filled look when pinned, outline when not (the caller sets the
-// color class, this only draws the shape).
-function PinIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M14.5 2.5 21.5 9.5 18 13l-1-1-4 4 .5 3.5L12 21l-3-3-4.5 4.5L3 21 7.5 16.5 4.5 13.5 7 11l3.5.5 4-4-1-1Z" />
-  </svg>;
-}
-
 // A small broom for the batch-clean action.
 function BroomIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -525,12 +517,12 @@ function App() {
 
   const active = useMemo(() => terminals.find((terminal) => terminal.id === activeId) ?? terminals[0], [activeId, terminals]);
   const activeWorkspace = useMemo(() => workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? workspaces[0], [workspaces, activeWorkspaceId]);
-  // Pinned rows stay on top, then the rest by creation order (newest first).
-  // Stable and predictable: output and task events never reshuffle rows.
-  // Hidden terminals are split into a separate group rendered at the bottom.
+  // Newest first. Stable and predictable: output and task events never
+  // reshuffle rows. Hidden terminals are split into a separate group rendered
+  // at the bottom.
   const sortedWorkspaceTerminals = useMemo(() => terminals
     .filter((terminal) => activeWorkspace?.terminalIds.includes(terminal.id))
-    .sort((a, b) => Number(b.rowPinned === true) - Number(a.rowPinned === true) || b.lastActivityAt - a.lastActivityAt), [terminals, activeWorkspace]);
+    .sort((a, b) => b.lastActivityAt - a.lastActivityAt), [terminals, activeWorkspace]);
   const workspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => !terminal.hidden), [sortedWorkspaceTerminals]);
   const hiddenWorkspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => terminal.hidden), [sortedWorkspaceTerminals]);
   // One lamp per workspace, derived from the terminals it owns.
@@ -636,6 +628,13 @@ function App() {
       if (state.terminals.length > 0) {
         const restoredTerminals = state.terminals.map((terminal) => {
           const interrupted = terminal.state === "working" || terminal.state === "awaiting-input";
+          // An `error` lamp means "look at this now". Across a restart that
+          // urgency is gone: the PTY died with the previous app run (host
+          // disconnect marks every live terminal error on the way down), so the
+          // persisted red is a historical fact, not a live problem. Downgrade
+          // dead error terminals to stopped so the sidebar does not accumulate
+          // permanent red rows; the task history still records the failure.
+          const deadError = terminal.state === "error";
           const recoveryState: RecoveryState = interrupted
             ? "resumable"
             : (terminal.recoveryState || "none");
@@ -647,7 +646,7 @@ function App() {
           shell: isSupportedShell(terminal.shell) ? terminal.shell : restoredDefaultShell,
           titlePinned: terminal.titlePinned ?? !isGeneratedTerminalTitle(terminal.title),
           alive: false,
-          state: interrupted ? "stopped" as AgentState : terminal.state,
+          state: interrupted || deadError ? "stopped" as AgentState : terminal.state,
           resumeAvailable: terminal.agentType !== "generic" ? true : terminal.resumeAvailable,
           recoveryState,
           ...(interrupted ? { resumeError: undefined } : {}),
@@ -1151,7 +1150,6 @@ function App() {
         id: terminal.id,
         title: terminal.title,
         titlePinned: terminal.titlePinned === true,
-        rowPinned: terminal.rowPinned === true,
         hidden: terminal.hidden === true,
         cwd: terminal.cwd,
         shell: terminal.shell || defaultShell,
@@ -1328,15 +1326,24 @@ function App() {
     const total = sidebar.clientHeight;
     if (total <= 0) return;
     // Fixed siblings outside the workspace/terminal split: brand row at the top
-    // and the footer at the bottom, plus the resizer strip itself.
-    const brand = sidebar.querySelector<HTMLElement>(".brand-row");
+    // and the footer at the bottom, plus the resizer strip itself. The workspace
+    // section's margin-top and the resizer's top margin also consume layout
+    // space, so they are counted here — the available height for the two
+    // flexible sections is total minus everything fixed around them.
     const footer = sidebar.querySelector<HTMLElement>(".sidebar-footer");
-    const fixedHeight = (brand?.offsetHeight ?? 0) + (footer?.offsetHeight ?? 0) + resizer.offsetHeight;
+    const workspaceSection = sidebar.querySelector<HTMLElement>(".workspaces-section");
+    // Measure the actual fixed overhead: everything from the top of the sidebar
+    // to the top of the workspace section (brand row + workspace margin-top),
+    // plus everything below the resizer (footer). The resizer itself sits
+    // between the two flexible sections, so its height is fixed too.
+    const workspaceTop = workspaceSection?.offsetTop ?? 0;
+    const bottomFixed = (footer?.offsetHeight ?? 0) + resizer.offsetHeight;
+    const fixedHeight = workspaceTop + bottomFixed;
     // Each section keeps room for its header plus at least one row so neither
     // side collapses to nothing; the list inside scrolls when it is squeezed.
     const minSectionHeight = 80;
-    const maxRatio = Math.max(0.5, (total - fixedHeight - minSectionHeight) / total);
-    const minRatio = Math.min(0.5, Math.max(0.1, minSectionHeight / total));
+    const maxRatio = (total - fixedHeight - minSectionHeight) / total;
+    const minRatio = Math.max(0.1, minSectionHeight / total);
     const startY = event.clientY;
     const startRatio = workspaceRatio ?? null;
     const move = (moveEvent: PointerEvent) => {
@@ -1790,12 +1797,6 @@ function App() {
     setTerminals((items) => items.map((item) => item.id === id ? { ...item, title, titlePinned: true } : item));
   }
 
-  // Pinned rows stay at the top of the list and are exempt from the batch
-  // delete of unpinned terminals.
-  function toggleRowPin(id: string) {
-    setTerminals((items) => items.map((item) => item.id === id ? { ...item, rowPinned: !item.rowPinned } : item));
-  }
-
   // Collapse a terminal into the hidden group at the bottom of the list.
   // Hiding the active one picks the next visible terminal so the panel never
   // points at a hidden terminal.
@@ -1869,16 +1870,16 @@ function App() {
     if (nextActiveId) focusTerminalView(nextActiveId);
   }
 
-  // Delete every unpinned terminal of the active workspace in one action.
-  // Reuses the single-delete cleanup chain per terminal, then repairs the
-  // workspace membership and active selection in one pass.
-  async function removeUnpinnedTerminals() {
+  // Delete every visible (non-hidden) terminal of the active workspace in one
+  // action. Reuses the single-delete cleanup chain per terminal, then repairs
+  // the workspace membership and active selection in one pass.
+  async function removeWorkspaceTerminals() {
     const owner = activeWorkspace;
     if (!owner) return;
-    const targets = workspaceTerminals.filter((terminal) => terminal.rowPinned !== true);
+    const targets = workspaceTerminals;
     if (targets.length === 0) return;
     const confirmed = await window.termbeacon.confirm({
-      message: t("删除工作区「{name}」中未固定的 {count} 个终端？正在运行的进程会被停止。", { name: displayWorkspaceName(owner), count: targets.length }),
+      message: t("删除工作区「{name}」中未隐藏的 {count} 个终端？正在运行的进程会被停止。", { name: displayWorkspaceName(owner), count: targets.length }),
       okLabel: t("删除"),
       cancelLabel: t("取消"),
     });
@@ -1993,7 +1994,7 @@ function App() {
       <section className="sidebar-section terminals-section">
         <div className="sidebar-section-header">
           <span className="sidebar-section-title">{t("终端")}</span>
-          {workspaceTerminals.some((terminal) => terminal.rowPinned !== true) && <button className="workspace-add terminal-batch-clean" onClick={() => void removeUnpinnedTerminals()} title={t("删除本工作区所有未固定的终端")} aria-label={t("删除本工作区所有未固定的终端")}><BroomIcon /></button>}
+          {workspaceTerminals.length > 0 && <button className="workspace-add terminal-batch-clean" onClick={() => void removeWorkspaceTerminals()} title={t("删除本工作区所有未隐藏的终端")} aria-label={t("删除本工作区所有未隐藏的终端")}><BroomIcon /></button>}
           <button className="workspace-add" onClick={addTerminal} title={t("新建终端")} aria-label={t("新建终端")}><PlusIcon /></button>
         </div>
         <div className="terminal-list">
@@ -2001,7 +2002,6 @@ function App() {
           <span className={`status-dot ${stateClass[terminal.state]}`} />
           <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
           {terminal.id === activeId && <span className="active-mark">●</span>}
-          <span className={`terminal-pin ${terminal.rowPinned ? "pinned" : ""}`} role="button" onClick={(event) => { event.stopPropagation(); toggleRowPin(terminal.id); }} title={terminal.rowPinned ? t("取消固定") : t("固定")} aria-label={terminal.rowPinned ? t("取消固定「{title}」", { title: displayTerminalTitle(terminal) }) : t("固定「{title}」", { title: displayTerminalTitle(terminal) })}><PinIcon /></span>
           {terminal.alive && (terminal.recoveryState === "resumable" || terminal.recoveryState === "interrupted") && <span className="terminal-resume" role="button" onClick={(event) => { event.stopPropagation(); void resumeTerminal(terminal.id); }} title={t("恢复 CLI 会话")}>{t("恢复")}</span>}
           <span className="terminal-hide" role="button" onClick={(event) => { event.stopPropagation(); hideTerminal(terminal.id); }} title={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("收起终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
           <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")}>×</span>

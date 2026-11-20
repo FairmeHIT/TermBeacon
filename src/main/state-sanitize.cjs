@@ -60,7 +60,6 @@ function sanitizeState(parsed) {
       lastActivityAt: Number.isFinite(terminal.lastActivityAt) ? Math.max(0, Math.round(terminal.lastActivityAt)) : 0,
       ...(SHELL_TYPES.has(terminal.shell) ? { shell: terminal.shell } : {}),
       ...(typeof terminal.titlePinned === "boolean" ? { titlePinned: terminal.titlePinned } : {}),
-      ...(typeof terminal.rowPinned === "boolean" ? { rowPinned: terminal.rowPinned } : {}),
       ...(typeof terminal.hidden === "boolean" ? { hidden: terminal.hidden } : {}),
       ...(typeof terminal.lastSessionId === "string"
         && terminal.lastSessionAgent === terminal.agentType

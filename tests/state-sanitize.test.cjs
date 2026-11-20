@@ -82,13 +82,9 @@ test("preserves the opencode theme-sync preference", () => {
   assert.equal(invalid.opencodeThemeSync, undefined);
 });
 
-test("preserves the terminal row pin and drops malformed values", () => {
-  for (const value of [true, false]) {
-    const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [{ ...validTerminal, rowPinned: value }] });
-    assert.equal(result.terminals[0].rowPinned, value);
-  }
-  const invalid = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [{ ...validTerminal, rowPinned: "yes" }] });
-  assert.equal(invalid.terminals[0].rowPinned, undefined);
+test("drops any terminal rowPinned field left over from older versions", () => {
+  const result = sanitizeState({ schemaVersion: 1, workspaces: [], terminals: [{ ...validTerminal, rowPinned: true }] });
+  assert.equal(result.terminals[0].rowPinned, undefined);
 });
 
 test("clamps the workspace/terminal section ratio into a usable band", () => {  for (const [input, expected] of [[0.5, 0.5], [0.05, 0.1], [1.2, 0.95], [-3, 0.1], [0.42, 0.42]]) {

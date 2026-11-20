@@ -90,27 +90,22 @@ test("workspace removal remains available for the active workspace", () => {
   assert.doesNotMatch(app, /workspace\.id !== activeWorkspaceId && <span className="workspace-remove"/);
 });
 
-test("terminal rows expose a pin toggle and a batch clean for unpinned terminals", () => {
-  // The pin sits left of the remove button and flips rowPinned on click.
-  const pin = app.match(/<span className=\{`terminal-pin \$\{terminal\.rowPinned \? "pinned" : ""\}`\}[\s\S]*?toggleRowPin\(terminal\.id\); \}\} title=\{terminal\.rowPinned \? t\("取消固定"\) : t\("固定"\)\}/)?.[0];
-  assert.ok(pin, "terminal pin toggle must exist");
-  const toggle = app.match(/function toggleRowPin\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
-  assert.ok(toggle, "toggleRowPin must exist");
-  assert.match(toggle, /rowPinned: !item\.rowPinned/);
-  // Pin state persists with the rest of the terminal fields.
-  assert.match(app, /rowPinned: terminal\.rowPinned === true,/);
-  assert.match(sharedTypes, /rowPinned\?: boolean/);
-  // The batch clean button only renders when unpinned terminals exist.
-  assert.match(app, /workspaceTerminals\.some\(\(terminal\) => terminal\.rowPinned !== true\) && <button className="workspace-add terminal-batch-clean"/);
-  const batch = app.match(/async function removeUnpinnedTerminals\(\) \{([\s\S]*?)\n  \}/)?.[1];
-  assert.ok(batch, "removeUnpinnedTerminals must exist");
-  // Only unpinned rows are targeted, and the action confirms first.
-  assert.match(batch, /workspaceTerminals\.filter\(\(terminal\) => terminal\.rowPinned !== true\)/);
+test("terminal rows have no pin toggle and batch clean targets visible terminals", () => {
+  // No pin icon, no toggleRowPin, no rowPinned field anywhere.
+  assert.doesNotMatch(app, /terminal-pin/);
+  assert.doesNotMatch(app, /PinIcon/);
+  assert.doesNotMatch(app, /toggleRowPin/);
+  assert.doesNotMatch(app, /rowPinned/);
+  assert.doesNotMatch(sharedTypes, /rowPinned\?: boolean/);
+  // The batch clean button renders when there are visible terminals.
+  assert.match(app, /workspaceTerminals\.length > 0 && <button className="workspace-add terminal-batch-clean"/);
+  const batch = app.match(/async function removeWorkspaceTerminals\(\) \{([\s\S]*?)\n  \}/)?.[1];
+  assert.ok(batch, "removeWorkspaceTerminals must exist");
+  // All visible rows are targeted, and the action confirms first.
+  assert.match(batch, /const targets = workspaceTerminals;/);
   assert.match(batch, /window\.termbeacon\.confirm\(/);
-  // Pinned rows are exempt; the workspace keeps at least one terminal.
-  const pinStyles = styles.match(/\.terminal-pin\s*\{([\s\S]*?)\}/)?.[1];
-  assert.ok(pinStyles, "terminal pin styles must exist");
-  assert.match(styles, /\.terminal-pin\.pinned\s*\{/);
+  // No pin styles remain.
+  assert.doesNotMatch(styles, /\.terminal-pin/);
   assert.match(styles, /\.terminal-batch-clean:hover\s*\{/);
 });
 
@@ -607,6 +602,32 @@ test("Codex task titles use the submitted prompt as a stable fallback", () => {
   assert.match(sync, /agentType !== "claude" && agentType !== "codex"/);
   assert.match(app, /agentTypeByTerminal\.current\.get\(event\.terminalId\) === "codex"/);
   assert.match(app, /taskTitles\.current\.has\(event\.terminalId\)/);
+});
+
+test("restart downgrades persisted error terminals to stopped", () => {
+  // A host disconnect marks every live terminal error on the way down, so a
+  // persisted `error` is a historical fact about the previous run, not a live
+  // problem. Hydration must downgrade it alongside working/awaiting-input,
+  // or every restart accumulates permanent red rows (error outranks all
+  // other states in the workspace lamp priority).
+  const restore = app.match(/const restoredTerminals = state\.terminals\.map\(\(terminal\) => \{([\s\S]*?)\}\);\r?\n        \}\);\r?\n        pinnedTitles/)?.[1];
+  assert.ok(restore, "terminal restore mapping must exist");
+  assert.match(restore, /const deadError = terminal\.state === "error";/);
+  assert.match(restore, /state: interrupted \|\| deadError \? "stopped" as AgentState : terminal\.state/);
+});
+
+test("section divider drag bounds have no artificial 0.5 floor or ceiling", () => {
+  // The drag bounds must be derived from the live layout, not capped at 0.5.
+  // A Math.max(0.5, ...) floor on maxRatio prevents dragging the divider
+  // past the midpoint on short sidebars even when there is room, and a
+  // Math.min(0.5, ...) ceiling on minRatio does the same in the other
+  // direction. Both were removed so the divider travels the full height
+  // minus what each section needs to stay usable.
+  const resizer = app.match(/function beginSectionResize\([\s\S]*?\n  \}/)?.[0];
+  assert.ok(resizer, "beginSectionResize must exist");
+  assert.doesNotMatch(resizer, /Math\.max\(0\.5/, "maxRatio must not have a 0.5 floor");
+  assert.doesNotMatch(resizer, /Math\.min\(0\.5/, "minRatio must not have a 0.5 ceiling");
+  assert.match(resizer, /workspaceSection\?\.offsetTop/, "fixedHeight must measure workspace offsetTop");
 });
 
 test("settings occupy an independent page while terminal views remain mounted", () => {
