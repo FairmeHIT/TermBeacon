@@ -44,6 +44,7 @@ const { orderWorkspaces, recordWorkspaceUse, workspaceForTerminal, hideWorkspace
 // Mirrors the payload the main process sends on update:event and returns from
 // update:check / update:state.
 type UpdateStatus = { type: string; version?: string; percent?: number; message?: string };
+export type OpenCodeBackupInfo = { directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number };
 declare global {
   interface Window {
     termbeacon: {
@@ -65,7 +66,11 @@ declare global {
       loadHistory(terminalId: string): Promise<string>;
       appendHistory(terminalId: string, data: string): Promise<boolean>;
       removeHistory(terminalId: string): Promise<boolean>;
-      installUpdate(): Promise<boolean>;
+      getOpenCodeBackupInfo(): Promise<OpenCodeBackupInfo>;
+      backupOpenCodeNow(): Promise<{ ok: boolean; skipped?: boolean; reason?: string; file?: string; bytes?: number; rawBytes?: number; error?: string; info: OpenCodeBackupInfo }>;
+      clearOpenCodeBackups(): Promise<OpenCodeBackupInfo>;
+      openOpenCodeBackupFolder(): Promise<{ ok: boolean; message?: string }>;
+      installUpdate(request?: { activeTerminals?: number; acknowledgedBusy?: boolean }): Promise<{ ok: boolean; reason?: string; message?: string; activeTerminals?: number; backup?: { file?: string; bytes?: number } }>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
       getResumeSpec(request: { agentType?: AgentType; sessionId?: string; sessionAgent?: AgentCliId; cwd?: string; shell?: ShellType }): Promise<{ supported: boolean; command?: string; mode?: string; reason?: string; note?: string }>;
@@ -442,6 +447,7 @@ function App() {
   const [appVersion, setAppVersion] = useState("");
   const [appPackaged, setAppPackaged] = useState(true);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
   const pendingCliLaunch = useRef(new Map<string, string>());
   const terminalNodes = useRef(new Map<string, HTMLDivElement>());
   const terminalViews = useRef(new Map<string, Terminal>());
@@ -1398,7 +1404,52 @@ function App() {
     }
   }
 
-  const updateHint = describeSettingsUpdate(settingsLocale, updateState, appPackaged);
+  async function installUpdate() {
+    if (updateInstalling) return;
+    // Live renderer state is the source of truth for the guard. The main
+    // process repeats the check from its cached state before touching the
+    // installer, so a direct IPC call cannot bypass it.
+    const activeIds = new Set<string>();
+    for (const terminal of terminals) {
+      if (terminal.state === "working" || terminal.state === "awaiting-input") activeIds.add(terminal.id);
+    }
+    for (const task of tasks) {
+      if (task.state === "working" || task.state === "awaiting-input") activeIds.add(task.terminalId);
+    }
+    if (activeIds.size > 0) {
+      const confirmed = await window.termbeacon.confirm({
+        message: t("还有 {count} 个终端正在执行任务。现在安装更新会重启应用，并可能中断正在生成的内容。", { count: activeIds.size }),
+        detail: t("TermBeacon 会先备份 OpenCode 会话数据库，但无法恢复尚未落盘的回复或工具执行。"),
+        okLabel: t("仍然更新"),
+        cancelLabel: t("稍后"),
+      });
+      if (!confirmed) return;
+    }
+    setUpdateInstalling(true);
+    try {
+      const result = await window.termbeacon.installUpdate({
+        activeTerminals: activeIds.size,
+        acknowledgedBusy: activeIds.size > 0,
+      });
+      if (!result.ok) {
+        const message = result.reason === "busy"
+          ? t("仍有终端在运行任务，更新已取消。请等待任务完成后再试。")
+          : t("更新已取消：{message}", { message: result.message || t("未知错误") });
+        await window.termbeacon.showMessage({ message, type: "error" });
+      }
+    } catch (error) {
+      await window.termbeacon.showMessage({
+        message: t("更新已取消：{message}", { message: error instanceof Error ? error.message : String(error) }),
+        type: "error",
+      });
+    } finally {
+      setUpdateInstalling(false);
+    }
+  }
+
+  const updateHint = updateInstalling
+    ? t("正在备份 OpenCode 会话并准备更新…")
+    : describeSettingsUpdate(settingsLocale, updateState, appPackaged);
 
   function restartTerminal(id: string) {
     const terminal = terminals.find((item) => item.id === id);
@@ -1897,7 +1948,9 @@ function App() {
     const name = displayWorkspaceName(workspace);
     const title = workspace.cwd ? `${name} (${workspace.cwd})` : name;
     const isActive = workspace.id === activeWorkspaceId;
-    return <button key={workspace.id} className={`workspace-item ${isActive ? "active" : ""} ${hidden ? "workspace-item-hidden" : ""}`} onClick={() => selectWorkspace(workspace.id)} title={lamp ? `${title} · ${t(stateLabel[lamp])}` : title}>
+    const className = `workspace-item ${isActive ? "active" : ""} ${hidden ? "workspace-item-hidden" : ""}`;
+    const rowTitle = lamp ? `${title} · ${t(stateLabel[lamp])}` : title;
+    const content = <>
       <span className="workspace-glyph">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
         {lamp && <span className={`workspace-lamp status-dot ${stateClass[lamp]}`} role="img" aria-label={t(stateLabel[lamp])} />}
@@ -1909,11 +1962,16 @@ function App() {
       <span className="workspace-actions">
         {isValidCwd(workspace.cwd) && <span className="workspace-open" role="button" onClick={(event) => { event.stopPropagation(); void openWorkspaceFolder(workspace); }} title={t("在文件资源管理器中打开")} aria-label={t("在文件资源管理器中打开「{name}」", { name })}><OpenInExplorerIcon /></span>}
         {hidden
-          ? <span className="workspace-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreWorkspace(workspace.id); }} title={t("取消隐藏「{name}」", { name })} aria-label={t("取消隐藏「{name}」", { name })}><ChevronIcon open /></span>
+          ? <span className="workspace-unhide" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); restoreWorkspace(workspace.id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); restoreWorkspace(workspace.id); } }} title={t("取消隐藏「{name}」", { name })} aria-label={t("取消隐藏「{name}」", { name })}><ChevronIcon open /></span>
           : <span className="workspace-hide" role="button" onClick={(event) => { event.stopPropagation(); collapseWorkspace(workspace.id); }} title={t("收起工作区「{name}」", { name })} aria-label={t("收起工作区「{name}」", { name })}><ChevronIcon open /></span>}
         {workspaces.length > 1 && <span className="workspace-remove" onClick={(event) => { event.stopPropagation(); void removeWorkspace(workspace.id); }} title={t("删除工作区「{name}」", { name })} role="button" aria-label={t("删除工作区「{name}」", { name })}>×</span>}
       </span>
-    </button>;
+    </>;
+    // A hidden row is not a click target: only its chevron may bring the
+    // workspace back, so clicking the row body (or its title) does nothing.
+    return hidden
+      ? <div key={workspace.id} className={className} title={rowTitle}>{content}</div>
+      : <button key={workspace.id} className={className} onClick={() => selectWorkspace(workspace.id)} title={rowTitle}>{content}</button>;
   }
 
   return <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${settingsOpen ? "settings-mode" : ""}`}>
@@ -1962,14 +2020,14 @@ function App() {
           <ChevronIcon open />
         </button>}
         {hiddenTerminalsOpen && hiddenWorkspaceTerminals.length > 0 && <div className="terminal-list terminal-hidden-list" id="hidden-terminals">
-          {hiddenWorkspaceTerminals.map((terminal) => <button key={terminal.id} className={`terminal-item terminal-item-hidden`} onClick={() => { restoreTerminal(terminal.id); selectTerminal(terminal.id); }}>
+          {hiddenWorkspaceTerminals.map((terminal) => <div key={terminal.id} className={`terminal-item terminal-item-hidden`}>
             <span className={`status-dot ${stateClass[terminal.state]}`} />
             <span className="terminal-copy"><EditableTitle title={displayTerminalTitle(terminal)} renameHint={t("双击重命名")} onCommit={(next) => renameTerminal(terminal.id, next)} /><small>{terminalCliLabel(terminal, t)} · {terminalStateLabel(terminal, t)}</small></span>
             <span className="terminal-actions">
-              <span className="terminal-unhide" role="button" onClick={(event) => { event.stopPropagation(); restoreTerminal(terminal.id); }} title={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
+              <span className="terminal-unhide" role="button" tabIndex={0} onClick={(event) => { event.stopPropagation(); restoreTerminal(terminal.id); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); restoreTerminal(terminal.id); } }} title={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })} aria-label={t("恢复终端「{title}」", { title: displayTerminalTitle(terminal) })}><ChevronIcon open /></span>
               <span className="terminal-remove" onClick={(event) => { event.stopPropagation(); void removeTerminal(terminal.id); }} title={t("删除终端")} role="button" aria-label={t("删除终端")}>×</span>
             </span>
-          </button>)}
+          </div>)}
           <button className="terminal-hidden-clean" onClick={() => void removeHiddenTerminals()} title={t("删除本工作区所有隐藏的终端")} aria-label={t("删除本工作区所有隐藏的终端")}>{t("删除全部隐藏终端")}</button>
         </div>}
       </section>
@@ -1989,9 +2047,9 @@ function App() {
       newTerminalAgent={defaultNewTerminalAgent} newTerminalAgentOptions={NEW_TERMINAL_AGENT_OPTIONS} onNewTerminalAgent={setDefaultNewTerminalAgent}
       autoResumeOnStart={autoResumeOnStart} onAutoResumeOnStart={setAutoResumeOnStart}
       opencodeThemeSync={opencodeThemeSync} onOpencodeThemeSync={setOpencodeThemeSync}
-      version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateState?.type === "downloading"}
+      version={appVersion} updateHint={updateHint} updateBusy={updateBusy || updateInstalling || updateState?.type === "downloading"}
       updateDownloaded={updateState?.type === "downloaded" ? updateState.version || "新版本" : undefined}
-      onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void window.termbeacon.installUpdate()}
+      onCheckUpdate={() => void checkForUpdates()} onInstallUpdate={() => void installUpdate()}
       onRestartHost={async () => {
         const confirmed = await window.termbeacon.confirm({
           message: settingsText(settingsLocale, "重启终端服务将关闭所有终端进程，包括正在运行的 Agent。请先完成或保存任务。确定重启？"),
@@ -2006,7 +2064,7 @@ function App() {
     <section className={`workspace ${settingsOpen ? "settings-hidden" : ""}`} aria-hidden={settingsOpen}>
       {sidebarCollapsed && <button className="sidebar-toggle sidebar-toggle-collapsed" onClick={toggleSidebar} title={t("展开工作栏")} aria-label={t("展开工作栏")}><SidebarToggleIcon collapsed /></button>}
       {active && !active.alive && <button className="terminal-restart" onClick={() => restartTerminal(active.id)} title={t("终端已停止，点击重启")}>{t("重启终端")}</button>}
-      {updateState?.type === "downloaded" && <div className="update-banner">{t("新版本 {version} 已准备好。", { version: updateState.version || t("已下载") })}<button onClick={() => void window.termbeacon.installUpdate()}>{t("重启并安装")}</button></div>}
+      {updateState?.type === "downloaded" && <div className="update-banner">{t("新版本 {version} 已准备好。", { version: updateState.version || t("已下载") })}<button disabled={updateInstalling} onClick={() => void installUpdate()}>{t(updateInstalling ? "正在准备更新…" : "重启并安装")}</button></div>}
       {updateState?.type === "downloading" && <div className="update-progress">{t("正在下载更新 {percent}%", { percent: Math.round(updateState.percent || 0) })}</div>}
       <div className="terminal-stage" ref={terminalStage}>{terminals.map((terminal) => <div key={terminal.id} ref={(node) => { if (node) terminalNodes.current.set(terminal.id, node); }} className="terminal-host" />)}</div>
     </section>

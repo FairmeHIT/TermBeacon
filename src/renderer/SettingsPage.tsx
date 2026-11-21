@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentCliId, AgentType, CliAction, CliPlan, CliProgress, CliScan, ShellType } from "../shared/types";
 import { settingsText, type SettingsLocale } from "./settings-i18n";
-import type { ThemeSetting } from "./App";
+import type { ThemeSetting, OpenCodeBackupInfo } from "./App";
 import "./settings.css";
 
 const THEME_OPTIONS: Array<{ value: ThemeSetting; label: string }> = [
@@ -40,6 +40,11 @@ const initials: Record<AgentCliId, string> = { codex: "C", opencode: "O", claude
 const sourceLabel = { managed: "TermBeacon 托管", system: "系统安装", missing: "未安装" };
 const messageOf = (error: unknown) => error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, "") : String(error);
 const working = (event?: CliProgress) => event && !["done", "error"].includes(event.phase);
+const formatBytes = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+};
 
 export default function SettingsPage(props: Props) {
   const t = (source: string, values?: Record<string, string | number>) => settingsText(props.locale, source, values);
@@ -54,6 +59,9 @@ export default function SettingsPage(props: Props) {
   const [logs, setLogs] = useState<Partial<Record<AgentCliId, string[]>>>({});
   const [launching, setLaunching] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [backupInfo, setBackupInfo] = useState<OpenCodeBackupInfo | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupNote, setBackupNote] = useState("");
   const mounted = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
   const refreshSequence = useRef(0);
@@ -87,6 +95,63 @@ export default function SettingsPage(props: Props) {
     });
     return () => { mounted.current = false; refreshSequence.current++; previewSequence.current++; unsubscribe(); };
   }, []);
+
+  useEffect(() => {
+    void window.termbeacon.getOpenCodeBackupInfo()
+      .then((info) => { if (mounted.current) setBackupInfo(info); })
+      .catch((cause) => { if (mounted.current) setError(messageOf(cause)); });
+  }, []);
+
+  async function backupNow() {
+    setBackupBusy(true);
+    setBackupNote("");
+    setError("");
+    try {
+      const result = await window.termbeacon.backupOpenCodeNow();
+      if (!mounted.current) return;
+      setBackupInfo(result.info);
+      if (!result.ok) setError(result.error || t("备份失败"));
+      else if (result.skipped) setBackupNote(t(result.reason === "missing-db" || result.reason === "empty-db" ? "未找到需要备份的 OpenCode 数据库。" : "已是最新快照。"));
+      else setBackupNote(t("备份完成：{size}", { size: formatBytes(result.info.bytes) }));
+    } catch (cause) {
+      if (mounted.current) setError(messageOf(cause));
+    } finally {
+      if (mounted.current) setBackupBusy(false);
+    }
+  }
+
+  async function clearBackups() {
+    if (!backupInfo?.count || backupBusy) return;
+    const confirmed = await window.termbeacon.confirm({
+      message: t("删除全部 OpenCode 备份快照？"),
+      detail: t("只会删除 TermBeacon 保存的快照，不会修改 OpenCode 当前数据库或对话记录。"),
+      okLabel: t("删除备份"),
+      cancelLabel: t("取消"),
+    });
+    if (!confirmed) return;
+    setBackupBusy(true);
+    setBackupNote("");
+    setError("");
+    try {
+      const info = await window.termbeacon.clearOpenCodeBackups();
+      if (!mounted.current) return;
+      setBackupInfo(info);
+      setBackupNote(t("OpenCode 备份已清理。"));
+    } catch (cause) {
+      if (mounted.current) setError(messageOf(cause));
+    } finally {
+      if (mounted.current) setBackupBusy(false);
+    }
+  }
+
+  async function openBackupFolder() {
+    try {
+      const result = await window.termbeacon.openOpenCodeBackupFolder();
+      if (!result.ok) setError(result.message || t("无法打开备份目录"));
+    } catch (cause) {
+      setError(messageOf(cause));
+    }
+  }
 
   async function preview(id: AgentCliId, action: CliAction) {
     const sequence = ++previewSequence.current;
@@ -173,6 +238,7 @@ export default function SettingsPage(props: Props) {
           <section className="preference-row"><div><h2 id="settings-auto-resume">{t("启动时自动恢复会话")}</h2><p>{t("终端后台服务不在时，自动恢复已记录会话 ID 的 Agent 终端；无法确定会话的终端仍保留“恢复”，可手动处理。")}</p></div><button type="button" id="settings-auto-resume-switch" role="switch" aria-checked={props.autoResumeOnStart} aria-labelledby="settings-auto-resume" className={`settings-switch ${props.autoResumeOnStart ? "on" : ""}`} onClick={() => props.onAutoResumeOnStart(!props.autoResumeOnStart)}><span aria-hidden="true" /></button></section>
           <section className="preference-row"><div><h2 id="settings-opencode-theme">{t("opencode 主题跟随")}</h2><p>{t("启动 opencode 时下发 TermBeacon 的完整配色（深色、浅色或暖纸米色）。若已在 opencode 中自行设置主题，则保持你的选择；仅对新启动的终端生效。")}</p></div><button type="button" id="settings-opencode-theme-switch" role="switch" aria-checked={props.opencodeThemeSync} aria-labelledby="settings-opencode-theme" className={`settings-switch ${props.opencodeThemeSync ? "on" : ""}`} onClick={() => props.onOpencodeThemeSync(!props.opencodeThemeSync)}><span aria-hidden="true" /></button></section>
           <section className="preference-row"><div><h2>{t("应用更新")} <span className="settings-version">{props.version || t("版本未知")}</span></h2><p role="status">{props.updateHint || t("检查并获取 TermBeacon 的新版本。")}</p></div><button className="settings-button" onClick={props.updateDownloaded ? props.onInstallUpdate : props.onCheckUpdate} disabled={props.updateBusy}>{t(props.updateDownloaded ? "重启并安装" : props.updateBusy ? "检查中…" : "检查更新")}</button></section>
+          <section className="preference-row"><div><h2>{t("OpenCode 会话备份")} <span className="settings-version">{backupInfo ? t("{count} 份 · {size}", { count: String(backupInfo.count), size: formatBytes(backupInfo.bytes) }) : t("读取中…")}</span></h2><p>{t("保留最近 {retention} 份压缩快照（总大小上限 2 GB）。备份失败会阻止更新；在 TermBeacon 删除终端不会删除 OpenCode 对话或历史快照。", { retention: String(backupInfo?.retention ?? 3) })}</p>{backupNote && <p role="status">{backupNote}</p>}</div><div className="settings-button-row"><button className="settings-button" onClick={() => void backupNow()} disabled={backupBusy}>{t(backupBusy ? "备份中…" : "立即备份")}</button><button className="settings-button" onClick={() => void clearBackups()} disabled={backupBusy || !backupInfo?.count}>{t("清理备份")}</button><button className="settings-text-button" onClick={() => void openBackupFolder()} disabled={!backupInfo?.count || backupBusy}>{t("打开备份目录")}</button></div></section>
           <section className="preference-row"><div><h2>{t("终端后台服务")}</h2><p>{t("升级状态检测组件后，可在任务结束时重启服务。此操作会关闭当前所有终端进程。")}</p></div><button className="settings-button" disabled={restarting} onClick={() => {
             setRestarting(true);
             void props.onRestartHost().catch((cause) => setError(messageOf(cause))).finally(() => setRestarting(false));

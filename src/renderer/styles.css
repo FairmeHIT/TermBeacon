@@ -533,7 +533,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   max-height: 160px;
   margin-top: 2px;
 }
-.workspace-item-hidden { opacity: .72; }
+.workspace-item-hidden { opacity: .72; cursor: default; }
 .workspace-item-hidden:hover,
 .workspace-item-hidden:focus-visible { opacity: 1; }
 /* Sending a workspace down stays a hover action like the other row tools; the
@@ -619,7 +619,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   background: var(--panel-active);
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.terminal-item-hidden { opacity: .72; }
+.terminal-item-hidden { opacity: .72; cursor: default; }
 .terminal-item-hidden:hover,
 .terminal-item-hidden:focus-visible { opacity: 1; }
 .terminal-hidden-list { flex: 0 1 auto; max-height: 200px; margin-top: 2px; }

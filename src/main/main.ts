@@ -67,8 +67,40 @@ const { planRestart } = require("./host-restart.cjs") as {
     attempts: number; delayMs: number; giveUp: boolean;
   };
 };
-const { getResumeSpec } = require("./session-resume.cjs") as {
+const { getResumeSpec, sessionIdFitsAgent } = require("./session-resume.cjs") as {
   getResumeSpec: (request: { agentType?: string; sessionId?: string; sessionAgent?: string; cwd?: string; shell?: string }) => { supported: boolean; args?: string[]; [key: string]: unknown };
+  sessionIdFitsAgent: (agentType: string, value: unknown) => boolean;
+};
+const { createSessionJournal } = require("./session-journal.cjs") as {
+  createSessionJournal: (options: { file: string }) => {
+    load: () => Promise<Record<string, { sessionId: string; agentType: AgentCliId; at: number }>>;
+    record: (entry: { terminalId?: string; sessionId?: string; agentType?: string; at?: number }) => Promise<boolean>;
+    flush: () => Promise<void>;
+  };
+};
+const { resolveOpenCodeDataDir } = require("./opencode-paths.cjs") as {
+  resolveOpenCodeDataDir: () => string;
+};
+const { assignRecoverableSessions, readRecentOpenCodeSessions } = require("./opencode-sessions.cjs") as {
+  assignRecoverableSessions: (
+    terminals: TerminalInstance[],
+    sessions: Array<{ id: string; directory: string; timeCreated: number; timeUpdated: number; title?: string; source: string }>,
+    options?: { now?: number; platform?: string },
+  ) => Array<{ terminalId: string; sessionId: string; agentType: "opencode"; at: number }>;
+  readRecentOpenCodeSessions: (options: { dataDir: string }) => {
+    sessions: Array<{ id: string; directory: string; timeCreated: number; timeUpdated: number; title?: string; source: string }>;
+    source: string;
+    error: string | null;
+  };
+};
+const { createOpenCodeBackup } = require("./opencode-backup.cjs") as {
+  createOpenCodeBackup: (options: { dataDir: string; backupDir: string }) => {
+    backupNow: (options?: { reason?: string; minIntervalMs?: number; onlyIfChanged?: boolean }) => Promise<{
+      ok: boolean; skipped?: boolean; reason?: string; file?: string; bytes?: number; rawBytes?: number; error?: string;
+    }>;
+    info: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
+    clear: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
+  };
 };
 const { resolveAssets } = require("./integration-config.cjs") as {
   resolveAssets: (options: { packaged: boolean; resourcesPath: string; appPath: string; executablePath: string }) => { opencodePlugin: string; hookScript: string; hookCommand?: string | null; codexHookCommand?: string | null };
@@ -196,6 +228,17 @@ interface PersistedState {
 function statePath() { return path.join(app.getPath("userData"), "state.json"); }
 function historyDir() { return path.join(app.getPath("userData"), "terminal-history"); }
 function historyStore() { return terminalHistory ??= createHistoryStore({ directory: historyDir() }); }
+function sessionJournalFile() { return path.join(app.getPath("userData"), "session-journal.json"); }
+function openCodeBackupDir() { return path.join(app.getPath("userData"), "opencode-backups"); }
+let sessionJournalStore: ReturnType<typeof createSessionJournal> | undefined;
+function sessionJournal() { return sessionJournalStore ??= createSessionJournal({ file: sessionJournalFile() }); }
+let openCodeBackupStore: ReturnType<typeof createOpenCodeBackup> | undefined;
+function openCodeBackup() {
+  return openCodeBackupStore ??= createOpenCodeBackup({
+    dataDir: resolveOpenCodeDataDir(),
+    backupDir: openCodeBackupDir(),
+  });
+}
 
 function integrationAssets() {
   return resolveAssets({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), executablePath: process.execPath });
@@ -220,6 +263,49 @@ async function readState(): Promise<PersistedState> {
       try { await copyFile(target, `${target}.corrupt-${Date.now()}`); } catch { /* best effort */ }
     }
     return defaultState();
+  }
+}
+
+// state.json is written with a short debounce. The session journal and the
+// OpenCode database close that gap: a terminal that lost its saved id can still
+// reopen the conversation it actually owned instead of falling back to "最近会话".
+async function restoreSessionHints(state: PersistedState) {
+  try {
+    const entries = await sessionJournal().load();
+    let recovered = 0;
+    for (const terminal of state.terminals) {
+      const entry = entries[terminal.id];
+      if (!entry || entry.agentType !== terminal.agentType) continue;
+      if (!sessionIdFitsAgent(terminal.agentType, entry.sessionId)) continue;
+      if (terminal.lastSessionId === entry.sessionId && terminal.lastSessionAgent === entry.agentType) continue;
+      terminal.lastSessionId = entry.sessionId;
+      terminal.lastSessionAgent = entry.agentType;
+      terminal.resumeAvailable = true;
+      recovered += 1;
+    }
+    if (recovered > 0) console.log(`[session-journal] restored ${recovered} terminal session id(s)`);
+  } catch (error) {
+    console.warn("[session-journal] load failed", error);
+  }
+
+  const unresolved = state.terminals.filter((terminal) => terminal.agentType === "opencode"
+    && !(terminal.lastSessionAgent === "opencode" && sessionIdFitsAgent("opencode", terminal.lastSessionId)));
+  if (unresolved.length === 0) return;
+  try {
+    const result = readRecentOpenCodeSessions({ dataDir: resolveOpenCodeDataDir() });
+    if (result.error) console.warn("[opencode-sessions] read failed", result.error);
+    const assignments = assignRecoverableSessions(state.terminals, result.sessions, { platform: process.platform });
+    for (const assignment of assignments) {
+      const terminal = state.terminals.find((item) => item.id === assignment.terminalId);
+      if (!terminal || terminal.agentType !== "opencode") continue;
+      terminal.lastSessionId = assignment.sessionId;
+      terminal.lastSessionAgent = "opencode";
+      terminal.resumeAvailable = true;
+      terminal.resumeError = undefined;
+    }
+    if (assignments.length > 0) console.log(`[opencode-sessions] recovered ${assignments.length} terminal session id(s)`);
+  } catch (error) {
+    console.warn("[opencode-sessions] recovery scan failed", error);
   }
 }
 
@@ -396,7 +482,10 @@ function configureAutoUpdater() {
   updateConfigured = true;
   autoUpdater.setFeedURL({ provider: "custom", updateProvider: FreshGitHubProvider, owner: "FairmeHIT", repo: "TermBeacon" });
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  // Installing on ordinary quit would bypass the active-task guard and the
+  // pre-update OpenCode backup. Install only from update:install, which runs
+  // both checks first.
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.on("checking-for-update", () => sendUpdateEvent("checking"));
   autoUpdater.on("update-available", (info) => sendUpdateEvent("available", { version: info.version }));
   autoUpdater.on("update-not-available", () => sendUpdateEvent("not-available"));
@@ -408,6 +497,24 @@ function configureAutoUpdater() {
     // the check has failed; download failures still reach the UI immediately.
     if (!updateCheckInFlight) sendUpdateEvent("error", { message: formatUpdateError(error) });
   });
+}
+
+// A daily online snapshot of OpenCode's SQLite database, in addition to the
+// mandatory backup before an update. The timer is unref'd so it never keeps the
+// app alive, and backupNow dedupes overlapping runs.
+function scheduleOpenCodeBackups() {
+  const run = () => {
+    void openCodeBackup().backupNow({ reason: "daily", minIntervalMs: 24 * 60 * 60 * 1000, onlyIfChanged: true })
+      .then((result) => {
+        if (!result.ok) console.warn("[opencode-backup] daily backup failed", result.error);
+        else if (!result.skipped) console.log(`[opencode-backup] ${result.bytes} bytes -> ${result.file}`);
+      })
+      .catch((error) => console.warn("[opencode-backup] daily backup crashed", error));
+  };
+  const first = setTimeout(run, 15_000);
+  first.unref?.();
+  const timer = setInterval(run, 6 * 60 * 60 * 1000);
+  timer.unref?.();
 }
 
 // Both the startup check and the settings button go through here, so a second
@@ -552,6 +659,17 @@ function attachHostSocket(socket: Socket) {
         if (payload?.type === "pty:host-ready") {
           hostRestartAttempts = 0;
           hostStartedAt = Date.now();
+        }
+        // The renderer's full state save is debounced; mirror the session id
+        // immediately so a crash between the event and the save cannot lose
+        // which OpenCode conversation this terminal owns.
+        if (payload?.type === "session:update") {
+          void sessionJournal().record({
+            terminalId: payload.terminalId,
+            sessionId: payload.sessionId,
+            agentType: payload.agentType,
+            at: payload.at,
+          }).catch((error) => console.warn("[session-journal] save failed", error));
         }
         rendererPort?.postMessage(payload);
       } catch (error) {
@@ -826,6 +944,7 @@ if (!hasSingleInstanceLock) {
   });
   app.whenReady().then(async () => {
     stateCache = await readState();
+    await restoreSessionHints(stateCache);
     const traySettings = stateCache.closeToTray;
     if (traySettings) {
       closeToTrayPreference = traySettings.preference;
@@ -835,6 +954,7 @@ if (!hasSingleInstanceLock) {
     startPtyHost();
     createWindow(stateCache);
     createTray();
+    scheduleOpenCodeBackups();
     void checkForUpdatesNow();
     app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(stateCache || defaultState()); });
   });
@@ -986,16 +1106,55 @@ ipcMain.handle("state:save", async (_event, state: PersistedState) => {
 ipcMain.handle("history:load", async (_event, terminalId: string) => loadTerminalHistory(terminalId));
 ipcMain.handle("history:append", async (_event, terminalId: string, data: string) => appendTerminalHistory(terminalId, data));
 ipcMain.handle("history:remove", async (_event, terminalId: string) => removeTerminalHistory(terminalId));
-ipcMain.handle("update:install", () => {
-  if (!updateConfigured) return false;
-  return writeState(stateCache || defaultState())
-    .catch((error) => {
-      console.error("[state] update install save failed", error);
-    })
-    .then(() => {
-      autoUpdater.quitAndInstall(false, true);
-      return true;
-    });
+ipcMain.handle("opencode:backup-info", () => openCodeBackup().info());
+ipcMain.handle("opencode:backup-now", async () => {
+  const result = await openCodeBackup().backupNow({ reason: "manual" });
+  const info = await openCodeBackup().info();
+  return { ...result, info };
+});
+ipcMain.handle("opencode:backups-clear", async () => {
+  const info = await openCodeBackup().clear();
+  return info;
+});
+ipcMain.handle("opencode:backups-open", async () => {
+  const failure = await shell.openPath(openCodeBackupDir());
+  return failure ? { ok: false, message: failure } : { ok: true };
+});
+function activeTerminalCount(state: PersistedState | null) {
+  if (!state) return 0;
+  const ids = new Set<string>();
+  for (const terminal of state.terminals ?? []) {
+    if (terminal.state === "working" || terminal.state === "awaiting-input") ids.add(terminal.id);
+  }
+  for (const task of state.tasks ?? []) {
+    if (task.state === "working" || task.state === "awaiting-input") ids.add(task.terminalId);
+  }
+  return ids.size;
+}
+let updateInstallInFlight = false;
+ipcMain.handle("update:install", async (_event, request?: { activeTerminals?: number; acknowledgedBusy?: boolean }) => {
+  if (!updateConfigured) return { ok: false, reason: "not-ready", message: "更新尚未配置" };
+  if (updateInstallInFlight) return { ok: false, reason: "busy", message: "正在准备更新，请稍候" };
+  const reported = Number.isFinite(request?.activeTerminals) ? Math.max(0, Math.floor(request!.activeTerminals!)) : 0;
+  const active = Math.max(reported, activeTerminalCount(stateCache));
+  if (active > 0 && request?.acknowledgedBusy !== true) {
+    return { ok: false, reason: "busy", activeTerminals: active };
+  }
+  updateInstallInFlight = true;
+  try {
+    // SQLite's online backup API reads a consistent snapshot including the
+    // WAL, so a running OpenCode process cannot leave a torn backup.
+    const backup = await openCodeBackup().backupNow({ reason: "update" });
+    if (!backup.ok) return { ok: false, reason: "backup-failed", message: backup.error || "OpenCode 会话备份失败" };
+    await sessionJournal().flush();
+    await writeState(stateCache || defaultState());
+    autoUpdater.quitAndInstall(false, true);
+    return { ok: true, ...(backup.skipped ? {} : { backup: { file: backup.file, bytes: backup.bytes } }) };
+  } catch (error) {
+    return { ok: false, reason: "failed", message: error instanceof Error ? error.message : String(error) };
+  } finally {
+    updateInstallInFlight = false;
+  }
 });
 ipcMain.handle("update:state", () => ({
   status: updateStatus,

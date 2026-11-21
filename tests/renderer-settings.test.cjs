@@ -725,3 +725,19 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   assert.match(hiddenList, /max-height/);
   assert.match(styles, /\.workspace-item-hidden\s*\{[^}]*opacity/);
 });
+
+test("hidden rows restore only from the unhide chevron", () => {
+  // Row bodies in the hidden groups are plain containers: clicking them (or
+  // their titles) must not bring a workspace or terminal back.
+  assert.match(app, /return hidden\s*\n\s*\? <div key=\{workspace\.id\}[^\n]*>[\s\S]*?<\/div>\s*\n\s*: <button key=\{workspace\.id\}[^\n]*onClick=\{\(\) => selectWorkspace\(workspace\.id\)\}/);
+  const terminalRow = app.match(/\{hiddenWorkspaceTerminals\.map\(\(terminal\) => ([^\n]*)/)?.[1];
+  assert.ok(terminalRow, "hidden terminal rows must exist");
+  assert.match(terminalRow, /<div key=\{terminal\.id\}/);
+  assert.doesNotMatch(terminalRow, /onClick|restoreTerminal/);
+  // The chevron itself stays operable from the keyboard after the row loses
+  // its button semantics.
+  assert.match(app, /<span className="workspace-unhide" role="button" tabIndex=\{0\}/);
+  assert.match(app, /<span className="terminal-unhide" role="button" tabIndex=\{0\}/);
+  assert.match(styles, /\.workspace-item-hidden\s*\{[^}]*cursor:\s*default/);
+  assert.match(styles, /\.terminal-item-hidden\s*\{[^}]*cursor:\s*default/);
+});
