@@ -9,6 +9,7 @@ import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent
 import SettingsPage from "./SettingsPage";
 import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, settingsText, type SettingsLocale } from "./settings-i18n";
 import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
+import type { OpenCodeModelCatalog, OpenCodeModelsConfig, OpenCodeModelDiscovery, OpenCodeModelDiscoveryRequest, OpenCodeModelsMutation, OpenCodeProviderDraft } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import sessionResumeUtils from "../main/session-resume.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
@@ -70,6 +71,13 @@ declare global {
       backupOpenCodeNow(): Promise<{ ok: boolean; skipped?: boolean; reason?: string; file?: string; bytes?: number; rawBytes?: number; error?: string; info: OpenCodeBackupInfo }>;
       clearOpenCodeBackups(): Promise<OpenCodeBackupInfo>;
       openOpenCodeBackupFolder(): Promise<{ ok: boolean; message?: string }>;
+      getOpenCodeModels(): Promise<OpenCodeModelsConfig>;
+      saveOpenCodeProvider(draft: OpenCodeProviderDraft): Promise<OpenCodeModelsMutation>;
+      deleteOpenCodeProvider(id: string): Promise<OpenCodeModelsMutation>;
+      setOpenCodeDefaultModel(model: string | null): Promise<OpenCodeModelsMutation>;
+      getOpenCodeModelCatalog(): Promise<OpenCodeModelCatalog>;
+      discoverOpenCodeModels(request: OpenCodeModelDiscoveryRequest): Promise<OpenCodeModelDiscovery>;
+      openOpenCodeModelsConfig(): Promise<{ ok: boolean; message?: string }>;
       installUpdate(request?: { activeTerminals?: number; acknowledgedBusy?: boolean }): Promise<{ ok: boolean; reason?: string; message?: string; activeTerminals?: number; backup?: { file?: string; bytes?: number } }>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;

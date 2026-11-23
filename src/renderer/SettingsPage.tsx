@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentCliId, AgentType, CliAction, CliPlan, CliProgress, CliScan, ShellType } from "../shared/types";
 import { settingsText, type SettingsLocale } from "./settings-i18n";
 import type { ThemeSetting, OpenCodeBackupInfo } from "./App";
+import OpenCodeModelsPanel from "./OpenCodeModelsPanel";
 import "./settings.css";
 
 const THEME_OPTIONS: Array<{ value: ThemeSetting; label: string }> = [
@@ -48,7 +49,7 @@ const formatBytes = (bytes: number) => {
 
 export default function SettingsPage(props: Props) {
   const t = (source: string, values?: Record<string, string | number>) => settingsText(props.locale, source, values);
-  const [section, setSection] = useState<"general" | "agents">("general");
+  const [section, setSection] = useState<"general" | "models" | "agents">("general");
   const [scan, setScan] = useState<CliScan | null>(null);
   const [checking, setChecking] = useState(false);
   const [selected, setSelected] = useState<AgentCliId>("codex");
@@ -214,13 +215,14 @@ export default function SettingsPage(props: Props) {
       <button className="settings-back" onClick={props.onBack}><span aria-hidden="true">←</span> {t("返回终端")}</button>
       <div className="settings-nav-title">{t("设置")}</div>
       <button className={section === "general" ? "selected" : ""} aria-current={section === "general" ? "page" : undefined} onClick={() => setSection("general")}><span aria-hidden="true">◒</span> {t("常规")}</button>
+      <button className={section === "models" ? "selected" : ""} aria-current={section === "models" ? "page" : undefined} onClick={() => setSection("models")}><span aria-hidden="true">◈</span> {t("模型")}</button>
       <button className={section === "agents" ? "selected" : ""} aria-current={section === "agents" ? "page" : undefined} onClick={() => setSection("agents")}><span aria-hidden="true">⌘</span> Agent CLI</button>
       <span className="settings-nav-version">TermBeacon {props.version}</span>
     </nav>
     <div className="settings-scroll">
       <div className="settings-content">
         <header className="settings-header">
-          <div><p className="settings-eyebrow">{t("偏好与管理")}</p><h1 ref={heading} tabIndex={-1}>{section === "general" ? t("常规") : "Agent CLI"}</h1><p>{t(section === "general" ? "让工作环境保持顺手。" : "管理编程助手的安装、版本与状态接入。")}</p></div>
+          <div><p className="settings-eyebrow">{t("偏好与管理")}</p><h1 ref={heading} tabIndex={-1}>{t(section === "general" ? "常规" : section === "models" ? "OpenCode 模型" : "Agent CLI")}</h1><p>{t(section === "general" ? "让工作环境保持顺手。" : section === "models" ? "管理 opencode 的模型服务、密钥与默认模型。" : "管理编程助手的安装、版本与状态接入。")}</p></div>
           {section === "agents" && <button className="settings-button" onClick={() => void refresh(true)} disabled={checking}>{t(checking ? "检测中…" : "重新检测")}</button>}
         </header>
         {error && <div className="settings-notice error" role="alert"><span>{t(error)}</span><button onClick={() => setError("")} aria-label={t("关闭提示")}>×</button></div>}
@@ -243,7 +245,7 @@ export default function SettingsPage(props: Props) {
             setRestarting(true);
             void props.onRestartHost().catch((cause) => setError(messageOf(cause))).finally(() => setRestarting(false));
           }}>{t(restarting ? "重启中…" : "重启服务")}</button></section>
-        </div> : <>
+        </div> : section === "models" ? <OpenCodeModelsPanel locale={props.locale} onLaunch={props.onLaunch} /> : <>
           {!scan && <div className="settings-empty" role="status">{t(checking ? "正在检测本机 CLI…" : "暂未获取到 CLI 信息。")}</div>}
           {scan && <>
             {!scan.runtime.ready && <div className="settings-notice">{t(scan.runtime.message)}</div>}

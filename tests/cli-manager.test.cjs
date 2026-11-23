@@ -183,6 +183,23 @@ test("npm shims resolve to a direct process invocation instead of evaluating bat
   await assert.rejects(invocation(shim, process.execPath), /无法安全/);
 });
 
+test("managed launchers resolve their absolute node_modules entry directly", async (t) => {
+  const { home } = await fixture(t);
+  const shim = path.join(home, "managed.cmd");
+  const target = path.join(home, "node_modules", "@opencode", "cli", "bin", "opencode.exe");
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, "");
+  await fs.writeFile(shim, `"${target}" %*`);
+  const command = await invocation(shim, process.execPath);
+  assert.equal(command.file, target);
+  assert.deepEqual(command.args, []);
+
+  const outside = path.join(home, "outside.exe");
+  await fs.writeFile(outside, "");
+  await fs.writeFile(shim, `"${outside}" %*`);
+  await assert.rejects(invocation(shim, process.execPath), /无法安全/);
+});
+
 test("updates can roll back to a retained verified release", async (t) => {
   const { manager, state } = await fixture(t);
   await apply(manager, "codex", "install");

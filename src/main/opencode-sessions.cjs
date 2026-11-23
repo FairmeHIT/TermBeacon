@@ -163,6 +163,46 @@ function hasOwnedOpenCodeSession(terminal) {
     && sessionIdFitsAgent("opencode", terminal.lastSessionId);
 }
 
+// One OpenCode session id is one conversation. Two terminals that both claim
+// it are the persisted residue of the old shared-server bug, where one tab's
+// OSC 7501 status was written into every PTY. The session store knows the
+// conversation's folder, so when exactly one claimant lives there it keeps the
+// id and the others are cleared. A conflict without a single folder match is
+// reported as unresolved: startup auto-resume must not guess which terminal
+// owns it.
+function resolveDuplicateSessionOwners(terminals, sessions, { platform = process.platform } = {}) {
+  const groups = new Map();
+  for (const terminal of Array.isArray(terminals) ? terminals : []) {
+    if (!hasOwnedOpenCodeSession(terminal)) continue;
+    const group = groups.get(terminal.lastSessionId) || [];
+    group.push(terminal);
+    groups.set(terminal.lastSessionId, group);
+  }
+  const directories = new Map();
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    if (session?.id) directories.set(session.id, normalizeDirectory(session.directory, platform));
+  }
+  const cleared = [];
+  const unresolved = [];
+  for (const [sessionId, group] of groups) {
+    if (group.length < 2) continue;
+    const directory = directories.get(sessionId);
+    const matching = directory
+      ? group.filter((terminal) => normalizeDirectory(terminal.cwd, platform) === directory)
+      : [];
+    if (matching.length !== 1) {
+      unresolved.push(sessionId);
+      continue;
+    }
+    const owner = matching[0];
+    for (const terminal of group) {
+      if (terminal === owner) continue;
+      cleared.push({ terminalId: terminal.id, sessionId, ownerTerminalId: owner.id });
+    }
+  }
+  return { cleared, unresolved };
+}
+
 // Map one recovered OpenCode session to a terminal only when the cwd has a
 // single unmatched OpenCode terminal and the timestamps are plausible. With two
 // terminals in one folder the data cannot say which conversation belonged to
@@ -222,4 +262,5 @@ module.exports = {
   assignRecoverableSessions,
   normalizeDirectory,
   readRecentOpenCodeSessions,
+  resolveDuplicateSessionOwners,
 };

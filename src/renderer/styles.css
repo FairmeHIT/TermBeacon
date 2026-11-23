@@ -397,10 +397,20 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   opacity: 1;
   visibility: visible;
 }
-/* The hidden group's rows always show their unhide chip, so the overlay stays
-   visible there without the hover wash. */
+/* The hidden group's rows always show their actions, with the same plate a
+   hovered visible row uses. A transparent plate left the chevron and delete
+   icon reading as invisible against the sidebar, so keep the plate (a shade
+   stronger) and reveal both controls. */
 .workspace-item-hidden .workspace-actions,
-.terminal-item-hidden .terminal-actions { opacity: 1; visibility: visible; background: transparent; box-shadow: none; }
+.terminal-item-hidden .terminal-actions {
+  opacity: 1;
+  visibility: visible;
+  background: var(--panel-active);
+  box-shadow: 0 0 0 4px var(--panel-active);
+}
+.workspace-item-hidden .workspace-open,
+.workspace-item-hidden .workspace-remove,
+.terminal-item-hidden .terminal-remove { opacity: 1; visibility: visible; }
 /* Hover wash matches the row background so the floating buttons read as part of
    the card instead of floating over raw text. */
 .workspace-item.active:hover .workspace-actions,
@@ -533,9 +543,23 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   max-height: 160px;
   margin-top: 2px;
 }
-.workspace-item-hidden { opacity: .72; cursor: default; }
-.workspace-item-hidden:hover,
-.workspace-item-hidden:focus-visible { opacity: 1; }
+/* Hidden rows keep their dimmed look, but only on the informational parts.
+   Applying opacity to the whole row washed the restore chevron into the
+   backdrop (opacity on a parent cannot be undone by a child). */
+.workspace-item-hidden,
+.terminal-item-hidden { cursor: default; }
+.workspace-item-hidden .workspace-glyph,
+.workspace-item-hidden .workspace-copy,
+.terminal-item-hidden .status-dot,
+.terminal-item-hidden .terminal-copy { opacity: .72; }
+.workspace-item-hidden:hover .workspace-glyph,
+.workspace-item-hidden:hover .workspace-copy,
+.terminal-item-hidden:hover .status-dot,
+.terminal-item-hidden:hover .terminal-copy { opacity: 1; }
+.workspace-item-hidden .workspace-unhide,
+.terminal-item-hidden .terminal-unhide { color: var(--accent); }
+.workspace-unhide:focus-visible,
+.terminal-unhide:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Sending a workspace down stays a hover action like the other row tools; the
    way back out is always visible, because that group is where the row lives. */
 .workspace-hide,

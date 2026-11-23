@@ -104,3 +104,17 @@ test("automatic startup resume only selects exact, owned, resumable sessions", (
   assert.deepEqual(autoResumeCandidates(terminals, false), []);
   assert.deepEqual(autoResumeCandidates(null), []);
 });
+
+test("automatic startup resume refuses a session claimed by two terminals", () => {
+  // One conversation cannot be opened twice. If a stale state file still has
+  // the same id on two rows (old OpenCode shared-server crosstalk), neither is
+  // resumed automatically; the startup scan normally clears the wrong owner
+  // first, so this only guards against an unreadable session store.
+  const shared = "ses_e01a1e4e2ffecYYq3HNDSpdRyu";
+  const terminals = [
+    { id: "owner", agentType: "opencode", state: "ready", lastSessionId: shared, lastSessionAgent: "opencode", recoveryState: "resumable" },
+    { id: "stale", agentType: "opencode", state: "ready", lastSessionId: shared, lastSessionAgent: "opencode", recoveryState: "resumable" },
+    { id: "solo", agentType: "opencode", state: "ready", lastSessionId: "ses_solo000000000000000000000", lastSessionAgent: "opencode", recoveryState: "resumable" },
+  ];
+  assert.deepEqual(autoResumeCandidates(terminals), ["solo"]);
+});

@@ -5,10 +5,11 @@ import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFile, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 import type { AgentCliId, CliProgress, CliScan, CliPlan, CloseToTraySettings, CloseToTrayPreference } from "../shared/types";
+import type { OpenCodeModelCatalog, OpenCodeModelsConfig, OpenCodeModelDiscovery, OpenCodeModelDiscoveryRequest, OpenCodeModelsMutation, OpenCodeProviderDraft } from "../shared/types";
 
 // Running from source must not collide with the installed build. The packaged
 // app already owns the default profile and its single-instance lock, so a dev
@@ -36,6 +37,7 @@ const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") a
     plan(request: unknown): Promise<CliPlan>;
     execute(request: unknown): Promise<unknown>;
     launch(request: { id: AgentCliId; shell?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
+    models(request?: { id?: AgentCliId; cwd?: string }): Promise<{ models: string[]; executable: string }>;
   };
 };
 const { createHistoryStore } = require("./terminal-history.cjs") as {
@@ -75,13 +77,14 @@ const { createSessionJournal } = require("./session-journal.cjs") as {
   createSessionJournal: (options: { file: string }) => {
     load: () => Promise<Record<string, { sessionId: string; agentType: AgentCliId; at: number }>>;
     record: (entry: { terminalId?: string; sessionId?: string; agentType?: string; at?: number }) => Promise<boolean>;
+    forget: (terminalId: string) => Promise<boolean>;
     flush: () => Promise<void>;
   };
 };
 const { resolveOpenCodeDataDir } = require("./opencode-paths.cjs") as {
   resolveOpenCodeDataDir: () => string;
 };
-const { assignRecoverableSessions, readRecentOpenCodeSessions } = require("./opencode-sessions.cjs") as {
+const { assignRecoverableSessions, readRecentOpenCodeSessions, resolveDuplicateSessionOwners } = require("./opencode-sessions.cjs") as {
   assignRecoverableSessions: (
     terminals: TerminalInstance[],
     sessions: Array<{ id: string; directory: string; timeCreated: number; timeUpdated: number; title?: string; source: string }>,
@@ -92,6 +95,11 @@ const { assignRecoverableSessions, readRecentOpenCodeSessions } = require("./ope
     source: string;
     error: string | null;
   };
+  resolveDuplicateSessionOwners: (
+    terminals: TerminalInstance[],
+    sessions: Array<{ id: string; directory: string }>,
+    options?: { platform?: string },
+  ) => { cleared: Array<{ terminalId: string; sessionId: string; ownerTerminalId: string }>; unresolved: string[] };
 };
 const { createOpenCodeBackup } = require("./opencode-backup.cjs") as {
   createOpenCodeBackup: (options: { dataDir: string; backupDir: string }) => {
@@ -100,6 +108,17 @@ const { createOpenCodeBackup } = require("./opencode-backup.cjs") as {
     }>;
     info: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
     clear: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
+  };
+};
+const { createOpenCodeModelsStore } = require("./opencode-models.cjs") as {
+  createOpenCodeModelsStore: (options?: { listModels?: () => Promise<string[]> }) => {
+    snapshot: () => OpenCodeModelsConfig;
+    saveProvider: (draft: OpenCodeProviderDraft) => Promise<OpenCodeModelsMutation>;
+    deleteProvider: (id: string) => Promise<OpenCodeModelsMutation>;
+    setDefaultModel: (model: string | null) => Promise<OpenCodeModelsMutation>;
+    catalog: () => Promise<OpenCodeModelCatalog>;
+    discover: (request: OpenCodeModelDiscoveryRequest) => Promise<OpenCodeModelDiscovery>;
+    configPath: () => string;
   };
 };
 const { resolveAssets } = require("./integration-config.cjs") as {
@@ -239,6 +258,12 @@ function openCodeBackup() {
     backupDir: openCodeBackupDir(),
   });
 }
+let openCodeModelsStore: ReturnType<typeof createOpenCodeModelsStore> | undefined;
+function openCodeModels() {
+  return openCodeModelsStore ??= createOpenCodeModelsStore({
+    listModels: async () => (await agentManager().models({ id: "opencode", cwd: app.getPath("home") })).models,
+  });
+}
 
 function integrationAssets() {
   return resolveAssets({ packaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), executablePath: process.execPath });
@@ -290,10 +315,31 @@ async function restoreSessionHints(state: PersistedState) {
 
   const unresolved = state.terminals.filter((terminal) => terminal.agentType === "opencode"
     && !(terminal.lastSessionAgent === "opencode" && sessionIdFitsAgent("opencode", terminal.lastSessionId)));
-  if (unresolved.length === 0) return;
+  // A stale duplicate does not need the fallback assignment, but it does need
+  // the session store to decide which claimant owns the conversation.
+  const duplicateIds = resolveDuplicateSessionOwners(state.terminals, []).unresolved;
+  if (unresolved.length === 0 && duplicateIds.length === 0) return;
   try {
     const result = readRecentOpenCodeSessions({ dataDir: resolveOpenCodeDataDir() });
     if (result.error) console.warn("[opencode-sessions] read failed", result.error);
+    const resolution = resolveDuplicateSessionOwners(state.terminals, result.sessions, { platform: process.platform });
+    for (const conflict of resolution.cleared) {
+      const terminal = state.terminals.find((item) => item.id === conflict.terminalId);
+      if (!terminal) continue;
+      // Keep the id on the terminal whose folder matches the conversation.
+      // Clearing it here also removes the terminal from the auto-resume
+      // candidates, so a restart cannot open one session in two workspaces.
+      terminal.lastSessionId = undefined;
+      terminal.lastSessionAgent = undefined;
+      terminal.resumeError = "会话属于另一个工作区的终端，已跳过自动恢复";
+      await sessionJournal().forget(conflict.terminalId);
+    }
+    if (resolution.cleared.length > 0) {
+      console.log(`[opencode-sessions] dropped ${resolution.cleared.length} duplicate session owner(s)`);
+    }
+    if (resolution.unresolved.length > 0) {
+      console.warn(`[opencode-sessions] ${resolution.unresolved.length} ambiguous duplicate session id(s) stay out of automatic resume`);
+    }
     const assignments = assignRecoverableSessions(state.terminals, result.sessions, { platform: process.platform });
     for (const assignment of assignments) {
       const terminal = state.terminals.find((item) => item.id === assignment.terminalId);
@@ -1118,6 +1164,18 @@ ipcMain.handle("opencode:backups-clear", async () => {
 });
 ipcMain.handle("opencode:backups-open", async () => {
   const failure = await shell.openPath(openCodeBackupDir());
+  return failure ? { ok: false, message: failure } : { ok: true };
+});
+ipcMain.handle("opencode:models", () => openCodeModels().snapshot());
+ipcMain.handle("opencode:models-save-provider", (_event, draft: OpenCodeProviderDraft) => openCodeModels().saveProvider(draft));
+ipcMain.handle("opencode:models-delete-provider", (_event, id: string) => openCodeModels().deleteProvider(id));
+ipcMain.handle("opencode:models-default", (_event, model: string | null) => openCodeModels().setDefaultModel(model));
+ipcMain.handle("opencode:models-catalog", () => openCodeModels().catalog());
+ipcMain.handle("opencode:models-discover", (_event, request: OpenCodeModelDiscoveryRequest) => openCodeModels().discover(request));
+ipcMain.handle("opencode:models-open", async () => {
+  const directory = path.dirname(openCodeModels().configPath());
+  await mkdir(directory, { recursive: true });
+  const failure = await shell.openPath(directory);
   return failure ? { ok: false, message: failure } : { ok: true };
 });
 function activeTerminalCount(state: PersistedState | null) {

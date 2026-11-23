@@ -102,11 +102,25 @@ function createSessionJournal({ file, now = Date.now } = {}) {
     });
   }
 
+  // Startup repair uses this when the session store proves a persisted id
+  // belongs to another terminal. Without removing the journal entry, the next
+  // launch would copy the stale id back into state before the same repair runs
+  // again.
+  function forget(terminalId) {
+    if (!validTerminalId(terminalId)) return Promise.resolve(false);
+    return serialize(async () => {
+      await load();
+      if (!entries.delete(terminalId)) return false;
+      await persist();
+      return true;
+    });
+  }
+
   function flush() {
     return tail.catch(() => undefined);
   }
 
-  return { load, record, flush };
+  return { load, record, forget, flush };
 }
 
 module.exports = { createSessionJournal, JOURNAL_VERSION, MAX_ENTRIES };

@@ -73,6 +73,12 @@ async function invocation(executable, nodePath) {
   // Resolve npm shims without cmd.exe: paths with spaces work and shell syntax
   // from a path is never evaluated. Unknown batch launchers remain detectable.
   const shim = await fs.promises.readFile(executable, "utf8");
+  // TermBeacon's managed launcher points at an absolute release entry instead
+  // of using npm's %~dp0 shim. Accept only an absolute node_modules target so
+  // an unrelated batch file cannot redirect execution to an arbitrary program.
+  const absolute = [...shim.matchAll(/"((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]+\.(?:exe|[cm]?js))"/gi)]
+    .map((match) => match[1]).find((item) => /node_modules[\\/]/i.test(item));
+  if (absolute) return invocation(path.resolve(absolute), nodePath);
   const relative = [...shim.matchAll(/"%(?:dp0|~dp0)%?\\([^"\r\n]+\.(?:exe|[cm]?js))"/gi)]
     .map((match) => match[1]).find((item) => /node_modules[\\/]/.test(item));
   if (!relative) throw new Error("此启动脚本无法安全读取版本；可改用标准化安装");

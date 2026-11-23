@@ -86,14 +86,28 @@ function getResumeSpec({ agentType, sessionId, sessionAgent, cwd, shell = "cmd.e
 // for a choice) on behalf of a terminal the user is not looking at yet.
 function autoResumeCandidates(terminals, enabled = true) {
   if (enabled !== true || !Array.isArray(terminals)) return [];
-  return terminals.filter((terminal) => Boolean(terminal)
+  const candidates = terminals.filter((terminal) => Boolean(terminal)
     && terminal.agentType !== "generic"
     && terminal.state !== "stopped"
     && terminal.resumeAvailable !== false
     && terminal.recoveryState !== "unsupported"
     && terminal.lastSessionAgent === terminal.agentType
     && sessionIdFitsAgent(terminal.agentType, terminal.lastSessionId)
-  ).map((terminal) => terminal.id);
+  );
+  // One session id belongs to one terminal. A duplicate is the persisted
+  // residue of OpenCode's old shared-server status crosstalk: resuming every
+  // claimant would reopen one conversation in several PTYs (and workspaces),
+  // so only unambiguous owners are resumed automatically. The startup scan
+  // normally clears the stale claimant first; this keeps an offline session
+  // store from bringing the duplicate back.
+  const owners = new Map();
+  for (const terminal of candidates) {
+    const key = `${terminal.agentType}\u0000${terminal.lastSessionId}`;
+    owners.set(key, (owners.get(key) || 0) + 1);
+  }
+  return candidates
+    .filter((terminal) => owners.get(`${terminal.agentType}\u0000${terminal.lastSessionId}`) === 1)
+    .map((terminal) => terminal.id);
 }
 
 module.exports = { getResumeSpec, normalizeSessionId, sessionIdFitsAgent, autoResumeCandidates };

@@ -7,6 +7,7 @@ const {
   assignRecoverableSessions,
   normalizeDirectory,
   readRecentOpenCodeSessions,
+  resolveDuplicateSessionOwners,
 } = require("../src/main/opencode-sessions.cjs");
 
 const NOW = 1_800_000_000_000;
@@ -70,6 +71,49 @@ test("only fills unmatched OpenCode terminals", () => {
   const claimed = terminal({ id: "t1", lastSessionId: "ses_owned00000000000000000000", lastSessionAgent: "opencode" });
   const generic = terminal({ id: "t2", agentType: "generic" });
   assert.deepEqual(assignRecoverableSessions([claimed, generic], [session()], { now: NOW, platform: "win32" }), []);
+});
+
+test("a duplicate session id stays with the terminal in the session's folder", () => {
+  // Regression: the old shared OpenCode server wrote one tab's OSC 7501 status
+  // into every PTY, so state.json could persist the same session on terminals
+  // in different workspaces. A restart then auto-resumed that conversation
+  // twice.
+  const id = "ses_duplicate00000000000000000";
+  const terminals = [
+    terminal({ id: "wrong", cwd: "D:\\work\\other", lastSessionId: id, lastSessionAgent: "opencode" }),
+    terminal({ id: "owner", cwd: "D:/work/app", lastSessionId: id, lastSessionAgent: "opencode" }),
+  ];
+  const result = resolveDuplicateSessionOwners(terminals, [session({ id })], { platform: "win32" });
+  assert.deepEqual(result, {
+    cleared: [{ terminalId: "wrong", sessionId: id, ownerTerminalId: "owner" }],
+    unresolved: [],
+  });
+});
+
+test("ambiguous duplicate ownership is left for manual recovery", () => {
+  const id = "ses_duplicate00000000000000000";
+  const terminals = [
+    terminal({ id: "t1", cwd: "D:/work/app", lastSessionId: id, lastSessionAgent: "opencode" }),
+    terminal({ id: "t2", cwd: "D:/work/app", lastSessionId: id, lastSessionAgent: "opencode" }),
+  ];
+  assert.deepEqual(resolveDuplicateSessionOwners(terminals, [session({ id })], { platform: "win32" }), {
+    cleared: [],
+    unresolved: [id],
+  });
+  // No session-store row is just as ambiguous as two folder matches.
+  assert.deepEqual(resolveDuplicateSessionOwners(terminals, [], { platform: "win32" }), {
+    cleared: [],
+    unresolved: [id],
+  });
+});
+
+test("unique session owners are never touched by conflict resolution", () => {
+  const id = "ses_unique00000000000000000000";
+  const terminals = [terminal({ id: "solo", cwd: "D:/work/app", lastSessionId: id, lastSessionAgent: "opencode" })];
+  assert.deepEqual(resolveDuplicateSessionOwners(terminals, [session({ id })], { platform: "win32" }), {
+    cleared: [],
+    unresolved: [],
+  });
 });
 
 test("reads and merges current and legacy SQLite session tables", { skip: !sqliteAvailable }, () => {

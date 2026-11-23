@@ -50,6 +50,25 @@ test("same session id is not rewritten for every status event", async () => {
   }
 });
 
+test("forgets a journal entry so startup repair does not restore it", async () => {
+  const { dir, file } = tempJournal();
+  try {
+    const journal = createSessionJournal({ file });
+    assert.equal(await journal.record({
+      terminalId: "term-1",
+      sessionId: "ses_abc0000000000000000000000",
+      agentType: "opencode",
+    }), true);
+    assert.equal(await journal.forget("term-1"), true);
+    assert.equal(await journal.forget("term-1"), false);
+    assert.equal(await journal.forget("../escape"), false);
+    await journal.flush();
+    assert.deepEqual(await createSessionJournal({ file }).load(), {});
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("rejects mismatched ids and recovers from a corrupt journal", async () => {
   const { dir, file } = tempJournal();
   try {

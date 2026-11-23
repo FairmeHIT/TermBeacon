@@ -723,7 +723,9 @@ test("workspaces collapse into a hidden group below the visible list", () => {
   const hiddenList = styles.match(/\.workspace-hidden-list\s*\{([\s\S]*?)\}/)?.[1];
   assert.ok(hiddenList, "hidden list styles must exist");
   assert.match(hiddenList, /max-height/);
-  assert.match(styles, /\.workspace-item-hidden\s*\{[^}]*opacity/);
+  const hiddenDim = styles.match(/\.workspace-item-hidden \.workspace-glyph,[\s\S]*?\.terminal-item-hidden \.terminal-copy\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(hiddenDim, "hidden rows must dim only their copy, not the actions");
+  assert.match(hiddenDim, /opacity:\s*\.72/);
 });
 
 test("hidden rows restore only from the unhide chevron", () => {
@@ -738,6 +740,9 @@ test("hidden rows restore only from the unhide chevron", () => {
   // its button semantics.
   assert.match(app, /<span className="workspace-unhide" role="button" tabIndex=\{0\}/);
   assert.match(app, /<span className="terminal-unhide" role="button" tabIndex=\{0\}/);
-  assert.match(styles, /\.workspace-item-hidden\s*\{[^}]*cursor:\s*default/);
-  assert.match(styles, /\.terminal-item-hidden\s*\{[^}]*cursor:\s*default/);
+  const hiddenPlate = styles.match(/\.workspace-item-hidden \.workspace-actions,[\s\S]*?\.terminal-item-hidden \.terminal-actions\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(hiddenPlate, "hidden rows need a visible actions plate");
+  assert.match(hiddenPlate, /background:\s*var\(--panel-active\)/);
+  assert.match(styles, /\.terminal-item-hidden \.terminal-remove \{ opacity: 1; visibility: visible; \}/);
+  assert.match(styles, /\.workspace-item-hidden \.workspace-unhide,[\s\S]*?\.terminal-item-hidden \.terminal-unhide \{ color: var\(--accent\); \}/);
 });
