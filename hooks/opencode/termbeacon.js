@@ -12,6 +12,19 @@
  *
  * Install: copy this file to ~/.config/opencode/plugins/termbeacon/index.js, then
  * restart opencode (or run `opencode reload`).
+ *
+ * opencode 2.3 compatibility (verified against a live 2.3.0 instance):
+ * - events now carry `data.sessionID` (they were bare in 2.2.x), so session
+ *   attribution finally works;
+ * - `ctx.session.active()` was removed, so the old snapshot repair is dead on
+ *   2.3. The replacement reads `time.busy` / `time.idle` / `outcome` from
+ *   `ctx.session.get()`, which is enough to repair both a missed start and a
+ *   missed terminal event;
+ * - `question.*` events no longer exist; questions are delivered as
+ *   `permission.asked` with kind=question and handled by the existing
+ *   permission branch;
+ * - envelopes carry `location.directory` and one server can observe sessions
+ *   from several directories, so foreign-directory events are dropped.
  */
 
 import { createReporter } from "../shared/status-reporter.js";
@@ -41,6 +54,7 @@ const EVENT_TYPES = [
   "session.execution.interrupted",
   "permission.asked",
   "permission.replied",
+  // opencode 2.2.x only; 2.3 delivers questions through permission.asked.
   "question.asked",
   "question.replied",
   "question.rejected",
@@ -77,6 +91,31 @@ function sessionInfo(response) {
   return data?.info || data;
 }
 
+function eventDirectory(event) {
+  const directory = event?.location?.directory;
+  return typeof directory === "string" && directory.trim() ? directory : undefined;
+}
+
+// The opencode server can serve several project directories at once (parent
+// chains, worktrees), and its event stream is server-wide. Events about a
+// directory that is not this terminal's project belong to another terminal.
+function createLocationFilter() {
+  let own;
+  try { own = process.cwd(); } catch { own = undefined; }
+  if (!own) return () => true;
+  const normalize = (value) => value.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+  const ownNorm = normalize(own);
+  return (event) => {
+    const directory = eventDirectory(event);
+    if (!directory) return true; // pre-2.3 envelopes carry no location.
+    const other = normalize(directory);
+    // Exact match, or a parent/child of the working directory: opencode may
+    // boot from a worktree root while the session lives in a subdirectory.
+    return other === ownNorm
+      || other.startsWith(`${ownNorm}\\`) || ownNorm.startsWith(`${other}\\`);
+  };
+}
+
 async function boundedRead(operation, signal) {
   let timer;
   let abort;
@@ -102,6 +141,7 @@ export default {
     const registrations = [];
     const reporter = createReporter({ ...connection, agent: "opencode" }, controller.signal);
     const parents = new Map();
+    const locationFits = createLocationFilter();
     let activeSessionId;
     let hasTurn = false;
     let turnStartedAt = 0;
@@ -151,45 +191,73 @@ export default {
     let refreshing = false;
     async function reconcile() {
       if (refreshing || !activeSessionId || controller.signal.aborted
-        || typeof ctx.session?.get !== "function" || typeof ctx.session?.active !== "function") return;
+        || typeof ctx.session?.get !== "function") return;
       refreshing = true;
       const selected = activeSessionId;
       const before = revision;
       try {
-        const [session, active] = await boundedRead(() => Promise.all([
-          ctx.session.get({ sessionID: selected }), ctx.session.active(),
-        ]), controller.signal);
+        if (typeof ctx.session.active === "function") {
+          // opencode <= 2.2: `active()` lists the foreground sessions.
+          const [session, active] = await boundedRead(() => Promise.all([
+            ctx.session.get({ sessionID: selected }), ctx.session.active(),
+          ]), controller.signal);
+          if (controller.signal.aborted || selected !== activeSessionId || before !== revision) return;
+          const info = sessionInfo(session);
+          const activeData = active?.data || active;
+          const isActive = Array.isArray(activeData)
+            ? activeData.some((item) => (typeof item === "string" ? item : item?.id || item?.sessionID) === selected)
+            : activeData && Object.prototype.hasOwnProperty.call(activeData, selected);
+          // outcome survives between turns. An old idle projection must not end
+          // a newly submitted prompt while admission is still in progress.
+          if (!isActive && Number.isFinite(info?.time?.idle) && info.time.idle < turnStartedAt) return;
+          // `session.active()` describes the foreground session owned by the
+          // OpenCode process, not whether its latest turn is still running. The
+          // interactive TUI keeps a completed session in that list while it
+          // waits for the next prompt. Once a native completion/failure was
+          // delivered, treating that stale membership as `running` would
+          // relight the detector and make a finished task survive reconnects as
+          // Working. A new prompt/execution event updates `reporter.latest` and
+          // is the authoritative signal that a new turn has started.
+          const latestStatus = reporter.latest?.status;
+          // A session's `outcome` field persists across turns. Re-reporting a
+          // stale `failed`/`error` outcome from a previous turn would overwrite
+          // a newer `completed` delivered by the event stream (e.g. a successful
+          // retry after a transient tool failure), leaving the sidebar stuck on
+          // the error lamp even though the task finished normally. Only let a
+          // snapshot repair a missing terminal state, never downgrade a known one.
+          const status = isActive
+            ? latestStatus === "waiting" ? "waiting"
+              : latestStatus === "completed" || latestStatus === "failed" ? undefined
+                : "running"
+            : (latestStatus === "completed" || latestStatus === "failed"
+              ? undefined : statusOf(info?.outcome));
+          if (status) reporter.report("session.snapshot", status, selected);
+          return;
+        }
+        // opencode 2.3: `active()` is gone. `time.busy` advances when a turn
+        // starts and `time.idle` when it ends, so together with `outcome`
+        // they describe the tracked session exactly, without needing the
+        // foreground list.
+        const session = await boundedRead(() => ctx.session.get({ sessionID: selected }), controller.signal);
         if (controller.signal.aborted || selected !== activeSessionId || before !== revision) return;
         const info = sessionInfo(session);
-        const activeData = active?.data || active;
-        const isActive = Array.isArray(activeData)
-          ? activeData.some((item) => (typeof item === "string" ? item : item?.id || item?.sessionID) === selected)
-          : activeData && Object.prototype.hasOwnProperty.call(activeData, selected);
-        // outcome survives between turns. An old idle projection must not end
-        // a newly submitted prompt while admission is still in progress.
-        if (!isActive && Number.isFinite(info?.time?.idle) && info.time.idle < turnStartedAt) return;
-        // `session.active()` describes the foreground session owned by the
-        // OpenCode process, not whether its latest turn is still running. The
-        // interactive TUI keeps a completed session in that list while it
-        // waits for the next prompt. Once a native completion/failure was
-        // delivered, treating that stale membership as `running` would
-        // relight the detector and make a finished task survive reconnects as
-        // Working. A new prompt/execution event updates `reporter.latest` and
-        // is the authoritative signal that a new turn has started.
+        const busy = Number.isFinite(info?.time?.busy) ? info.time.busy : 0;
+        const idle = Number.isFinite(info?.time?.idle) ? info.time.idle : 0;
         const latestStatus = reporter.latest?.status;
-        // A session's `outcome` field persists across turns. Re-reporting a
-        // stale `failed`/`error` outcome from a previous turn would overwrite
-        // a newer `completed` delivered by the event stream (e.g. a successful
-        // retry after a transient tool failure), leaving the sidebar stuck on
-        // the error lamp even though the task finished normally. Only let a
-        // snapshot repair a missing terminal state, never downgrade a known one.
-        const status = isActive
-          ? latestStatus === "waiting" ? "waiting"
-            : latestStatus === "completed" || latestStatus === "failed" ? undefined
-              : "running"
-          : (latestStatus === "completed" || latestStatus === "failed"
-            ? undefined : statusOf(info?.outcome));
-        if (status) reporter.report("session.snapshot", status, selected);
+        if (busy > 0 && idle >= busy && idle >= turnStartedAt) {
+          // The turn that started at `busy` has ended at `idle`; `outcome`
+          // records how it ended. Only repair a state we never heard about
+          // and never downgrade a completion/failure the stream delivered.
+          if (latestStatus === "running" || latestStatus === "waiting") {
+            reporter.report("session.snapshot", statusOf(info?.outcome) || "completed", selected);
+          }
+        } else if (busy > turnStartedAt) {
+          // A turn newer than everything we reported is in flight (busy
+          // without a matching idle): the stream missed its start.
+          if (latestStatus !== "running" && latestStatus !== "waiting") {
+            reporter.report("session.snapshot", "running", selected);
+          }
+        }
       } catch { /* The next poll/reconnect retries the snapshot. */ }
       finally { refreshing = false; }
     }
@@ -209,11 +277,14 @@ export default {
           })) {
             const type = event && event.type;
             const data = (event && event.data) || {};
+            // A standalone server can still observe other directories
+            // (worktrees, parent chains); their sessions are not ours.
+            if (!locationFits(event)) continue;
             const sessionId = sessionIdOf(event);
             if (type === "session.status") {
               await enqueue(type, statusOf(data.status), sessionId);
             } else if (type === "session.idle") {
-              await enqueue(type, statusOf(data.outcome) || "completed", sessionId);
+              await enqueue(type, statusOf(data.outcome) || statusOf(data?.info?.outcome) || "completed", sessionId);
             } else if (type === "session.execution.started") {
               await enqueue(type, "running", sessionId);
             } else if (

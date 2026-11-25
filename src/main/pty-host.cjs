@@ -495,6 +495,17 @@ function makeOscParser(terminalId) {
         adoptAgent(terminalId, reportedAgent, { direct: true });
         detectors.get(terminalId)?.launch?.();
       }
+      // A completion or error report that names another session (a finished
+      // subagent inside the same TUI, or a session the user switched away
+      // from) must not finish or fail this terminal's own turn. `working`
+      // and `blocked` stay exempt: they describe the app as a whole and are
+      // what updates the tracked session id when the foreground changes.
+      const knownSessionId = sessionIds.get(terminalId);
+      if (typeof status.id === "string" && status.id
+        && knownSessionId && status.id !== knownSessionId
+        && status.state !== "working" && status.state !== "blocked") {
+        return;
+      }
       detectors.get(terminalId)?.agentStatus?.(status);
       const owningAgent = agentTypes.get(terminalId) || "generic";
       if (typeof status.id === "string" && status.id

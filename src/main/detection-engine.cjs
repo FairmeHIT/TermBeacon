@@ -157,11 +157,28 @@ function createDetector(agentType = "generic", emit = () => {}) {
       hook("agent.osc", "running");
       return;
     }
-    if (status.state === "idle" || status.state === "clear") {
+    if (status.state === "blocked") {
+      // OpenCode 2.3+ reports permission prompts, questions and auth requests
+      // as `blocked` (kind=permission|question|auth). Whatever the kind, the
+      // agent cannot proceed without the user, so this is always a waiting
+      // state and arms the turn even if no earlier report was seen (a restored
+      // session can sit on a pending question before the first prompt runs).
+      hook("agent.osc", "waiting");
+      return;
+    }
+    if (status.state === "idle" || status.state === "clear" || status.state === "done") {
       // Some CLIs emit a baseline clear/idle while booting. A task that was
       // never armed should stay ready instead of becoming completed-unseen.
       if (!runtime.armed && !runtime.hookStatus) return;
       hook("agent.osc", "completed");
+      return;
+    }
+    if (status.state === "error") {
+      // A failed turn. Guarded like completion because a boot-time error
+      // report must not paint an idle terminal red; the opencode hook guard
+      // additionally drops stale failures that arrive after a completion.
+      if (!runtime.armed && !runtime.hookStatus) return;
+      hook("agent.osc", "failed");
     }
   }
 

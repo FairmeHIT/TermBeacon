@@ -325,3 +325,114 @@ test("child metadata in native API data envelopes cannot complete the root sessi
   assert.equal(h.received[1].status, "waiting");
   assert.equal(h.received[1].sessionId, "main");
 });
+
+test("opencode 2.3 live event shapes report running, completed and waiting with session ids", async (t) => {
+  const h = await harness(t);
+  // Envelope shapes captured from a real opencode 2.3.0 instance: every
+  // session event carries data.sessionID.
+  h.push({ type: "session.execution.started", data: { sessionID: "ses_live" } });
+  await until(() => h.received.length === 1);
+  h.push({ type: "permission.asked", data: { sessionID: "ses_live", kind: "question" } });
+  await until(() => h.received.length === 2);
+  h.push({ type: "permission.replied", data: { sessionID: "ses_live" } });
+  await until(() => h.received.length === 3);
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "ses_live" } });
+  await until(() => h.received.length === 4);
+  assert.deepEqual(h.received.map((event) => [event.event, event.status]), [
+    ["session.execution.started", "running"],
+    ["permission.asked", "waiting"],
+    ["permission.replied", "running"],
+    ["session.execution.succeeded", "completed"],
+  ]);
+  assert.ok(h.received.every((event) => event.sessionId === "ses_live"));
+});
+
+test("opencode 2.3 snapshot repairs a missed completion without session.active", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const now = Date.now();
+  let ended = false;
+  const h = await harness(t, {
+    // No `active()`: opencode 2.3 removed it. time.busy/idle plus outcome
+    // must be enough to repair a terminal event the stream dropped.
+    async get({ sessionID }) {
+      if (!ended) return { id: sessionID, time: { busy: now + 1000, updated: now + 1500 } };
+      return { id: sessionID, outcome: "succeeded", time: { busy: now + 1000, idle: now + 2000 } };
+    },
+  });
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  assert.equal(h.received[0].status, "running");
+  ended = true;
+  t.mock.timers.tick(5000);
+  await until(() => h.received.length === 2);
+  assert.equal(h.received[1].event, "session.snapshot");
+  assert.equal(h.received[1].status, "completed");
+  assert.equal(h.received[1].sessionId, "main");
+});
+
+test("opencode 2.3 snapshot repairs a missed turn start after a completion", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const now = Date.now();
+  let busy = now + 1000;
+  let idle = now + 2000;
+  const h = await harness(t, {
+    async get({ sessionID }) { return { id: sessionID, time: { busy, idle } }; },
+  });
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "main" } });
+  await until(() => h.received.length === 2);
+  assert.equal(h.received[1].status, "completed");
+  // A second turn started but the stream lost execution.started; busy
+  // advanced while idle still belongs to the previous turn.
+  busy = now + 5000;
+  idle = now + 2000;
+  t.mock.timers.tick(5000);
+  await until(() => h.received.length === 3);
+  assert.equal(h.received[2].event, "session.snapshot");
+  assert.equal(h.received[2].status, "running");
+});
+
+test("opencode 2.3 snapshot never downgrades a delivered completion", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const now = Date.now();
+  const h = await harness(t, {
+    async get({ sessionID }) { return { id: sessionID, outcome: "failed", time: { busy: now + 1000, idle: now + 2000 } }; },
+  });
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  // The stream delivered the authoritative terminal state (a retry
+  // succeeded); a stale outcome in the store must not paint it failed.
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "main" } });
+  await until(() => h.received.length === 2);
+  t.mock.timers.tick(5000);
+  t.mock.timers.tick(5000);
+  await delay(30);
+  assert.equal(h.received.length, 2);
+  assert.equal(h.received.at(-1).status, "completed");
+});
+
+test("opencode 2.3 events from a foreign project directory are ignored", async (t) => {
+  const h = await harness(t);
+  const own = process.cwd();
+  const foreign = `${own}-foreign`;
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  h.push({ type: "session.execution.started", data: { sessionID: "other" }, location: { directory: foreign } });
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "main" }, location: { directory: own } });
+  await until(() => h.received.length === 2);
+  assert.equal(h.received[1].status, "completed");
+  await delay(60);
+  assert.equal(h.received.length, 2, "a foreign-directory event must never reach the bridge");
+});
+
+test("opencode 2.3 events from a subdirectory of the workspace still apply", async (t) => {
+  const h = await harness(t);
+  const own = process.cwd();
+  const sub = path.join(own, "runs", "analysis");
+  h.callbacks.prompt({ sessionID: "main" });
+  await until(() => h.received.length === 1);
+  h.push({ type: "session.execution.succeeded", data: { sessionID: "main" }, location: { directory: sub } });
+  await until(() => h.received.length === 2);
+  assert.equal(h.received[1].status, "completed");
+});

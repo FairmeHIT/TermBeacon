@@ -60,7 +60,7 @@ function parseAgentStatus(value) {
     const separator = field.indexOf("=");
     if (separator <= 0) continue;
     const key = field.slice(0, separator);
-    if (!["state", "app", "id", "title"].includes(key)) continue;
+    if (!["state", "app", "id", "title", "kind", "msg", "progress"].includes(key)) continue;
     fields[key] = field.slice(separator + 1);
   }
   if (!fields.state) return undefined;
@@ -69,6 +69,9 @@ function parseAgentStatus(value) {
     app: fields.app,
     id: fields.id,
     title: fields.title,
+    kind: fields.kind,
+    msg: fields.msg,
+    progress: fields.progress,
   };
 }
 

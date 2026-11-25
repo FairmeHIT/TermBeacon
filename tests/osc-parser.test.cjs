@@ -125,8 +125,8 @@ test("parses OSC 7501 agent status fields in any order", () => {
   parser.feed("\x1b]7501;app=codex:title=" + Buffer.from("任务").toString("base64") + ":state=working\x1b\\");
   parser.feed("\x1b]7501;state=clear:id=ses_abc:app=opencode\x07");
   assert.deepStrictEqual(events.agentStatuses, [
-    { state: "working", app: "codex", id: undefined, title: Buffer.from("任务").toString("base64") },
-    { state: "clear", app: "opencode", id: "ses_abc", title: undefined },
+    { state: "working", app: "codex", id: undefined, title: Buffer.from("任务").toString("base64"), kind: undefined, msg: undefined, progress: undefined },
+    { state: "clear", app: "opencode", id: "ses_abc", title: undefined, kind: undefined, msg: undefined, progress: undefined },
   ]);
 });
 
@@ -139,7 +139,7 @@ test("OSC 7501 sequences survive split chunks and both terminators", () => {
       assert.deepStrictEqual(events.agentStatuses, []);
     }
     parser.feed(sequence.slice(sequence.length - 1));
-    assert.deepStrictEqual(events.agentStatuses, [{ state: "idle", app: "codex", id: undefined, title: undefined }]);
+    assert.deepStrictEqual(events.agentStatuses, [{ state: "idle", app: "codex", id: undefined, title: undefined, kind: undefined, msg: undefined, progress: undefined }]);
   }
 });
 
@@ -158,8 +158,22 @@ test("OSC 7501 supports longer base64 titles but still rejects runaway payloads"
 });
 
 test("parseAgentStatus requires a state and keeps known fields only", () => {
-  assert.deepEqual(parseAgentStatus("state=working:app=codex"), { state: "working", app: "codex", id: undefined, title: undefined });
+  assert.deepEqual(parseAgentStatus("state=working:app=codex"), { state: "working", app: "codex", id: undefined, title: undefined, kind: undefined, msg: undefined, progress: undefined });
   assert.equal(parseAgentStatus("app=codex"), undefined);
   assert.equal(parseAgentStatus("?"), undefined);
-  assert.deepEqual(parseAgentStatus("state=clear:other=x:id=ses_1"), { state: "clear", app: undefined, id: "ses_1", title: undefined });
+  assert.deepEqual(parseAgentStatus("state=clear:other=x:id=ses_1"), { state: "clear", app: undefined, id: "ses_1", title: undefined, kind: undefined, msg: undefined, progress: undefined });
+});
+
+test("parseAgentStatus keeps the opencode 2.3 blocked question fields", () => {
+  // Live opencode 2.3.0 payloads: blocked questions carry kind and a
+  // human-readable base64 msg alongside the state.
+  assert.deepEqual(parseAgentStatus("state=blocked:kind=question:app=opencode:title=dGl0bGU="), {
+    state: "blocked", app: "opencode", id: undefined, title: "dGl0bGU=", kind: "question", msg: undefined, progress: undefined,
+  });
+  assert.deepEqual(parseAgentStatus("state=done:app=opencode:msg=T2s="), {
+    state: "done", app: "opencode", id: undefined, title: undefined, kind: undefined, msg: "T2s=", progress: undefined,
+  });
+  assert.deepEqual(parseAgentStatus("state=error:app=opencode:progress=37"), {
+    state: "error", app: "opencode", id: undefined, title: undefined, kind: undefined, msg: undefined, progress: "37",
+  });
 });

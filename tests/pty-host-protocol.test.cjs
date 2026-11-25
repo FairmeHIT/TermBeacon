@@ -361,6 +361,37 @@ test("a nested CLI's OSC 7501 cannot steal a hook-owned terminal identity", () =
   assert.equal(stateUpdates.at(-1).current, "working");
 });
 
+test("a foreign session's OSC 7501 completion cannot finish this terminal's turn", () => {
+  const { dataPort, spawned, messages, emitHook } = createHarness({ detection: require("../src/main/detection-engine.cjs") });
+  dataPort.emit("message", { data: createMessage("t1") });
+  emitHook({ terminalId: "t1", event: "session.execution.started", status: "running", agent: "opencode", sessionId: "ses_main" });
+  const stateUpdates = () => messages.filter((message) => message.type === "state:update");
+
+  // A subagent (or a session the user switched away from) finishing must not
+  // complete the live turn of the session this terminal owns.
+  spawned[0].dataCallback("\x1b]7501;state=clear:id=ses_child:app=opencode\x07");
+  assert.equal(stateUpdates().at(-1).current, "working");
+
+  // The owned session finishing still completes the turn.
+  spawned[0].dataCallback("\x1b]7501;state=clear:id=ses_main:app=opencode\x07");
+  assert.equal(stateUpdates().at(-1).current, "completed-unseen");
+
+  // A working report for another session still applies (app-wide busy) and
+  // moves the tracked id, e.g. after an in-TUI session switch.
+  spawned[0].dataCallback("\x1b]7501;state=working:id=ses_next:app=opencode\x07");
+  assert.equal(stateUpdates().at(-1).current, "working");
+  assert.equal(messages.filter((message) => message.type === "session:update").at(-1).sessionId, "ses_next");
+
+  // Its clear now belongs to the foreground and completes the turn.
+  spawned[0].dataCallback("\x1b]7501;state=clear:id=ses_next:app=opencode\x07");
+  assert.equal(stateUpdates().at(-1).current, "completed-unseen");
+
+  // Blocked states are exempt from the gate: whichever session asks, the
+  // user has to answer in this terminal.
+  spawned[0].dataCallback("\x1b]7501;state=blocked:kind=question:id=ses_child:app=opencode\x07");
+  assert.equal(stateUpdates().at(-1).current, "awaiting-input");
+});
+
 test("PTY host injects the hook bridge env into each session", () => {
   const { dataPort, spawnedOptions } = createHarness();
   dataPort.emit("message", { data: createMessage("t1") });

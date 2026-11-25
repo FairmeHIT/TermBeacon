@@ -405,6 +405,44 @@ test("startup OSC 7501 idle does not mark an unused terminal completed", () => {
   assert.equal(updates.length, 0);
 });
 
+test("OSC 7501 blocked question turns the terminal into awaiting-input", () => {
+  const { detector } = makeAgent("opencode");
+  // A restored session can sit on a pending question before any working
+  // report, so blocked must arm the turn on its own (live 2.3.0 payload).
+  detector.agentStatus({ state: "blocked", app: "opencode", kind: "question" });
+  assert.equal(detector.runtime.state, "awaiting-input");
+  detector.agentStatus({ state: "working", app: "opencode" });
+  assert.equal(detector.runtime.state, "working");
+  // Answering the question unblocks; kind=permission behaves the same.
+  detector.agentStatus({ state: "blocked", app: "opencode", kind: "permission" });
+  assert.equal(detector.runtime.state, "awaiting-input");
+});
+
+test("OSC 7501 done completes an armed turn like idle/clear", () => {
+  const { detector } = makeAgent("opencode");
+  detector.agentStatus({ state: "working", app: "opencode" });
+  detector.agentStatus({ state: "done", app: "opencode" });
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
+test("OSC 7501 error fails an armed turn but never an idle terminal", () => {
+  const { detector, updates } = makeAgent("opencode");
+  detector.agentStatus({ state: "error", app: "opencode" });
+  assert.equal(detector.runtime.state, "ready");
+  assert.equal(updates.length, 0);
+  detector.agentStatus({ state: "working", app: "opencode" });
+  detector.agentStatus({ state: "error", app: "opencode" });
+  assert.equal(detector.runtime.state, "error");
+});
+
+test("stale OSC 7501 error after a completion stays ignored for opencode", () => {
+  const { detector } = makeAgent("opencode");
+  detector.hook("session.execution.started", "running");
+  detector.hook("session.execution.succeeded", "completed");
+  detector.agentStatus({ state: "error", app: "opencode" });
+  assert.equal(detector.runtime.state, "completed-unseen");
+});
+
 test("repeated native completion does not relight a viewed task", () => {
   const { detector } = makeAgent("opencode");
   detector.hook("session.idle", "completed");
