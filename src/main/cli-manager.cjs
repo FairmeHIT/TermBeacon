@@ -15,22 +15,6 @@ const ACTIONS = new Set(["install", "update", "reinstall", "integrate", "use-sys
 const digest = (value) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
 const versionNumber = (value) => String(value || "").match(/(?:^|[^\d])(\d+\.\d+\.\d+(?:-[\w.-]+)?)(?!\d)/)?.[1];
 
-// `opencode models` prints one provider/model per line. Providers may include
-// hyphens and model ids may contain slashes (openrouter), so only the first
-// slash separates the two halves. Anything with whitespace is a log line.
-function parseModelCatalog(output) {
-  const clean = String(output || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
-  const seen = new Set();
-  const models = [];
-  for (const line of clean.split(/\r?\n/)) {
-    const value = line.trim();
-    if (!value || /\s/.test(value) || !/^[^/]+\/.+$/.test(value)) continue;
-    if (seen.has(value)) continue;
-    seen.add(value);
-    models.push(value);
-  }
-  return models;
-}
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, "utf8")); } catch (error) { if (error.code === "ENOENT") return fallback; throw error; }
 }
@@ -269,25 +253,7 @@ function createCliManager({ home = os.homedir(), assets, platform = process.plat
     if (!Array.isArray(cliArgs) || cliArgs.some((arg) => typeof arg !== "string" || /[\r\n\x00]/.test(arg))) throw new Error("CLI 参数无效");
     return { command: shellCommand(executable, cliArgs, shell), executable };
   }
-  async function models({ id = "opencode", cwd } = {}) {
-    if (id !== "opencode") throw new Error("只有 opencode 支持模型目录");
-    const state = await manifest();
-    const record = state.agents[id];
-    let executable;
-    if (record?.source === "managed") {
-      await packageEntry(safeRelease(record, id), id);
-      executable = path.join(managedBin(home), CATALOG[id].command + (platform === "win32" ? ".cmd" : ""));
-      try { await fs.access(executable); } catch { throw new Error("托管启动入口缺失，请执行标准化重装修复"); }
-    } else {
-      executable = (await find(CATALOG[id].command, { env, home, platform, exclude: [root] }))[0];
-    }
-    if (!executable) throw new Error("未找到 opencode，请先安装或重新检测");
-    const { node } = await runtime();
-    const command = await invocation(executable, node);
-    const output = await run(command.file, [...command.args, "models"], { env, cwd, timeout: 60000 });
-    return { models: parseModelCatalog(output), executable };
-  }
-  return { scan, plan, execute, launch, models };
+  return { scan, plan, execute, launch };
 }
 
-module.exports = { createCliManager, CATALOG, parseModelCatalog, registryPackage, versionNumber };
+module.exports = { createCliManager, CATALOG, registryPackage, versionNumber };

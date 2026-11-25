@@ -5,11 +5,10 @@ import { createHash } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFile, mkdir, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
+import { copyFile, readFile, stat, unlink, writeFile, rename } from "node:fs/promises";
 import { createRequire } from "node:module";
 import type { ShellType, TaskRecord, TerminalInstance, WindowBounds, Workspace } from "../shared/types";
 import type { AgentCliId, CliProgress, CliScan, CliPlan, CloseToTraySettings, CloseToTrayPreference } from "../shared/types";
-import type { OpenCodeModelCatalog, OpenCodeModelsConfig, OpenCodeModelDiscovery, OpenCodeModelDiscoveryRequest, OpenCodeModelsMutation, OpenCodeProviderDraft } from "../shared/types";
 
 // Running from source must not collide with the installed build. The packaged
 // app already owns the default profile and its single-instance lock, so a dev
@@ -37,7 +36,6 @@ const { createCliManager, CATALOG: cliCatalog } = require("./cli-manager.cjs") a
     plan(request: unknown): Promise<CliPlan>;
     execute(request: unknown): Promise<unknown>;
     launch(request: { id: AgentCliId; shell?: string; args?: string[] }): Promise<{ command: string; executable: string }>;
-    models(request?: { id?: AgentCliId; cwd?: string }): Promise<{ models: string[]; executable: string }>;
   };
 };
 const { createHistoryStore } = require("./terminal-history.cjs") as {
@@ -108,17 +106,6 @@ const { createOpenCodeBackup } = require("./opencode-backup.cjs") as {
     }>;
     info: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
     clear: () => Promise<{ directory: string; count: number; bytes: number; latestAt?: number; latestFile?: string; retention: number }>;
-  };
-};
-const { createOpenCodeModelsStore } = require("./opencode-models.cjs") as {
-  createOpenCodeModelsStore: (options?: { listModels?: () => Promise<string[]> }) => {
-    snapshot: () => OpenCodeModelsConfig;
-    saveProvider: (draft: OpenCodeProviderDraft) => Promise<OpenCodeModelsMutation>;
-    deleteProvider: (id: string) => Promise<OpenCodeModelsMutation>;
-    setDefaultModel: (model: string | null) => Promise<OpenCodeModelsMutation>;
-    catalog: () => Promise<OpenCodeModelCatalog>;
-    discover: (request: OpenCodeModelDiscoveryRequest) => Promise<OpenCodeModelDiscovery>;
-    configPath: () => string;
   };
 };
 const { resolveAssets } = require("./integration-config.cjs") as {
@@ -256,12 +243,6 @@ function openCodeBackup() {
   return openCodeBackupStore ??= createOpenCodeBackup({
     dataDir: resolveOpenCodeDataDir(),
     backupDir: openCodeBackupDir(),
-  });
-}
-let openCodeModelsStore: ReturnType<typeof createOpenCodeModelsStore> | undefined;
-function openCodeModels() {
-  return openCodeModelsStore ??= createOpenCodeModelsStore({
-    listModels: async () => (await agentManager().models({ id: "opencode", cwd: app.getPath("home") })).models,
   });
 }
 
@@ -1164,18 +1145,6 @@ ipcMain.handle("opencode:backups-clear", async () => {
 });
 ipcMain.handle("opencode:backups-open", async () => {
   const failure = await shell.openPath(openCodeBackupDir());
-  return failure ? { ok: false, message: failure } : { ok: true };
-});
-ipcMain.handle("opencode:models", () => openCodeModels().snapshot());
-ipcMain.handle("opencode:models-save-provider", (_event, draft: OpenCodeProviderDraft) => openCodeModels().saveProvider(draft));
-ipcMain.handle("opencode:models-delete-provider", (_event, id: string) => openCodeModels().deleteProvider(id));
-ipcMain.handle("opencode:models-default", (_event, model: string | null) => openCodeModels().setDefaultModel(model));
-ipcMain.handle("opencode:models-catalog", () => openCodeModels().catalog());
-ipcMain.handle("opencode:models-discover", (_event, request: OpenCodeModelDiscoveryRequest) => openCodeModels().discover(request));
-ipcMain.handle("opencode:models-open", async () => {
-  const directory = path.dirname(openCodeModels().configPath());
-  await mkdir(directory, { recursive: true });
-  const failure = await shell.openPath(directory);
   return failure ? { ok: false, message: failure } : { ok: true };
 });
 function activeTerminalCount(state: PersistedState | null) {

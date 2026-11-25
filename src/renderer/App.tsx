@@ -9,7 +9,6 @@ import type { AgentState, AgentType, PersistedState, PlatformInfo, PtyAgentEvent
 import SettingsPage from "./SettingsPage";
 import { describeSettingsUpdate, readSettingsLocale, saveSettingsLocale, settingsText, type SettingsLocale } from "./settings-i18n";
 import type { AgentCliId, CliAction, CliPlan, CliScan, CliProgress } from "../shared/types";
-import type { OpenCodeModelCatalog, OpenCodeModelsConfig, OpenCodeModelDiscovery, OpenCodeModelDiscoveryRequest, OpenCodeModelsMutation, OpenCodeProviderDraft } from "../shared/types";
 import launchUtils from "../main/agent-launch.cjs";
 import sessionResumeUtils from "../main/session-resume.cjs";
 import taskHistoryUtils from "../main/task-history.cjs";
@@ -71,13 +70,6 @@ declare global {
       backupOpenCodeNow(): Promise<{ ok: boolean; skipped?: boolean; reason?: string; file?: string; bytes?: number; rawBytes?: number; error?: string; info: OpenCodeBackupInfo }>;
       clearOpenCodeBackups(): Promise<OpenCodeBackupInfo>;
       openOpenCodeBackupFolder(): Promise<{ ok: boolean; message?: string }>;
-      getOpenCodeModels(): Promise<OpenCodeModelsConfig>;
-      saveOpenCodeProvider(draft: OpenCodeProviderDraft): Promise<OpenCodeModelsMutation>;
-      deleteOpenCodeProvider(id: string): Promise<OpenCodeModelsMutation>;
-      setOpenCodeDefaultModel(model: string | null): Promise<OpenCodeModelsMutation>;
-      getOpenCodeModelCatalog(): Promise<OpenCodeModelCatalog>;
-      discoverOpenCodeModels(request: OpenCodeModelDiscoveryRequest): Promise<OpenCodeModelDiscovery>;
-      openOpenCodeModelsConfig(): Promise<{ ok: boolean; message?: string }>;
       installUpdate(request?: { activeTerminals?: number; acknowledgedBusy?: boolean }): Promise<{ ok: boolean; reason?: string; message?: string; activeTerminals?: number; backup?: { file?: string; bytes?: number } }>;
       getUpdateState(): Promise<{ status: UpdateStatus; currentVersion: string; packaged: boolean; configured: boolean }>;
       checkForUpdates(): Promise<UpdateStatus>;
@@ -133,6 +125,10 @@ const stateClass: Record<AgentState, string> = {
 // terminals stay quiet: their own rows already say so.
 const WORKSPACE_LAMP_PRIORITY: AgentState[] = ["error", "awaiting-input", "completed-unseen", "working"];
 
+function urgentLampState(members: TerminalInstance[]): AgentState | undefined {
+  return WORKSPACE_LAMP_PRIORITY.find((state) => members.some((terminal) => terminal.state === state));
+}
+
 const agentLabel: Record<AgentType, string> = {
   generic: "",
   opencode: "opencode",
@@ -148,6 +144,48 @@ const shellLabel: Record<string, string> = {
   "/bin/bash": "Bash",
   "/bin/zsh": "Zsh",
 };
+
+// What the terminal should do with a keyboard event on the prompt input.
+//  - "newline": Shift/Ctrl+Enter -> send LF so the agent TUI inserts a line
+//    break instead of submitting (xterm maps *every* Enter to CR otherwise).
+//  - "paste": the existing Ctrl+V / Shift+Insert clipboard shortcut.
+//  - "passthrough": let xterm handle the key as usual (IME composition included).
+type PromptKeyAction = "passthrough" | "paste" | "newline";
+
+function promptKeyAction(event: KeyboardEvent): PromptKeyAction {
+  if (event.type !== "keydown") return "passthrough";
+  // Let the IME own its own keys (candidate confirmation, preedit commit).
+  if (event.isComposing || event.keyCode === 229) return "passthrough";
+  const key = event.key.toLowerCase();
+  // Alt+Enter is xterm's ESC+CR and must keep its own meaning. A bare Enter
+  // (or Enter with a meta key) stays the submit key.
+  if (key === "enter" && !event.altKey && !event.metaKey && (event.shiftKey || event.ctrlKey)) return "newline";
+  const pasteShortcut = key === "v"
+    ? (event.ctrlKey || event.metaKey) && !event.altKey
+    : key === "insert" && event.shiftKey && !event.altKey && !event.metaKey;
+  return pasteShortcut ? "paste" : "passthrough";
+}
+
+// xterm.js sets its private `_keyDownSeen` IME fallback guard on every keydown,
+// including a bare Shift. Sogou Pinyin commits the preedit text on the `input`
+// event when Shift switches to English, but since Shift is only a modifier its
+// keyup often arrives after that event, so the guard silently drops the commit.
+// Restore the previous guard value for pure Shift keydowns (same fix as upstream
+// xterm.js#6054 / Tabby#11650) so the committed text reaches the PTY.
+function preserveImeGuardOnShift(term: Terminal): void {
+  const core = (term as unknown as {
+    _core?: { _keyDown?: (event: KeyboardEvent) => boolean | undefined; _keyDownSeen?: boolean };
+  })._core;
+  if (!core || typeof core._keyDown !== "function") return;
+  const originalKeyDown = core._keyDown.bind(core);
+  core._keyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Shift" && event.keyCode !== 16) return originalKeyDown(event);
+    const keyDownSeen = core._keyDownSeen;
+    const result = originalKeyDown(event);
+    core._keyDownSeen = keyDownSeen;
+    return result;
+  };
+}
 
 function terminalCliLabel(terminal: TerminalInstance, translate: (source: string) => string): string {
   const source = agentLabel[terminal.agentType] || shellLabel[terminal.shell || DEFAULT_SHELL] || terminal.shell || "Shell";
@@ -539,16 +577,19 @@ function App() {
     .sort((a, b) => b.lastActivityAt - a.lastActivityAt), [terminals, activeWorkspace]);
   const workspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => !terminal.hidden), [sortedWorkspaceTerminals]);
   const hiddenWorkspaceTerminals = useMemo(() => sortedWorkspaceTerminals.filter((terminal) => terminal.hidden), [sortedWorkspaceTerminals]);
-  // One lamp per workspace, derived from the terminals it owns.
+  // One lamp per workspace, from the terminals the user can actually see.
+  // Hidden terminals are collapsed on purpose; letting one silently light up
+  // its workspace red makes the lamp look wrong because no visible row explains
+  // it. Their urgency is preserved on the hidden-terminals toggle instead.
   const workspaceLampStates = useMemo(() => {
     const lamps = new Map<string, AgentState>();
     workspaces.forEach((workspace) => {
-      const members = terminals.filter((terminal) => workspace.terminalIds.includes(terminal.id));
-      const lamp = WORKSPACE_LAMP_PRIORITY.find((state) => members.some((terminal) => terminal.state === state));
+      const lamp = urgentLampState(terminals.filter((terminal) => workspace.terminalIds.includes(terminal.id) && !terminal.hidden));
       if (lamp) lamps.set(workspace.id, lamp);
     });
     return lamps;
   }, [workspaces, terminals]);
+  const hiddenTerminalLamp = useMemo(() => urgentLampState(hiddenWorkspaceTerminals), [hiddenWorkspaceTerminals]);
 
   // The stored array is creation order and the sidebar renders it as-is, so
   // usage can never reshuffle rows; it only decides which idle workspaces sink.
@@ -1025,18 +1066,21 @@ function App() {
       term.unicode.activeVersion = "11";
       const fit = new FitAddon();
       term.loadAddon(fit);
+      preserveImeGuardOnShift(term);
       term.attachCustomKeyEventHandler((event) => {
-        if (event.type !== "keydown") return true;
-        const key = event.key.toLowerCase();
-        const pasteShortcut = key === "v"
-          ? (event.ctrlKey || event.metaKey) && !event.altKey
-          : key === "insert" && event.shiftKey && !event.altKey && !event.metaKey;
-        if (!pasteShortcut) return true;
+        const action = promptKeyAction(event);
+        if (action === "passthrough") return true;
         event.preventDefault();
         event.stopPropagation();
-        void window.termbeacon.readClipboardText().then((text) => {
-          if (typeof text === "string" && text) term.paste(text);
-        }).catch(() => undefined);
+        if (action === "newline") {
+          // LF reaches the agent as a literal line break in its prompt. Plain
+          // Enter still sends CR through xterm and submits as before.
+          window.termbeacon.write({ terminalId: terminal.id, data: "\n" });
+        } else {
+          void window.termbeacon.readClipboardText().then((text) => {
+            if (typeof text === "string" && text) term.paste(text);
+          }).catch(() => undefined);
+        }
         return false;
       });
       term.onData((data) => {
@@ -2024,8 +2068,9 @@ function App() {
         {/* Hidden terminals: collapsed into a quiet group at the bottom, mirroring
             the workspace hidden group. Supports per-terminal restore and a batch
             delete of all hidden terminals in this workspace. */}
-        {hiddenWorkspaceTerminals.length > 0 && <button className={`workspace-hidden-toggle ${hiddenTerminalsOpen ? "expanded" : ""}`} onClick={() => setHiddenTerminalsOpen((open) => !open)} aria-expanded={hiddenTerminalsOpen} aria-controls="hidden-terminals" title={hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端")} aria-label={hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端")}>
+        {hiddenWorkspaceTerminals.length > 0 && <button className={`workspace-hidden-toggle ${hiddenTerminalsOpen ? "expanded" : ""}`} onClick={() => setHiddenTerminalsOpen((open) => !open)} aria-expanded={hiddenTerminalsOpen} aria-controls="hidden-terminals" title={hiddenTerminalLamp ? `${t("隐藏的终端")} · ${t(stateLabel[hiddenTerminalLamp])}` : (hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端"))} aria-label={hiddenTerminalLamp ? `${t("隐藏的终端")} · ${t(stateLabel[hiddenTerminalLamp])}` : (hiddenTerminalsOpen ? t("收起隐藏的终端") : t("展开隐藏的终端"))}>
           <ChevronIcon open />
+          {hiddenTerminalLamp && <span className={`status-dot hidden-toggle-lamp ${stateClass[hiddenTerminalLamp]}`} role="img" aria-label={t(stateLabel[hiddenTerminalLamp])} />}
         </button>}
         {hiddenTerminalsOpen && hiddenWorkspaceTerminals.length > 0 && <div className="terminal-list terminal-hidden-list" id="hidden-terminals">
           {hiddenWorkspaceTerminals.map((terminal) => <div key={terminal.id} className={`terminal-item terminal-item-hidden`}>

@@ -37,7 +37,6 @@ if (existsSync(appAsar)) {
     "dist/main/hook-client.cjs",
     "dist/main/cli-manager.cjs",
     "dist/main/cli-runtime.cjs",
-    "dist/main/opencode-models.cjs",
     "dist/host-app/main.cjs",
     "dist/renderer/index.html",
     "package.json",

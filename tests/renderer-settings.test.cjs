@@ -335,9 +335,18 @@ test("workspaces surface the most urgent terminal state as a lamp", () => {
   // A task that finished (green) or stalled (amber) in a background workspace
   // must be visible from the workspace list, not only from its terminal row.
   assert.match(app, /const WORKSPACE_LAMP_PRIORITY: AgentState\[\] = \["error", "awaiting-input", "completed-unseen", "working"\]/);
+  const urgent = app.match(/function urgentLampState\(members: TerminalInstance\[\]\): AgentState \| undefined \{([\s\S]*?)\n\}/)?.[1];
+  assert.ok(urgent, "urgent lamp helper must exist");
+  assert.match(urgent, /WORKSPACE_LAMP_PRIORITY\.find/);
   const memo = app.match(/const workspaceLampStates = useMemo\(\(\) => \{([\s\S]*?)\n  \}, \[workspaces, terminals\]\);/)?.[1];
   assert.ok(memo, "workspace lamp memo must exist");
-  assert.match(memo, /WORKSPACE_LAMP_PRIORITY\.find/);
+  // Hidden terminals cannot drive the workspace lamp: their rows are collapsed,
+  // so a red workspace with no visible red row reads as a false alarm. Their
+  // urgency moves to the hidden-terminals toggle instead.
+  assert.match(memo, /urgentLampState\(terminals\.filter\(\(terminal\) => workspace\.terminalIds\.includes\(terminal\.id\) && !terminal\.hidden\)\)/);
+  const hiddenLamp = app.match(/const hiddenTerminalLamp = useMemo\(\(\) => urgentLampState\(hiddenWorkspaceTerminals\), \[hiddenWorkspaceTerminals\]\);/)?.[0];
+  assert.ok(hiddenLamp, "hidden terminal lamp memo must exist");
+  assert.match(app, /\{hiddenTerminalLamp && <span className=\{`status-dot hidden-toggle-lamp \$\{stateClass\[hiddenTerminalLamp\]\}`\}/);
   // The lamp reuses the terminal palette and sits on the folder glyph, so the
   // row keeps its three-column grid and the close button never shifts.
   assert.match(app, /\{lamp && <span className=\{`workspace-lamp status-dot \$\{stateClass\[lamp\]\}`\} role="img" aria-label=\{t\(stateLabel\[lamp\]\)\} \/>\}/);
@@ -348,6 +357,8 @@ test("workspaces surface the most urgent terminal state as a lamp", () => {
   assert.ok(lamp, "workspace lamp styles must exist");
   assert.match(lamp, /position: absolute/);
   assert.match(lamp, /margin: 0/);
+  const toggleLamp = styles.match(/\.hidden-toggle-lamp \{([\s\S]*?)\}/)?.[1];
+  assert.ok(toggleLamp, "hidden toggle lamp styles must exist");
   // Opening a workspace shows its terminal, so its "finished" lamp clears too.
   const selectWorkspace = app.match(/function selectWorkspace\(id: string\) \{([\s\S]*?)\n  \}/)?.[1];
   assert.ok(selectWorkspace, "selectWorkspace must exist");
@@ -424,7 +435,8 @@ test("the terminal stage is framed like the sidebar's panels", () => {
 test("terminal paste shortcuts read the system clipboard and use xterm paste", () => {
   assert.match(app, /readClipboardText\(\): Promise<string>/);
   assert.match(app, /term\.attachCustomKeyEventHandler\(\(event\) =>/);
-  assert.match(app, /if \(event\.type !== "keydown"\) return true/);
+  assert.match(app, /function promptKeyAction\(event: KeyboardEvent\): PromptKeyAction/);
+  assert.match(app, /if \(event\.type !== "keydown"\) return "passthrough"/);
   assert.match(app, /event\.ctrlKey \|\| event\.metaKey/);
   assert.match(app, /key === "insert" && event\.shiftKey/);
   assert.match(app, /window\.termbeacon\.readClipboardText\(\)/);

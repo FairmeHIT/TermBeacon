@@ -536,6 +536,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   transition: transform .12s ease;
 }
 .workspace-hidden-toggle.expanded svg { transform: rotate(180deg); }
+/* A hidden terminal can still be urgent (usually an error). Keep that signal
+   on the collapse control, next to the chevron, instead of silently lighting
+   up the workspace whose visible rows all look healthy. */
+.hidden-toggle-lamp { flex: 0 0 auto; margin: 0 0 0 6px; }
 .workspace-hidden-list {
   flex: 0 1 auto;
   /* A percentage cap would be ignored here (the section's height is content

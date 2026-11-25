@@ -36,7 +36,6 @@ The image above is an illustrative UI preview. The application is an Electron de
 - **Task status reminders** - see `Working`, `Completed`, `Ready`, `Waiting for input`, `Error`, and `Stopped` at a glance.
 - **Completed-unseen state** - a finished task stays highlighted until you open that terminal, so background work does not disappear silently.
 - **Agent CLI management** - detect, install, update, reinstall, switch sources, and roll back Codex, OpenCode, Claude Code, and Pi from a dedicated settings page. Managed installs are isolated under your user directory.
-- **OpenCode model services** - open **Settings → Models** to manage OpenAI-compatible providers, base URLs, optional API keys (local endpoints can leave the key empty), model lists, and the default model. Changes are written to the global `opencode.json(c)` with automatic backups, and newly started OpenCode terminals pick them up. The visual picker also reads the models OpenCode already reports through `opencode models`.
 - **CLI status integrations** - native bridges for OpenCode, Claude Code, Pi, and Codex; terminal-specific session recovery binds a Codex session to the terminal that launched it.
 - **Default new terminal** - launch Codex directly from the new terminal action, or choose a plain shell, OpenCode, Claude Code, or Pi in Settings. Set Codex launch arguments, such as `--yolo` and a model, for new Codex terminals.
 - **Bilingual settings** - switch Settings between Simplified Chinese and English, with an immediately applied, saved preference.
